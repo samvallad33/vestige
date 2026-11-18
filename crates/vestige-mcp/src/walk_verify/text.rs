@@ -214,10 +214,13 @@ pub(super) fn format_g(value: f64, precision: usize) -> String {
 
 /// `~` and `~/rest` under the home directory; anything else as given.
 pub(super) fn expand_user(path: &Path) -> PathBuf {
-    if let Ok(rest) = path.strip_prefix("~")
-        && let Some(dirs) = directories::BaseDirs::new()
-    {
-        return dirs.home_dir().join(rest);
+    if let Ok(rest) = path.strip_prefix("~") {
+        if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+            return PathBuf::from(home).join(rest);
+        }
+        if let Some(dirs) = directories::BaseDirs::new() {
+            return dirs.home_dir().join(rest);
+        }
     }
     path.to_path_buf()
 }

@@ -353,6 +353,13 @@ enum Commands {
         replay: Vec<PathBuf>,
     },
 
+    /// Call Coach (#520): offline replay of recorded tool calls against rules CC-001..CC-012
+    Coach {
+        /// Recorded tool call JSONL files to replay through the Call Coach rule table
+        #[arg(long, num_args = 1.., required = true)]
+        replay: Vec<PathBuf>,
+    },
+
     /// Export memories in JSON or JSONL format
     ///
     /// Memories from every scope are written. On a Strata log each one
@@ -982,6 +989,7 @@ fn main() -> anyhow::Result<()> {
         } => run_migrate_to_strata(from, to, dry_run, accept_wal_snapshot),
         Commands::StrataVerify { dir, expect_key } => run_strata_verify(dir, expect_key),
         Commands::Reflex { since, replay } => run_reflex(since, replay),
+        Commands::Coach { replay } => run_coach(replay),
         Commands::VerifyProof { args } => std::process::exit(vestige_proof::cli::run(&args)),
         Commands::Export {
             output,
@@ -1362,6 +1370,9 @@ fn download_sandwich_source(version: Option<&str>, output_dir: &Path) -> anyhow:
 }
 
 fn home_dir() -> anyhow::Result<PathBuf> {
+    if let Some(home) = env::var_os("HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(home));
+    }
     directories::BaseDirs::new()
         .map(|dirs| dirs.home_dir().to_path_buf())
         .ok_or_else(|| anyhow::anyhow!("failed to locate home directory"))
@@ -1460,14 +1471,50 @@ fn merge_json(base: &mut serde_json::Value, overlay: serde_json::Value) {
     }
 }
 
-fn merge_settings_fragment(
+fn append_hook_fragment(
     settings: &mut serde_json::Value,
     fragment_path: &Path,
 ) -> anyhow::Result<()> {
     let file = fs::File::open(fragment_path)
         .with_context(|| format!("failed to open {}", fragment_path.display()))?;
-    let fragment: serde_json::Value = serde_json::from_reader(file)
+    let mut fragment: serde_json::Value = serde_json::from_reader(file)
         .with_context(|| format!("failed to parse {}", fragment_path.display()))?;
+    if let Some(frag_hooks) = fragment
+        .as_object_mut()
+        .and_then(|root| root.remove("hooks"))
+        .and_then(|v| match v {
+            serde_json::Value::Object(map) => Some(map),
+            _ => None,
+        })
+    {
+        if !settings.is_object() {
+            *settings = serde_json::json!({});
+        }
+        let settings_root = settings.as_object_mut().expect("settings root object");
+        let hooks_val = settings_root
+            .entry("hooks")
+            .or_insert_with(|| serde_json::json!({}));
+        if !hooks_val.is_object() {
+            *hooks_val = serde_json::json!({});
+        }
+        let hooks_obj = hooks_val.as_object_mut().expect("hooks object");
+        for (event_name, incoming) in frag_hooks {
+            if let serde_json::Value::Array(groups) = incoming {
+                let target = hooks_obj
+                    .entry(event_name)
+                    .or_insert_with(|| serde_json::json!([]));
+                if !target.is_array() {
+                    *target = serde_json::json!([]);
+                }
+                let arr = target.as_array_mut().expect("event hook array");
+                for group in groups {
+                    if !arr.contains(&group) {
+                        arr.push(group);
+                    }
+                }
+            }
+        }
+    }
     merge_json(settings, fragment);
     Ok(())
 }
@@ -1797,7 +1844,7 @@ fn install_sandwich_from_source(
     scrub_vestige_hooks(&mut settings);
 
     if enable_preflight {
-        merge_settings_fragment(
+        append_hook_fragment(
             &mut settings,
             &source_root
                 .join("hooks")
@@ -1805,7 +1852,7 @@ fn install_sandwich_from_source(
         )?;
     }
     if enable_sanhedrin {
-        merge_settings_fragment(
+        append_hook_fragment(
             &mut settings,
             &source_root
                 .join("hooks")
@@ -2595,6 +2642,12 @@ fn run_reflex(since: String, replay: Vec<PathBuf>) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn run_coach(replay: Vec<PathBuf>) -> anyhow::Result<()> {
+    let view = vestige_mcp::tools::reflex::coach_replay_jsonl(&replay);
+    println!("{}", serde_json::to_string_pretty(&view)?);
+    Ok(())
+}
+
 /// Data directory for this invocation (`--data-dir`, then `VESTIGE_DATA_DIR`,
 /// then the platform directory). The Strata log lives here. `vestige.db` is
 /// only the v3 file we refuse to open.
@@ -2622,9 +2675,7 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
         }
     };
     match rest {
-        Some(rest) => directories::BaseDirs::new()
-            .map(|dirs| dirs.home_dir().join(rest))
-            .unwrap_or(path),
+        Some(rest) => home_dir().map(|h| h.join(rest)).unwrap_or(path),
         None => path,
     }
 }

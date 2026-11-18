@@ -140,6 +140,7 @@ fn sigkill_mid_import_rerun_finishes_one_receipt() {
     }
 
     child.kill().expect("SIGKILL");
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let status = child.wait().unwrap();
     #[cfg(unix)]
     {

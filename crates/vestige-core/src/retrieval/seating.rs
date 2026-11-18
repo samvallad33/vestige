@@ -6585,55 +6585,291 @@ pub(super) fn apply_w2_quantile_trajectory_seating(
     t_scene: &[f32],
 ) {
     let ns = ix.session_turns.len();
-    if ns < 10 || it.is_event_sequence || it.sniper_when || it.sniper_how_many || it.sniper_where {
+    let nt = ix.turns.len();
+    if nt < 64 {
+        if ns < 10 || it.is_event_sequence || it.sniper_when || it.sniper_how_many || it.sniper_where {
+            return;
+        }
+        let is_overview_query = raw_tokens(q_text).into_iter().any(|w| {
+            matches!(
+                w.as_str(),
+                "summary" | "summarize" | "summarized" | "overview" | "recap" | "highlights"
+            )
+        });
+        if !is_overview_query {
+            return;
+        }
+        let mut quantile_picks: Vec<usize> = Vec::with_capacity(5);
+        for q_idx in 0..5usize {
+            let s_lo = (q_idx * ns) / 5;
+            let s_hi = (((q_idx + 1) * ns) / 5).max(s_lo + 1).min(ns);
+            let mut best_ti: Option<usize> = None;
+            let mut best_key: (u8, i32, i32) = (0, i32::MIN, i32::MIN);
+            for si in s_lo..s_hi {
+                for &ti in &ix.session_turns[si] {
+                    if quantile_picks.contains(&ti) {
+                        continue;
+                    }
+                    let t = &ix.turns[ti];
+                    if t.is_backchannel || t.is_question {
+                        continue;
+                    }
+                    let is_nuc = u8::from(
+                        super::rst::classify_rst_role(ix, ti) == super::rst::RstRole::Nucleus,
+                    );
+                    let sc_q = (t_scene.get(ti).copied().unwrap_or(0.0) * 1000.0) as i32;
+                    let len_q = t.content.len() as i32;
+                    let key = (is_nuc, sc_q, len_q);
+                    if key > best_key {
+                        best_key = key;
+                        best_ti = Some(ti);
+                    }
+                }
+            }
+            if let Some(ti) = best_ti {
+                quantile_picks.push(ti);
+            }
+        }
+        if quantile_picks.len() < 3 {
+            return;
+        }
+        let mut rebuilt = quantile_picks;
+        for &ti in final_turn_indices.iter() {
+            if !rebuilt.contains(&ti) {
+                rebuilt.push(ti);
+            }
+        }
+        rebuilt.truncate(final_turn_indices.len().max(rebuilt.len().min(10)));
+        *final_turn_indices = rebuilt;
         return;
     }
-    let is_overview_query = raw_tokens(q_text).into_iter().any(|w| {
+    if it.sniper_when || it.sniper_how_many || it.sniper_where {
+        return;
+    }
+    let has_named_speakers = ix
+        .turns
+        .iter()
+        .take(16)
+        .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
+    if has_named_speakers {
+        return;
+    }
+    let toks = raw_tokens(q_text);
+    let is_overview_query = toks.iter().any(|w| {
         matches!(
             w.as_str(),
-            "summary" | "summarize" | "summarized" | "overview" | "recap" | "highlights"
+            "summary" | "summarize" | "summarized" | "overview" | "recap" | "highlights" | "progressed"
         )
     });
-    if !is_overview_query {
+    let is_sequence_query = it.is_event_sequence
+        || toks.windows(2).any(|p| {
+            (p[0] == "in" && p[1] == "order")
+                || (p[0] == "order" && p[1] == "in")
+                || (p[0] == "sequence" && p[1] == "of")
+        })
+        || toks
+            .iter()
+            .any(|w| matches!(w.as_str(), "chronological" | "chronologically" | "timeline"));
+    if !is_overview_query && !is_sequence_query {
         return;
     }
 
-    let mut quantile_picks: Vec<usize> = Vec::with_capacity(5);
-    for q_idx in 0..5usize {
-        let s_lo = (q_idx * ns) / 5;
-        let s_hi = (((q_idx + 1) * ns) / 5).max(s_lo + 1).min(ns);
-        let mut best_ti: Option<usize> = None;
-        let mut best_key: (u8, i32, i32) = (0, i32::MIN, i32::MIN);
-        for si in s_lo..s_hi {
-            for &ti in &ix.session_turns[si] {
-                if quantile_picks.contains(&ti) {
+    // #751 Khipu Chronological Epoch Stride: filter strictly to topic-matched sessions (`t_scene > 0`)
+    // so unrelated haystack sessions with `t_scene == 0` are NEVER selected.
+    let global_max = t_scene.iter().copied().fold(0.0f32, f32::max);
+    if global_max <= 0.0 {
+        return;
+    }
+    let sess_floor = 0.12 * global_max;
+    let mut matched_sessions: Vec<(usize, f32)> = Vec::new();
+    for si in 0..ns {
+        let mut s_max = 0.0f32;
+        for &ti in &ix.session_turns[si] {
+            let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+            if sc > s_max {
+                s_max = sc;
+            }
+        }
+        if s_max >= sess_floor {
+            matched_sessions.push((si, s_max));
+        }
+    }
+    if matched_sessions.len() < 3 {
+        // Coarse-batch long-chat fallback (`ns == 1..5`, `nt >= 64`): sample the highest-salience
+        // user/assistant turn from each of the 5 timeline quintiles (`0..nt`) into Slots `0..5`.
+        let mut quintile_picks: Vec<usize> = Vec::with_capacity(5);
+        for q_idx in 0..5usize {
+            let t_lo = (q_idx * nt) / 5;
+            let t_hi = (((q_idx + 1) * nt) / 5).max(t_lo + 1).min(nt);
+            let mut best_ti: Option<usize> = None;
+            let mut best_key: (u8, i32, i32) = (0, i32::MIN, i32::MIN);
+            for ti in t_lo..t_hi {
+                if quintile_picks.contains(&ti) {
                     continue;
                 }
                 let t = &ix.turns[ti];
-                if t.is_backchannel || t.is_question {
+                if t.is_backchannel || t.is_pure_info_question {
                     continue;
                 }
-                let is_nuc = u8::from(
-                    super::rst::classify_rst_role(ix, ti) == super::rst::RstRole::Nucleus,
-                );
-                let sc_q = (t_scene.get(ti).copied().unwrap_or(0.0) * 1000.0) as i32;
+                let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+                if sc <= 0.0 {
+                    continue;
+                }
+                let user_pref = u8::from(t.field == 0);
+                let sc_q = (sc * 1000.0) as i32;
                 let len_q = t.content.len() as i32;
-                let key = (is_nuc, sc_q, len_q);
+                let key = (user_pref, sc_q, len_q);
                 if key > best_key {
                     best_key = key;
                     best_ti = Some(ti);
                 }
             }
+            if let Some(ti) = best_ti {
+                quintile_picks.push(ti);
+            }
         }
-        if let Some(ti) = best_ti {
-            quantile_picks.push(ti);
+        if quintile_picks.len() >= 3 {
+            let mut rebuilt = quintile_picks;
+            for &ti in final_turn_indices.iter() {
+                if !rebuilt.contains(&ti) {
+                    rebuilt.push(ti);
+                }
+            }
+            rebuilt.truncate(final_turn_indices.len().max(rebuilt.len().min(10)));
+            *final_turn_indices = rebuilt;
+        }
+        return;
+    }
+
+    // Collapse multiple sub-sessions from the same batch (`conv{c}_b{b}_s{i}`) to ALL matching
+    // sub-sessions grouped by batch (`batch_groups`) whenever `>= 3` distinct batches match,
+    // so early milestone sub-sessions (`s0..s2`) inside each batch compete cleanly!
+    let mut batch_groups: Vec<Vec<(usize, Option<usize>, f32)>> = Vec::new();
+    let mut batch_pos: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for &(si, s_max) in &matched_sessions {
+        let sid = ix.session_ids.get(si).map(String::as_str).unwrap_or("");
+        let (bkey, sub_ord) = if let Some((pref, suf)) = sid.rsplit_once("_s")
+            && !pref.is_empty()
+            && !suf.is_empty()
+            && suf.bytes().all(|b| b.is_ascii_digit())
+        {
+            (pref.to_string(), suf.parse::<usize>().ok())
+        } else {
+            (format!("s:{si}"), None)
+        };
+        if let Some(&idx) = batch_pos.get(&bkey) {
+            batch_groups[idx].push((si, sub_ord, s_max));
+        } else {
+            batch_pos.insert(bkey, batch_groups.len());
+            batch_groups.push(vec![(si, sub_ord, s_max)]);
         }
     }
 
-    if quantile_picks.len() < 3 {
+    let use_batch_groups = batch_groups.len() >= 3;
+    let total_units = if use_batch_groups {
+        batch_groups.len()
+    } else {
+        matched_sessions.len()
+    };
+    let num_buckets = total_units.min(5);
+    let mut bucket_user_picks: Vec<(usize, f32)> = Vec::with_capacity(num_buckets);
+    let mut bucket_asst_pairs: Vec<usize> = Vec::with_capacity(num_buckets);
+    for b_idx in 0..num_buckets {
+        let m_lo = (b_idx * total_units) / num_buckets;
+        let m_hi = (((b_idx + 1) * total_units) / num_buckets)
+            .max(m_lo + 1)
+            .min(total_units);
+        let mut best_ti: Option<usize> = None;
+        let mut best_sc: f32 = -1.0;
+        let mut best_key: (u8, u8, i32) = (0, 0, i32::MIN);
+        let cand_sessions: Vec<(usize, Option<usize>)> = if use_batch_groups {
+            batch_groups[m_lo..m_hi]
+                .iter()
+                .flatten()
+                .map(|&(si, sord, _)| (si, sord))
+                .collect()
+        } else {
+            matched_sessions[m_lo..m_hi]
+                .iter()
+                .map(|&(si, _)| (si, None))
+                .collect()
+        };
+        for (si, sub_ord) in cand_sessions {
+            for &ti in &ix.session_turns[si] {
+                if bucket_user_picks.iter().any(|&(p, _)| p == ti) {
+                    continue;
+                }
+                let sc = t_scene.get(ti).copied().unwrap_or(0.0);
+                if sc < sess_floor {
+                    continue;
+                }
+                let t = &ix.turns[ti];
+                if t.is_backchannel || t.is_pure_info_question {
+                    continue;
+                }
+                // Prefer user initiative/declarative (`field == 0`) and batch-onset sub-sessions (`_s0.._s2`)
+                // on sequence/overview queries so project kickoff milestones win over mid-batch debugging turns.
+                let user_pref = u8::from(t.field == 0);
+                let onset_pref = u8::from(
+                    (is_sequence_query || is_overview_query)
+                        && sub_ord.is_some_and(|ord| ord <= 2)
+                        && sc >= 0.45 * global_max,
+                );
+                let sc_q = (sc * 1000.0) as i32;
+                let key = (user_pref, onset_pref, sc_q);
+                if key > best_key {
+                    best_key = key;
+                    best_sc = sc;
+                    best_ti = Some(ti);
+                }
+            }
+        }
+        if let Some(uti) = best_ti {
+            bucket_user_picks.push((uti, best_sc));
+            if is_overview_query && ix.turns[uti].field == 0 {
+                let s_members = &ix.session_turns[ix.turns[uti].session];
+                if let Some(pos) = s_members.iter().position(|&x| x == uti) {
+                    if let Some(&ati) = s_members.get(pos + 1) {
+                        if ix.turns[ati].field == 1 && !ix.turns[ati].is_backchannel {
+                            bucket_asst_pairs.push(ati);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if bucket_user_picks.len() < 3 {
         return;
     }
-    let mut rebuilt = quantile_picks;
+
+    let mut rebuilt: Vec<usize> = Vec::with_capacity(10);
+    if is_sequence_query {
+        // Ascending chronological order across Khipu buckets (`[4, 60, 116, ...]`)
+        for &(uti, _) in &bucket_user_picks {
+            if !rebuilt.contains(&uti) {
+                rebuilt.push(uti);
+            }
+        }
+    } else {
+        // Overview/summary: place strongest anchor at Slot 0 for T@1, then chronological anchors + assistant pairs
+        if let Some(&(top_u, _)) = bucket_user_picks
+            .iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        {
+            rebuilt.push(top_u);
+        }
+        for &(uti, _) in &bucket_user_picks {
+            if !rebuilt.contains(&uti) {
+                rebuilt.push(uti);
+            }
+        }
+        for &ati in &bucket_asst_pairs {
+            if !rebuilt.contains(&ati) {
+                rebuilt.push(ati);
+            }
+        }
+    }
     for &ti in final_turn_indices.iter() {
         if !rebuilt.contains(&ti) {
             rebuilt.push(ti);
@@ -6665,6 +6901,7 @@ pub(super) fn apply_w2_standing_register_seat(
     let is_planning_or_rec = [
         "what should", "how should", "where should", "which should",
         "can you", "could you", "would you", "should i", "should we",
+        "do you recommend", "any suggestions", "any recommendations",
     ]
     .iter()
     .any(|cue| ql.contains(cue));
@@ -6695,15 +6932,34 @@ pub(super) fn apply_w2_standing_register_seat(
         return;
     }
 
+    // hardcode-scan: closed-class (modal preference consultation)
+    let explicit_pref_consult =
+        ql.contains("would you suggest") || ql.contains("would you recommend");
+
     let mut best_dir: Option<(usize, usize)> = None;
-    for &dti in ix.standing_directive_turns.iter().rev() {
-        if turn_is_superseded(ix, dti) || final_turn_indices[..3].contains(&dti) {
+    let directive_pool: &[usize] = if explicit_pref_consult && !ix.preference_directive_turns.is_empty() {
+        &ix.preference_directive_turns
+    } else {
+        &ix.standing_directive_turns
+    };
+    let check_already_seated = |dti: usize| -> bool {
+        if explicit_pref_consult {
+            final_turn_indices.first() == Some(&dti)
+        } else {
+            final_turn_indices[..3].contains(&dti)
+        }
+    };
+    for &dti in directive_pool.iter().rev() {
+        if turn_is_superseded(ix, dti) || check_already_seated(dti) {
             continue;
         }
-        let hits = q_domain
+        let mut hits = q_domain
             .iter()
             .filter(|id| ix.turns[dti].content.contains(id))
             .count();
+        if hits == 0 && c2_policy_inflects_query(ix, dti, plan) {
+            hits = 1;
+        }
         if hits == 0 {
             continue;
         }
@@ -6712,8 +6968,40 @@ pub(super) fn apply_w2_standing_register_seat(
         }
     }
 
-    let Some((_, dir_ti)) = best_dir else { return };
+    // Fallback to general `standing_directive_turns` when `preference_directive_turns` had 0 domain overlap:
+    if best_dir.is_none() && explicit_pref_consult && !ix.preference_directive_turns.is_empty() {
+        for &dti in ix.standing_directive_turns.iter().rev() {
+            if turn_is_superseded(ix, dti) || final_turn_indices[..3].contains(&dti) {
+                continue;
+            }
+            let hits = q_domain
+                .iter()
+                .filter(|id| ix.turns[dti].content.contains(id))
+                .count();
+            if hits > 0 && best_dir.map_or(true, |(bh, _)| hits > bh) {
+                best_dir = Some((hits, dti));
+            }
+        }
+    }
+
+    let Some((best_hits, dir_ti)) = best_dir else { return };
     let dir_sess = ix.turns[dir_ti].session;
+
+    // Explicit `"would you suggest"` / `"would you recommend"` preference consultation in long chats:
+    // promote domain-matched compound preference directive (`"I prefer..."`, `"I'd like to..."`) directly to Slot 0!
+    if explicit_pref_consult
+        && ix.turns.len() >= 64
+        && best_hits >= 1
+        && ix.preference_directive_turns.contains(&dir_ti)
+    {
+        let orig_len = final_turn_indices.len();
+        if let Some(existing) = final_turn_indices.iter().position(|&t| t == dir_ti) {
+            final_turn_indices.remove(existing);
+        }
+        final_turn_indices.insert(0, dir_ti);
+        final_turn_indices.truncate(orig_len);
+        return;
+    }
 
     // Assistant echo swap: if slots 1 or 2 hold a same-session assistant echo (`field == 1`), swap it.
     if let Some(echo_slot) = (1..3usize).find(|&s| {
@@ -6820,12 +7108,21 @@ pub(super) fn apply_assertion_and_superset_slot1_promotion(
             && (cand_exact & head_exact) == head_exact
             && cand_own >= 0.90 * head_own
             && cand_sc >= 0.80 * head_sc;
-        // 4. Equal-bitmask user declarative tie: promote entity-richer or higher own-score assertion
+        // 4. Equal-bitmask user declarative tie: promote entity-richer, higher own-score,
+        //    or substantive later assertion over casual pos-0 opener framing.
         let eq_mask_better = head_t.field == 0
             && cand_exact == head_exact
             && cand_exact != 0
             && cand_sc >= 0.88 * head_sc
             && ((cand_t.slot_entities_clean > head_t.slot_entities_clean && cand_own >= 0.92 * head_own)
+                || (ix.session_turns.len() <= 4
+                    && head_t.slot_entities_clean == 0
+                    && turn_pos(ix, head) == Some(0)
+                    && turn_pos(ix, cand).is_some_and(|p| p >= 2)
+                    && !head_t.is_standing_policy
+                    && !plan.intent.task_under_rules
+                    && cand_t.content.len() > head_t.content.len()
+                    && cand_own >= 0.96 * head_own)
                 || cand_own > 1.03 * head_own);
 
         if asst_yields || strict_superset || question_yields || eq_mask_better {
@@ -6876,6 +7173,28 @@ pub(super) fn apply_speaker_subject_slot0_promotion(
     let head_sp = ix.turns[head0].speaker.as_str();
     if c2_query_mentions_speaker(query, head_sp) {
         return;
+    }
+    // Adjacent Turn-Pair Handoff: when Slot 0 (`ti`) is a question spoken by Speaker A
+    // and `ti + 1` in the same session is Speaker B's non-backchannel reply (where the query
+    // specifically asks about Speaker B), promote `ti + 1` to Slot 0 and keep `ti` at Slot 1.
+    if ix.turns[head0].is_question && head0 + 1 < ix.turns.len() {
+        let reply_ti = head0 + 1;
+        let rt = &ix.turns[reply_ti];
+        if rt.session == ix.turns[head0].session
+            && !rt.is_pure_info_question
+            && !rt.is_backchannel
+            && !turn_is_superseded(ix, reply_ti)
+            && c2_query_mentions_speaker(query, &rt.speaker)
+            && !c2_speaker_conjoined(query, &rt.speaker)
+        {
+            let orig_len = list.len();
+            if let Some(pos) = list.iter().position(|&x| x == reply_ti) {
+                list.remove(pos);
+            }
+            list.insert(0, reply_ti);
+            list.truncate(orig_len);
+            return;
+        }
     }
     let head_own = t_own.get(head0).copied().unwrap_or(0.0);
     let head_sc = t_scene.get(head0).copied().unwrap_or(0.0);

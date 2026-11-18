@@ -354,20 +354,22 @@ pub fn verify_done_citations(
         if t.is_empty() {
             continue;
         }
-        if t.starts_with("mem-") && t.len() >= 8 {
-            if !known_mem_ids.iter().any(|k| *k == t || k.starts_with(t)) {
-                unresolved.push(t.to_string());
-            }
+        if t.starts_with("mem-")
+            && t.len() >= 8
+            && !known_mem_ids.iter().any(|k| *k == t || k.starts_with(t))
+        {
+            unresolved.push(t.to_string());
         }
     }
     let words: Vec<&str> = final_message.split_whitespace().collect();
     for pair in words.windows(2) {
         if pair[0].eq_ignore_ascii_case("commit") {
             let sha = pair[1].trim_matches(|c: char| !c.is_ascii_alphanumeric());
-            if (7..=40).contains(&sha.len()) && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
-                if !known_shas.iter().any(|k| k.starts_with(sha) || sha.starts_with(*k)) {
-                    unresolved.push(sha.to_string());
-                }
+            if (7..=40).contains(&sha.len())
+                && sha.bytes().all(|b| b.is_ascii_hexdigit())
+                && !known_shas.iter().any(|k| k.starts_with(sha) || sha.starts_with(*k))
+            {
+                unresolved.push(sha.to_string());
             }
         }
     }

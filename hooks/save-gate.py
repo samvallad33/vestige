@@ -46,11 +46,30 @@ GIT_COMMIT_RE = re.compile(
 )
 
 
+EDIT_TOOLS = (
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "Replace",
+    "CreateFile",
+    "WriteFile",
+    "EditFile",
+    "apply_patch",
+    "edit_file",
+    "write_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+)
+
+
 def state_dir() -> Path:
     custom = os.environ.get("VESTIGE_REFLEX_DIR")
     if custom:
         return Path(custom)
-    return Path.home() / ".local" / "state" / "vestige" / "reflex"
+    env_home = os.environ.get("HOME")
+    base_home = Path(env_home) if env_home else Path.home()
+    return base_home / ".local" / "state" / "vestige" / "reflex"
 
 
 def session_state_path(session_id: str) -> Path:
@@ -139,10 +158,41 @@ def append_event_receipt(state: dict[str, Any], receipt: dict[str, Any]) -> str:
 
 
 def extract_edited_hunks(tool_input: dict[str, Any]) -> list[dict[str, Any]]:
-    file_path = tool_input.get("file_path") or tool_input.get("path")
-    if not file_path:
-        return []
-    return [{"path": str(file_path), "start_line": None, "end_line": None}]
+    hunks: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    primary = (
+        tool_input.get("file_path")
+        or tool_input.get("path")
+        or tool_input.get("notebook_path")
+        or tool_input.get("TargetFile")
+    )
+    if primary:
+        s = str(primary)
+        seen.add(s)
+        hunks.append(
+            {
+                "path": s,
+                "start_line": tool_input.get("start_line"),
+                "end_line": tool_input.get("end_line"),
+            }
+        )
+    edits = tool_input.get("edits")
+    if isinstance(edits, list):
+        for item in edits:
+            if not isinstance(item, dict):
+                continue
+            p = item.get("file_path") or item.get("path")
+            if p and str(p) not in seen:
+                s = str(p)
+                seen.add(s)
+                hunks.append(
+                    {
+                        "path": s,
+                        "start_line": item.get("start_line"),
+                        "end_line": item.get("end_line"),
+                    }
+                )
+    return hunks
 
 
 def normalize_error_sig(tool_response: Any, exit_code: int) -> str:
@@ -391,7 +441,8 @@ def handle_post_tool_use(payload: dict[str, Any], state: dict[str, Any]) -> int:
         f"{tool_name}\0{normalized_input}".encode("utf-8"),
     )
 
-    if tool_name in ("Edit", "Write", "MultiEdit"):
+    leaf_tool = tool_name.rsplit("__", 1)[-1]
+    if leaf_tool in EDIT_TOOLS:
         hunks = extract_edited_hunks(tool_input)
         for hunk in hunks:
             state["edited_files_turn"][hunk["path"]] = state["turn_seq"]
@@ -533,9 +584,11 @@ def handle_post_tool_use(payload: dict[str, Any], state: dict[str, Any]) -> int:
         save_state(state["session_id"], state)
         return 0
 
-    if tool_name in ("remember", "mcp__vestige__remember"):
+    if leaf_tool in ("remember", "curate"):
         action = str(tool_input.get("action") or "save")
-        if action == "save":
+        if (leaf_tool == "remember" and action == "save") or (
+            leaf_tool == "curate" and action in ("edit", "supersede", "link")
+        ):
             raw_files = tool_input.get("files")
             covered = set(raw_files) if isinstance(raw_files, list) else set()
             if not covered:

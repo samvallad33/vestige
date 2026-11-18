@@ -6,5 +6,5 @@ use super::*;
 #[inline]
 pub(super) fn turn_is_superseded(ix: &Index, ti: usize) -> bool {
     ix.turn_superseded.get(ti).copied().unwrap_or(false)
-        || ix.turns.iter().any(|t| t.supersedes_turns.contains(&ti))
+        || (ix.turns.len() <= 64 && ix.turns.iter().any(|t| t.supersedes_turns.contains(&ti)))
 }

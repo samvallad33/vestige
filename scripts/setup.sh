@@ -7,7 +7,7 @@ set -eu
 REPO="samvallad33/vestige"
 INIT_URL="${VESTIGE_INIT_URL:-https://raw.githubusercontent.com/${REPO}/main/packages/vestige-init/bin/init.js}"
 INSTALL_DIR="${VESTIGE_INSTALL_DIR:-$HOME/.local/bin}"
-INIT_VERSION="${VESTIGE_INIT_VERSION:-5.0.0}"
+INIT_VERSION="${VESTIGE_INIT_VERSION:-6.2.2}"
 CACHE_DIR="${VESTIGE_SETUP_CACHE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/vestige/setup}"
 
 fail() { printf '%s\n' "vestige setup: $*" >&2; exit 1; }

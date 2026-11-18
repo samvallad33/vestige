@@ -466,11 +466,55 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             }
         }
 
-        // Standing policy invariant boost:
+        // Standing policy invariant boost + Torrens functional supersession pruning + Advisory constraint lift:
+        let q_toks_local = raw_tokens(&q.text);
+        let has_past_comp_cue = q_toks_local.iter().any(|w| {
+            matches!(
+                w.as_str(),
+                "before" | "previously" | "originally" | "earlier" | "initial" | "initially" | "former" | "formerly" | "changed" | "change" | "both" | "history" | "first"
+            )
+        }) || q_toks_local.windows(2).any(|p| p[0] == "used" && p[1] == "to");
+        let present_state_local = !has_past_comp_cue && !it.temporal && !it.is_event_sequence;
+        let has_named_corpus = ix
+            .turns
+            .iter()
+            .take(16)
+            .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
+        let is_monologue_stream = !ix.turns.iter().any(|t| t.field == 1) && !has_named_corpus;
+        let ql_low = q.text.trim_start().to_ascii_lowercase();
+        let advisory_modal_local = is_monologue_stream
+            && !it.temporal
+            && !it.sniper_when
+            && !it.sniper_how_many
+            && !it.is_event_sequence
+            && (!q.text.trim_end().ends_with('?')
+                || q_toks_local.windows(2).any(|p| {
+                    (p[0] == "can" && p[1] == "you")
+                        || (p[0] == "could" && p[1] == "you")
+                        || (p[0] == "would" && p[1] == "you")
+                        || (p[0] == "should" && (p[1] == "i" || p[1] == "we"))
+                        || (p[0] == "what" && p[1] == "should")
+                        || (p[0] == "how" && (p[1] == "should" || p[1] == "can"))
+                })
+                || ql_low.starts_with("please "));
+
         for ti in 0..nt {
+            if present_state_local && ix.torrens_superseded.get(ti).copied().unwrap_or(false) {
+                t_scene[ti] = 0.0;
+                continue;
+            }
             let t = &ix.turns[ti];
             if t.is_standing_policy && t_scene[ti] > 0.0 {
                 t_scene[ti] *= 2.5;
+            }
+            if advisory_modal_local
+                && t.is_personal_constraint
+                && t.field == 0
+                && !turn_is_superseded(ix, ti)
+                && t_mask[ti] != 0
+                && t_scene[ti] > 0.0
+            {
+                t_scene[ti] *= 1.52;
             }
         }
 
@@ -518,7 +562,11 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                         && has_declarative_user_peer
                         && !episodic_user_quote
                         && t.speaker == "user"
-                        && t.is_question
+                        && (if is_monologue_stream {
+                            t.is_pure_info_question && !t.is_personal_constraint
+                        } else {
+                            t.is_question
+                        })
                         && lacks_novel_assertion
                         && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
                     {
@@ -706,6 +754,54 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         }
 
     };
+    // Compute derived internal intent flags without mutating `plan.intent` (preserving public Skeptic-Audit contract).
+    let q_toks_eff = raw_tokens(&q.text);
+    let seq_mode_eff = it.is_event_sequence
+        || q_toks_eff.windows(2).any(|p| {
+            (p[0] == "in" && p[1] == "order")
+                || (p[0] == "order" && p[1] == "in")
+                || (p[0] == "sequence" && p[1] == "of")
+        })
+        || q_toks_eff
+            .iter()
+            .any(|w| matches!(w.as_str(), "chronological" | "chronologically" | "timeline"));
+    let past_cue_eff = q_toks_eff.iter().any(|w| {
+        matches!(
+            w.as_str(),
+            "before" | "previously" | "originally" | "earlier" | "initial" | "initially" | "former" | "formerly" | "changed" | "change" | "both" | "history" | "first"
+        )
+    }) || q_toks_eff.windows(2).any(|p| p[0] == "used" && p[1] == "to");
+    let has_named_speakers_eff = ix
+        .turns
+        .iter()
+        .take(64)
+        .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
+    let is_monologue_corpus = !ix.turns.iter().any(|t| t.field == 1) && !has_named_speakers_eff;
+    let large_or_mono = ix.session_turns.len() >= 64 || is_monologue_corpus;
+    let q_trim_low = q.text.trim().to_ascii_lowercase();
+    let task_live_eff = !is_monologue_corpus
+        && !has_named_speakers_eff
+        && ix.turns.len() >= 64
+        && !it.temporal
+        && !it.sniper_when
+        && !it.sniper_how_many
+        && !seq_mode_eff
+        && (!q_trim_low.ends_with('?')
+            || q_trim_low.starts_with("please ")
+            || q_toks_eff.windows(2).any(|p| {
+                ((p[0] == "could" || p[0] == "can" || p[0] == "would") && p[1] == "you")
+                    || (p[0] == "how" && (p[1] == "to" || p[1] == "can" || p[1] == "should"))
+                    || (p[0] == "what" && p[1] == "should")
+                    || (p[0] == "should" && (p[1] == "i" || p[1] == "we"))
+            }));
+    let eff_it = QueryIntent {
+        current_state: it.current_state
+            || (!past_cue_eff && !it.temporal && !seq_mode_eff && !it.sniper_how_many),
+        is_event_sequence: if large_or_mono { seq_mode_eff } else { it.is_event_sequence },
+        task_under_rules: it.task_under_rules || task_live_eff,
+        ..it.clone()
+    };
+
     // Run session-path refinements first on a mask copy, then restore and run the
     // turn-path refinements so PPR seeds see pre-dyad masks (floor behavior).
     let t_mask_snap = t_mask.clone();
@@ -714,6 +810,51 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     t_mask.copy_from_slice(&t_mask_snap);
     t_exact_mask.copy_from_slice(&t_exact_snap);
     apply_scene_refinements(&mut t_scene, &mut t_mask, &mut t_exact_mask);
+    if eff_it.current_state {
+        for (ti, &sup) in ix.torrens_superseded.iter().enumerate() {
+            if sup {
+                t_own[ti] = 0.0;
+            }
+        }
+    }
+    // Operational monologue recency shaping (ISO-8601 dated logs relative to query anchor):
+    if is_monologue_corpus && p.enable_recency && eff_it.current_state {
+        let max_sts = ix.session_ts.iter().copied().max().unwrap_or(0);
+        let min_sts = ix
+            .session_ts
+            .iter()
+            .copied()
+            .filter(|&ts| ts > 0)
+            .min()
+            .unwrap_or(0);
+        // Only activate calendar recency when real multi-day timestamps exist (`span >= 7 days`)
+        if max_sts > 0 && min_sts > 0 && (max_sts - min_sts) >= 7 * 86_400 {
+            let q_anchor = parse_date(&q.date).max(max_sts);
+            let cur_smax = s_score.iter().copied().fold(0.0f32, f32::max);
+            let cur_tmax = t_scene.iter().copied().fold(0.0f32, f32::max);
+            if cur_smax > 0.0 {
+                for si in 0..ns {
+                    let ts = ix.session_ts[si];
+                    if ts > 0 && s_score[si] >= 0.38 * cur_smax {
+                        let age_days = ((q_anchor - ts).max(0) as f32) / 86_400.0;
+                        let rec_mult = 1.0 + 0.26 / (1.0 + age_days / 90.0);
+                        s_score[si] *= rec_mult;
+                    }
+                }
+            }
+            if cur_tmax > 0.0 {
+                for ti in 0..nt {
+                    let ts = ix.session_ts[ix.turns[ti].session];
+                    if ts > 0 && t_scene[ti] >= 0.38 * cur_tmax && !turn_is_superseded(ix, ti) {
+                        let age_days = ((q_anchor - ts).max(0) as f32) / 86_400.0;
+                        let rec_mult = 1.0 + 0.26 / (1.0 + age_days / 90.0);
+                        t_scene[ti] *= rec_mult;
+                        t_scene_sess[ti] *= rec_mult;
+                    }
+                }
+            }
+        }
+    }
     apply_step7_lex_specialis(ix, &q.text, &plan, pref_on, it, &t_own, &mut t_scene);
     apply_c2_tap_form_precedence(ix, it, pref_on, &mut t_scene);
     apply_step13_khipu_turn_bridge(
@@ -767,12 +908,12 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         || it.is_event_sequence;
     // Compound/prepositional task wording (" and ", "first ", "before ") must not
     // drop the standing-policy floor. Only count-snipers and event sequences do.
-    let policy_blocked = it.sniper_how_many || it.is_event_sequence;
-    let standing_rules = rank_standing_rules(ix, &plan, episodic_user_quote, &t_mask, k);
+    let policy_blocked = it.sniper_how_many || eff_it.is_event_sequence;
+    let standing_rules = rank_standing_rules(ix, &plan, &eff_it, episodic_user_quote, &t_mask, k);
     // Winner floor stays inside task_under_rules, including multi-hop task rules.
     // v1 moved this seat outside that block and excluded multi-hop. Temporal queries
     // then received a global policy seat and displaced gold. v2 does not do that.
-    let (s_policy_floored, t_policy_floored) = if it.task_under_rules && !policy_blocked {
+    let (s_policy_floored, t_policy_floored) = if eff_it.task_under_rules && !policy_blocked {
         let mut s_floored = raise_floor(&mut s_score, lexical_smax, 0.68, |si| {
             ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_standing_policy)
         });
@@ -807,7 +948,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     } else {
         (vec![false; ns], vec![false; nt])
     };
-    if it.is_event_sequence {
+    if eff_it.is_event_sequence {
         let _ = raise_floor(&mut s_score, lexical_smax, 0.42, |si| {
             ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_initiative)
         });
@@ -815,7 +956,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.38, |ti| ix.turns[ti].is_initiative);
     }
     // Mirror standing/pref floors onto the session-path t_scene (bridge_boost reads this).
-    if it.task_under_rules && !policy_blocked {
+    if eff_it.task_under_rules && !policy_blocked {
         let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.68, |ti| ix.turns[ti].is_standing_policy);
         if let Some(top) = standing_rules.first() {
             let t_win_floor = policy_spec_winner_floor(lexical_tmax_sess);
@@ -1285,14 +1426,14 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                     continue;
                 }
                 // One chat may not fill the top 5. A short reply beside a hit is the same evidence, not a new slot.
-                let bypass_cap = short_reply && !it.is_event_sequence && allow_short_reply_bypass;
+                let bypass_cap = short_reply && !it.is_event_sequence && !it.multi_hop && allow_short_reply_bypass;
                 let session_capped = selected_turns.len() < 5
                     && count >= max_per_session_top5
                     && !bypass_cap;
                 if session_capped {
                     continue;
                 }
-                let diversity_factor = if short_reply && !it.is_event_sequence {
+                let diversity_factor = if short_reply && !it.is_event_sequence && !it.multi_hop {
                     1.0
                 } else if count == 0 && !topic_repeat {
                     1.0
@@ -1321,7 +1462,12 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
 
                 let s_rank = final_session_indices.iter().take(5).position(|&s| s == t_sess);
                 let couple = s_rank.map(|r| 1.0 + 0.50 / (1.0 + r as f32)).unwrap_or(1.0);
-                let gain = sc * (1.0 + 0.60 * uncovered_ratio) * diversity_factor * couple;
+                let uncov_w = if is_monologue_corpus && !selected_turns.is_empty() {
+                    1.35
+                } else {
+                    0.60
+                };
+                let gain = sc * (1.0 + uncov_w * uncovered_ratio) * diversity_factor * couple;
                 let stab = ix.turns[ti].stability;
                 let take = match best_turn {
                     None => true,
@@ -1379,7 +1525,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                     && selected_turns.iter().any(|&prev| {
                         ix.turns[prev].session == ix.turns[ti].session && (prev as isize - ti as isize).abs() == 1
                     });
-                let bypass_cap = short_reply && !it.is_event_sequence && allow_short_reply_bypass;
+                let bypass_cap = short_reply && !it.is_event_sequence && !it.multi_hop && allow_short_reply_bypass;
                 if selected_turns.len() < 5 && count >= max_per_session_top5 && !bypass_cap {
                     continue;
                 }
@@ -1403,9 +1549,11 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         && final_turn_indices.len() >= 5
         && smax > 0.0
     {
+        let eff_q4_sess = if it.multi_hop { q4_sess_floor.min(0.42) } else { q4_sess_floor };
+        let eff_q4_turn = if it.multi_hop { q4_turn_floor.min(0.38) } else { q4_turn_floor };
         let sess_limit = final_session_indices.len().min(5);
         for &si in &final_session_indices[1..sess_limit] {
-            if s_score[si] + bridge_boost[si] < q4_sess_floor * smax {
+            if s_score[si] + bridge_boost[si] < eff_q4_sess * smax {
                 continue;
             }
             if final_turn_indices[..5].iter().any(|&t| ix.turns[t].session == si) {
@@ -1434,7 +1582,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                     .iter()
                     .filter(|&&t| ix.turns[t].session == vs)
                     .count();
-                cnt >= 2 && t_scene[best_ti] >= q4_turn_floor * t_scene[vti]
+                cnt >= 2 && t_scene[best_ti] >= eff_q4_turn * t_scene[vti]
             });
             if let Some(slot) = victim_slot {
                 if let Some(existing) = final_turn_indices.iter().position(|&t| t == best_ti) {
@@ -1507,7 +1655,11 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                     *cur = c;
                 }
             }
-            if !it.current_state {
+            if !(if is_monologue_corpus {
+                eff_it.current_state
+            } else {
+                it.current_state
+            }) {
                 for &target in &ix.turns[ti].supersedes_turns {
                     let c = src * 0.66;
                     let cur = best_incoming.entry(target).or_insert(0.0);
@@ -2005,14 +2157,71 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // #810: Stede RST Nucleus/Satellite preference at Rank 1 (0..5 membership unchanged)
     super::seating::apply_rst_nucleus_preference(ix, &mut final_turn_indices, &t_scene, &t_exact_mask);
 
-    // [W2-033] Milestone Admission: ascending timestamp lattice for event sequences
-    super::seating::apply_w2_milestone_admission(ix, &it, &mut final_turn_indices, &t_scene);
+    // [W2-033] Milestone Admission: for long turn histories (`turns >= 64`) or monologues,
+    // use derived `eff_it` so multi-batch conversations (`ns = 3..63`) still activate trajectory seating.
+    let seq_intent = if ix.turns.len() >= 64 || is_monologue_corpus {
+        &eff_it
+    } else {
+        &it
+    };
+    super::seating::apply_w2_milestone_admission(ix, seq_intent, &mut final_turn_indices, &t_scene);
 
     // [W2-083 / W2-084] Summary Lead & Breadth Seats (Quantile Trajectory Pooling)
-    super::seating::apply_w2_quantile_trajectory_seating(ix, &q.text, &it, &mut final_turn_indices, &t_scene);
+    super::seating::apply_w2_quantile_trajectory_seating(ix, &q.text, seq_intent, &mut final_turn_indices, &t_scene);
 
     // [W2-028 / W2-031] StandingRegister constraint posting & assistant-echo swap
     super::seating::apply_w2_standing_register_seat(ix, &q.text, &plan, &mut final_turn_indices, &t_exact_mask);
+
+    // Scope-matched / live-task standing_rules head merge (keyed on turn count `turns >= 64`,
+    // never `session_turns.len()`, so coarse 3..5-batch long chats qualify too):
+    let allow_chat_task_rule = !has_named_speakers_eff && ix.turns.len() >= 64 && eff_it.task_under_rules;
+    if (is_monologue_corpus || allow_chat_task_rule)
+        && !standing_rules.is_empty()
+        && !seq_mode_eff
+        && !it.temporal
+        && !it.sniper_when
+        && !it.sniper_how_many
+        && final_turn_indices.len() >= 3
+    {
+        for sr in standing_rules.iter().take(2) {
+            if sr.score <= 0.0 {
+                continue;
+            }
+            let Some(r_ti) = ix.turns.iter().position(|t| t.id == sr.id) else {
+                continue;
+            };
+            let head_already_rule = ix.turns[final_turn_indices[0]].is_standing_policy;
+            if turn_is_superseded(ix, r_ti)
+                || (final_turn_indices[0] == r_ti)
+                || (!allow_chat_task_rule && final_turn_indices[..2].contains(&r_ti))
+            {
+                continue;
+            }
+            let has_scope_overlap = t_mask[r_ti] != 0
+                || super::seating::c2_policy_inflects_query(ix, r_ti, &plan);
+            if !has_scope_overlap && !allow_chat_task_rule {
+                continue;
+            }
+            if let Some(pos) = final_turn_indices.iter().position(|&x| x == r_ti) {
+                final_turn_indices.remove(pos);
+            }
+            let ins_at = if (allow_chat_task_rule && !head_already_rule)
+                || (has_scope_overlap
+                    && t_exact_mask[r_ti].count_ones()
+                        >= t_exact_mask[final_turn_indices[0]].count_ones()
+                    && !q.text.trim_end().ends_with('?'))
+            {
+                0
+            } else {
+                1.min(final_turn_indices.len())
+            };
+            final_turn_indices.insert(ins_at, r_ti);
+            if final_turn_indices.len() > k {
+                final_turn_indices.truncate(k);
+            }
+            break;
+        }
+    }
 
     // Slot-1 Assertion & Exact-Superset Promotion (same-session user declaratives over openers/fillers)
     super::seating::apply_assertion_and_superset_slot1_promotion(
@@ -2034,6 +2243,54 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         &t_own,
         &t_exact_mask,
     );
+
+    // Multi-Hop Session Diversity on Named-Speaker Dialogues:
+    // Cap any single session to at most 2 turns inside `final_turn_indices[0..5]` (leaving Slots 0..2 untouched),
+    // swapping any 3rd+ duplicate-session turn in Slots 2..5 with the highest-scoring declarative turn
+    // from the next uncovered top session (`final_session_indices[..4]`).
+    if it.multi_hop && has_named_speakers_eff && final_turn_indices.len() >= 5 {
+        for slot in (2..5usize).rev() {
+            let s_cur = ix.turns[final_turn_indices[slot]].session;
+            let s_cnt = final_turn_indices[..5]
+                .iter()
+                .filter(|&&ti| ix.turns[ti].session == s_cur)
+                .count();
+            if s_cnt < 3 {
+                continue;
+            }
+            let mut replacement: Option<usize> = None;
+            for &cand_s in final_session_indices.iter().take(4) {
+                if final_turn_indices[..5]
+                    .iter()
+                    .any(|&ti| ix.turns[ti].session == cand_s)
+                {
+                    continue;
+                }
+                let mut best_in_s: Option<(usize, f32)> = None;
+                for &cti in &ix.session_turns[cand_s] {
+                    let ct = &ix.turns[cti];
+                    if ct.is_question || ct.is_backchannel || turn_is_superseded(ix, cti) {
+                        continue;
+                    }
+                    let sc = t_scene[cti];
+                    if sc > 0.0 && best_in_s.map_or(true, |(_, bs)| sc > bs) {
+                        best_in_s = Some((cti, sc));
+                    }
+                }
+                if let Some((cti, _)) = best_in_s {
+                    replacement = Some(cti);
+                    break;
+                }
+            }
+            if let Some(cti) = replacement {
+                if let Some(existing) = final_turn_indices.iter().position(|&x| x == cti) {
+                    final_turn_indices.swap(slot, existing);
+                } else {
+                    final_turn_indices[slot] = cti;
+                }
+            }
+        }
+    }
 
     // #829 Moffat Rank-Biased Precision (p = 13/16 in Q16.16) tail slot reallocation (`5..k`, keeping `0..5` sealed),
     // powered by #821 QLD, #823/#825 BM25L+DFR, and #828 Rocchio PRF turn & session signals.
@@ -2061,6 +2318,9 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                 base_q16.saturating_add(s_r)
             })
             .collect();
+        let avg_own_dl = (ix.t_own_stats.avg[0] + ix.t_own_stats.avg[1]).max(16.0);
+        let mut best_long_bm25l: Option<(usize, u64)> = None;
+        let mut bm25l_raw_vec: Vec<u64> = vec![0; nt];
         let t_own_q16: Vec<u64> = (0..nt)
             .map(|ti| {
                 let v = t_own[ti];
@@ -2071,9 +2331,57 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                 let q_bag = bag_to_q8_into(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats, &mut qld_terms_buf);
                 let bm25l_q16 = super::bm25l_dfr::bm25l_dfr_score_q16(&q_bag, &qld_terms_buf);
                 let qld_q16 = super::qld::qld_score_q16(&q_bag, &qld_terms_buf, super::qld::MU_TURN_Q8);
-                base_q16.saturating_add((bm25l_q16 + qld_q16) >> 6)
+                let combined_l = bm25l_q16.saturating_add(qld_q16);
+                bm25l_raw_vec[ti] = combined_l;
+                let dl_ti = ix.turn_own_bags[ti].len[0] + ix.turn_own_bags[ti].len[1];
+                if is_monologue_corpus
+                    && dl_ti > 3.0 * avg_own_dl
+                    && !turn_is_superseded(ix, ti)
+                    && !ix.turns[ti].is_pure_info_question
+                    && t_exact_mask[ti].count_ones() >= 2
+                    && !final_turn_indices[..5.min(final_turn_indices.len())].contains(&ti)
+                    && best_long_bm25l.map_or(true, |(_, bs)| combined_l > bs)
+                {
+                    best_long_bm25l = Some((ti, combined_l));
+                }
+                base_q16.saturating_add(combined_l >> 6)
             })
             .collect();
+        // #823/#825 Unleash BM25L+DFR on long multi-paragraph documents (> 3 * avgdl) penalized by BM25 length norm:
+        if let Some((long_ti, long_sc)) = best_long_bm25l {
+            if final_turn_indices.len() >= 5 && long_sc > 0 {
+                let h0 = final_turn_indices[0];
+                let h0_sc = bm25l_raw_vec[h0];
+                let inc4 = final_turn_indices[4];
+                let inc4_sc = bm25l_raw_vec[inc4];
+                let long_bits = t_exact_mask[long_ti].count_ones();
+                let h0_bits = t_exact_mask[h0].count_ones();
+                let target_at = if long_sc.saturating_mul(2) >= h0_sc.saturating_mul(3)
+                    && long_bits > h0_bits
+                {
+                    Some(0)
+                } else if long_sc.saturating_mul(2) >= h0_sc.saturating_mul(3)
+                    && long_bits == h0_bits
+                {
+                    Some(1)
+                } else if long_sc.saturating_mul(4) >= inc4_sc.saturating_mul(5)
+                    && long_bits >= t_exact_mask[inc4].count_ones()
+                {
+                    Some(4)
+                } else {
+                    None
+                };
+                if let Some(at) = target_at {
+                    if let Some(pos) = final_turn_indices.iter().position(|&x| x == long_ti) {
+                        final_turn_indices.remove(pos);
+                    }
+                    final_turn_indices.insert(at.min(final_turn_indices.len()), long_ti);
+                    if final_turn_indices.len() > k {
+                        final_turn_indices.truncate(k);
+                    }
+                }
+            }
+        }
         super::rbp::apply_rbp_tail_allocation(
             ix,
             &prf_centroid,
@@ -2122,24 +2430,169 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         .map(|&ti| (t_exact_mask[ti] & q_group_mask).count_ones() as usize)
         .max()
         .unwrap_or(0);
-    let head0_solved = final_turn_indices.first().is_some_and(|&h0| {
-        !ix.turns[h0].is_question
-            && !ix.turns[h0].is_backchannel
-            && q_group_cnt > 0
-            && (t_exact_mask[h0] & q_group_mask).count_ones() as usize == q_group_cnt
-            && final_turn_indices
-                .get(1)
-                .map_or(true, |&h1| t_own[h0] >= 1.15 * t_own[h1])
+    let mut speaker_lowers_rank: Vec<String> = Vec::new();
+    for tr in ix.turns.iter().take(64) {
+        if !tr.speaker.is_empty() && tr.speaker != "user" && tr.speaker != "assistant" {
+            let sl = tr.speaker.to_ascii_lowercase();
+            if !speaker_lowers_rank.contains(&sl) {
+                speaker_lowers_rank.push(sl);
+            }
+        }
+    }
+    let mut non_sp_group_mask = 0u64;
+    for (gi, g) in plan.groups.iter().take(64).enumerate() {
+        if !speaker_lowers_rank.iter().any(|sp| sp.eq_ignore_ascii_case(g)) {
+            non_sp_group_mask |= 1u64 << gi;
+        }
+    }
+    let non_sp_q_cnt = non_sp_group_mask.count_ones() as usize;
+    let top3_non_sp_bits = final_turn_indices
+        .iter()
+        .take(3)
+        .map(|&ti| (t_exact_mask[ti] & non_sp_group_mask).count_ones() as usize)
+        .max()
+        .unwrap_or(0);
+
+    // Rare grounded-term mask: exclude high-DF generic conversational/boilerplate groups
+    // (`df > (nt / 12).max(4)`) so false stem matches (`lean`/`likely`/`fields`) cannot lock out `deficit_a`.
+    let rare_group_df_cap = ((nt as u64) / 12).max(4) as u32;
+    let mut grounded_group_mask = 0u64;
+    for qt in &plan.terms {
+        if let Some(g) = qt.group {
+            if g < 64 && qt.exact_hit {
+                let df = ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(0);
+                if df > 0 && df <= rare_group_df_cap {
+                    grounded_group_mask |= 1u64 << g;
+                }
+            }
+        }
+    }
+    let top3_grounded_bits = final_turn_indices
+        .iter()
+        .take(3)
+        .map(|&ti| (t_exact_mask[ti] & grounded_group_mask).count_ones() as usize)
+        .max()
+        .unwrap_or(0);
+    let top3_union_exact: u64 = final_turn_indices
+        .iter()
+        .take(3)
+        .fold(0u64, |acc, &ti| acc | t_exact_mask[ti]);
+    // True when any non-speaker query group OR raw folded query content token has OOV / very-low DF
+    // and is ungrounded in Top-3 (catches 0-DF OOV words like "Helsinki" even when dropped from `plan.groups`!).
+    let q_folded_for_oov = super::taxa::fold_ascii_tokens(&q.text);
+    let has_raw_oov_token = q_folded_for_oov.iter().any(|tok| {
+        if tok.len() < 3
+            || !is_content(tok)
+            || speaker_lowers_rank.iter().any(|sp| sp.eq_ignore_ascii_case(tok))
+        {
+            return false;
+        }
+        let vid = ix.vocab.get(tok.as_str());
+        let df = vid
+            .and_then(|id| ix.t_own_stats.df.get(&id).copied())
+            .unwrap_or(0);
+        if df > 2 {
+            return false;
+        }
+        let in_top3 = vid.is_some_and(|id| {
+            final_turn_indices
+                .iter()
+                .take(3)
+                .any(|&ti| ix.turns[ti].content.contains(&id))
+        });
+        !in_top3
     });
-    let deficit_a = !head0_solved && (top3_max_bits == 0 || (q_group_cnt >= 2 && top3_max_bits <= 1));
-    let deficit_b = !head0_solved && q_group_cnt >= 2 && top3_max_bits < q_group_cnt;
+    let has_ungrounded_rare_oov = has_raw_oov_token
+        || plan.groups.iter().take(64).enumerate().any(|(gi, g)| {
+            let g_bit = 1u64 << gi;
+            if (non_sp_group_mask & g_bit) == 0 || (top3_union_exact & g_bit) != 0 {
+                return false;
+            }
+            let max_g_df = plan
+                .terms
+                .iter()
+                .filter(|qt| qt.group == Some(gi))
+                .filter_map(|qt| ix.t_own_stats.df.get(&qt.id).copied())
+                .max()
+                .unwrap_or(0);
+            g.len() >= 3 && max_g_df <= 4
+        });
+    let head0_solved = !has_raw_oov_token
+        && final_turn_indices.first().is_some_and(|&h0| {
+            !ix.turns[h0].is_question
+                && !ix.turns[h0].is_backchannel
+                && q_group_cnt > 0
+                && (t_exact_mask[h0] & q_group_mask).count_ones() as usize == q_group_cnt
+                && final_turn_indices
+                    .get(1)
+                    .map_or(true, |&h1| t_own[h0] >= 1.15 * t_own[h1])
+        });
+    let deficit_a = !head0_solved
+        && (top3_max_bits == 0
+            || (non_sp_q_cnt >= 1 && top3_non_sp_bits == 0)
+            || (q_group_cnt >= 2
+                && top3_max_bits <= 1
+                && (!is_monologue_corpus || top3_grounded_bits == 0)));
+    let deficit_b = !head0_solved
+        && ((q_group_cnt >= 2 && top3_max_bits < q_group_cnt)
+            || (is_monologue_corpus && has_raw_oov_token));
 
     // #801/#806/#807 Generalized k-hop (k=3..6) Integer Viterbi + #802 6-Step Damped Integer RWR
     // + Coupled Session Bridge Fusion (no .or_else() short-circuiting):
     // - When `(it.multi_hop || deficit_b) && !head0_solved`, unseal Slots 1..4 when a decoded chain
     //   strictly increases query-group coverage over Slot 0.
     // - Otherwise keep Slots 0..5 sealed and admit fused candidates into redundant tail slots 5..k.
-    if k >= 6 {
+    // [#746] Spatial Conservation-of-Possession Automaton + Torrens Functional Multi-Hop Chain Deduction:
+    let mut torrens_locked_head = false;
+    let sp_turns = super::torrens::resolve_spatial_possession(ix, &q.text, it.sniper_where);
+    if !sp_turns.is_empty() {
+        torrens_locked_head = true;
+        for (ins_idx, &sp_ti) in sp_turns.iter().take(2).enumerate() {
+            if let Some(pos) = final_turn_indices.iter().position(|&x| x == sp_ti) {
+                final_turn_indices.remove(pos);
+            }
+            let at = ins_idx.min(final_turn_indices.len());
+            final_turn_indices.insert(at, sp_ti);
+        }
+        if final_turn_indices.len() > k {
+            final_turn_indices.truncate(k);
+        }
+    } else {
+        let rel_hop_cues = q_toks_eff
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w.as_str(),
+                    "of" | "for" | "where" | "which" | "whom" | "whose" | "by"
+                ) || w.ends_with("'s")
+            })
+            .count();
+        if (!head0_solved || rel_hop_cues >= 2)
+            && !ix.torrens_records.is_empty()
+            && (wh_slots(&q.text) != 0 || q.text.trim_end().ends_with('?'))
+            && (eff_it.current_state || rel_hop_cues >= 2)
+        {
+            let (t_chain, chain_cues) = super::torrens::resolve_torrens_chain_q16(ix, &q.text);
+            let slot0_cues = final_turn_indices
+                .first()
+                .map_or(0, |&h0| (t_exact_mask[h0] & q_group_mask).count_ones());
+            if t_chain.len() >= 2 && (!head0_solved || chain_cues > slot0_cues) {
+                torrens_locked_head = true;
+                for (ins_idx, &cti) in t_chain.iter().take(4).enumerate() {
+                    if let Some(pos) = final_turn_indices.iter().position(|&x| x == cti) {
+                        final_turn_indices.remove(pos);
+                    }
+                    let at = ins_idx.min(final_turn_indices.len());
+                    final_turn_indices.insert(at, cti);
+                }
+                if final_turn_indices.len() > k {
+                    final_turn_indices.truncate(k);
+                }
+            }
+        }
+    }
+
+    if k >= 6 && !torrens_locked_head {
         let viterbi_chain = super::viterbi::decode_viterbi_chain(ix, &plan, &final_turn_indices, &base_q16, &t_mask);
         if (it.multi_hop || deficit_b) && !head0_solved {
             if let Some(ref chain) = viterbi_chain {
@@ -2150,7 +2603,12 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                 {
                     let head_mask = t_exact_mask[final_turn_indices[0]];
                     for &hop_ti in &chain.path {
-                        if ix.turns[hop_ti].is_question
+                        let hop_q = if is_monologue_corpus {
+                            ix.turns[hop_ti].is_pure_info_question
+                        } else {
+                            ix.turns[hop_ti].is_question
+                        };
+                        if hop_q
                             || ix.turns[hop_ti].is_backchannel
                             || turn_is_superseded(ix, hop_ti)
                             || final_turn_indices.contains(&hop_ti)
@@ -2160,7 +2618,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                         if !it.multi_hop && ((t_exact_mask[hop_ti] & !head_mask) == 0 || t_own[hop_ti] <= 0.0) {
                             continue;
                         }
-                        let seat_end = 4.min(final_turn_indices.len());
+                        let seat_end = (if is_monologue_corpus || it.multi_hop { 5 } else { 4 }).min(final_turn_indices.len());
                         let mut target_slot: Option<usize> = None;
                         for s in 1..seat_end {
                             let inc_ti = final_turn_indices[s];
@@ -2171,9 +2629,20 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                                 earlier_mask |= t_exact_mask[p_ti];
                             }
                             let covered_dup = dup_sess && (t_exact_mask[inc_ti] & !earlier_mask) == 0;
-                            if (it.multi_hop && ix.turns[inc_ti].is_question)
-                                || (covered_dup && ix.turns[inc_ti].is_question && t_own[inc_ti] < t_own[hop_ti])
-                            {
+                            let evict_ok = if is_monologue_corpus {
+                                (it.multi_hop && (ix.turns[inc_ti].is_pure_info_question || covered_dup))
+                                    || (covered_dup
+                                        && (ix.turns[inc_ti].is_pure_info_question || s >= 3)
+                                        && t_own[inc_ti] < t_own[hop_ti])
+                            } else {
+                                (it.multi_hop
+                                    && (ix.turns[inc_ti].is_question
+                                        || (covered_dup && s >= 2 && t_own[inc_ti] < t_own[hop_ti])))
+                                    || (covered_dup
+                                        && ix.turns[inc_ti].is_question
+                                        && t_own[inc_ti] < t_own[hop_ti])
+                            };
+                            if evict_ok {
                                 target_slot = Some(s);
                                 break;
                             }
@@ -2184,6 +2653,21 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                                 final_turn_indices.truncate(k);
                             }
                         }
+                    }
+                    // On monologue fact corpora, when Viterbi decoded `[Hop1, ..., Terminus]` anchored at
+                    // `final_turn_indices[0]`, promote the terminal answer turn to Slot 0 (`[Terminus, Hop1, ...]`).
+                    if is_monologue_corpus
+                        && chain.path.first() == final_turn_indices.first()
+                        && let Some(&term_ti) = chain.path.last()
+                        && term_ti != final_turn_indices[0]
+                        && !ix.turns[term_ti].is_pure_info_question
+                        && !ix.turns[term_ti].is_backchannel
+                        && !turn_is_superseded(ix, term_ti)
+                        && let Some(pos) = final_turn_indices.iter().position(|&x| x == term_ti)
+                        && pos < 5
+                    {
+                        final_turn_indices.remove(pos);
+                        final_turn_indices.insert(0, term_ti);
                     }
                 }
             }
@@ -2249,8 +2733,10 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         }
     }
 
+    let state_intent = if is_monologue_corpus { &eff_it } else { &it };
+
     // #805 Allen Interval Algebra + #808 Temporal Contradiction Pruner + #812 Box-Cox Stabilization
-    super::temporal_allen::apply_allen_boxcox_tail_refinement(ix, &it, &base_q16, &mut final_turn_indices, k);
+    super::temporal_allen::apply_allen_boxcox_tail_refinement(ix, state_intent, &base_q16, &mut final_turn_indices, k);
 
     // #798/#799/#800/#826/#767 Block-Max WAND + Fagin TA bitpacked posting scan verification
     let wand_stats = super::wand::verify_query_block_max_wand(ix, &plan, &base_q16, k);
@@ -2267,22 +2753,28 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             .map(|w| super::taxa::wilkins_term_code_u64(w))
             .unwrap_or(0);
         let q_zato = super::taxa::zatocode_u128(plan.terms.iter().map(|qt| qt.id));
-        super::taxa::apply_deficit_taxa_and_pref_rescue(
-            ix,
-            &q.text,
-            &plan,
-            &pref_reg,
-            q_wilkins,
-            q_zato,
-            &base_q16,
-            &t_exact_mask,
-            &mut final_turn_indices,
-            k,
-            deficit_a,
-            deficit_b,
-        );
-        // #750 Talmudic Machloket Dormant-Branch Recovery on `!it.current_state && pref_on`
-        if !it.current_state && pref_on && final_turn_indices.len() >= 6 {
+        let taxa_locked_head = if !torrens_locked_head {
+            super::taxa::apply_deficit_taxa_and_pref_rescue(
+                ix,
+                &q.text,
+                &plan,
+                &pref_reg,
+                q_wilkins,
+                q_zato,
+                &base_q16,
+                &t_exact_mask,
+                &mut final_turn_indices,
+                k,
+                deficit_a,
+                deficit_b,
+                has_ungrounded_rare_oov,
+                top3_union_exact,
+            )
+        } else {
+            false
+        };
+        // #750 Talmudic Machloket Dormant-Branch Recovery on `!state_intent.current_state && pref_on`
+        if !state_intent.current_state && pref_on && final_turn_indices.len() >= 6 {
             let dormant = super::causal::recover_machloket_dormant_turns(ix, 4);
             if let Some(&dti) = dormant.iter().find(|&&ti| !final_turn_indices.contains(&ti) && base_q16[ti] > 0) {
                 let last = final_turn_indices.len() - 1;
@@ -2302,7 +2794,9 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             }
         }
         let _reduced_spine = super::causal::transitive_reduction_edges(&adj_mask);
-        super::ac3::apply_ac3_consistency(ix, &it, &base_q16, &mut final_turn_indices, k);
+        if !taxa_locked_head && !torrens_locked_head {
+            super::ac3::apply_ac3_consistency(ix, state_intent, &base_q16, &mut final_turn_indices, k);
+        }
         let ref_ts_sec = ix.session_ts.iter().copied().max().unwrap_or(0);
         let mut ledger = super::locke_ledger::build_turn_attribution_ledger(ix, &final_turn_indices, &base_q16);
         for &ti in &final_turn_indices {
@@ -2336,7 +2830,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             }
             let causal_q16 = super::causal::evaluate_causal_turn_q16(
                 ix,
-                &it,
+                state_intent,
                 ti,
                 base_q16[ti],
                 &final_turn_indices,
@@ -2362,6 +2856,52 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         &s_score,
         &bridge_boost,
     );
+    let mut max_ep_groups = 0usize;
+    let mut union_mask_top5 = 0u64;
+    let mut exact_union_top5 = 0u64;
+    let mut grounded_union = 0u64;
+    let mut any_pos_support = !standing_rules.is_empty();
+    for &ti in final_turn_indices.iter().take(5) {
+        let m = t_mask[ti] & q_group_mask;
+        let c = m.count_ones() as usize;
+        if c > max_ep_groups {
+            max_ep_groups = c;
+        }
+        union_mask_top5 |= m;
+        exact_union_top5 |= t_exact_mask[ti] & q_group_mask;
+        grounded_union |= t_exact_mask[ti] & grounded_group_mask;
+        if t_scene[ti] > 0.0 || t_bridge[ti] > 0.0 {
+            any_pos_support = true;
+        }
+    }
+    let union_groups = union_mask_top5.count_ones() as usize;
+    let grounded_groups = grounded_group_mask.count_ones() as usize;
+    let grounded_covered = grounded_union.count_ones() as usize;
+    let zero_exact_unbridged = exact_union_top5 == 0
+        && standing_rules.is_empty()
+        && final_turn_indices
+            .first()
+            .map_or(true, |&h0| t_bridge[h0] <= 0.0)
+        && union_groups < q_group_cnt;
+    let cov_status = if q_group_cnt > 0
+        && ((union_groups == 0 && (!any_pos_support || (q_group_cnt >= 2 && standing_rules.is_empty())))
+            || zero_exact_unbridged)
+    {
+        "ABSTAIN"
+    } else if q_group_cnt >= 2 && union_groups > 0 && union_groups < q_group_cnt {
+        "PARTIAL_PREMISE"
+    } else {
+        "COVERED"
+    };
+    let premise_coverage = PremiseCoverage {
+        status: cov_status,
+        total_groups: q_group_cnt,
+        max_episode_groups: max_ep_groups,
+        union_groups,
+        grounded_groups,
+        grounded_covered,
+    };
+
     let turns = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
@@ -2371,5 +2911,11 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
-    RankResult { intent: plan.intent, sessions, turns, standing_rules }
+    RankResult {
+        intent: plan.intent,
+        premise_coverage,
+        sessions,
+        turns,
+        standing_rules,
+    }
 }

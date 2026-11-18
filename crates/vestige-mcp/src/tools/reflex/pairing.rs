@@ -73,7 +73,7 @@ fn segment(command: &str) -> Vec<String> {
 }
 
 fn program(word: &str) -> String {
-    word.rsplit('/').next().unwrap_or(word).to_string()
+    word.rsplit(['/', '\\']).next().unwrap_or(word).to_string()
 }
 
 /// The first words that name what was run: the program and its first
@@ -521,10 +521,7 @@ pub(super) async fn on_event(
             }
         }
         "PostToolUse" => {
-            let edits = matches!(
-                inp.tool.as_str(),
-                "Edit" | "Write" | "MultiEdit" | "NotebookEdit"
-            );
+            let edits = super::enforce::is_edit_tool(&inp.tool);
             let open = {
                 let Ok(mut g) = global.lock() else {
                     return out;

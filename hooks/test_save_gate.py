@@ -257,6 +257,43 @@ class TestSaveGateHooks(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertIsNone(parsed)
 
+    def test_multiedit_tracks_all_files_until_saved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, "VESTIGE_REFLEX_DIR": tmp}
+            sid = "test-multiedit"
+            run_hook_json("UserPromptSubmit", {"session_id": sid, "prompt": "refactor two files"}, env)
+            run_hook_json(
+                "PostToolUse",
+                {
+                    "session_id": sid,
+                    "tool_name": "MultiEdit",
+                    "tool_input": {
+                        "edits": [
+                            {"file_path": "src/a.rs", "start_line": 1, "end_line": 4},
+                            {"file_path": "src/b.rs", "start_line": 10, "end_line": 15},
+                        ]
+                    },
+                    "tool_response": {},
+                },
+                env,
+            )
+            stop = run_hook_json("Stop", {"session_id": sid, "stop_hook_active": False}, env)
+            self.assertEqual(stop["decision"], "block")
+            self.assertIn("src/a.rs", stop["reason"])
+            self.assertIn("src/b.rs", stop["reason"])
+            run_hook_json(
+                "PostToolUse",
+                {
+                    "session_id": sid,
+                    "tool_name": "mcp__vestige__remember",
+                    "tool_input": {"action": "save", "content": "Anchored both refactored files"},
+                    "tool_response": {"ok": True},
+                },
+                env,
+            )
+            cleared = run_hook_json("Stop", {"session_id": sid, "stop_hook_active": False}, env)
+            self.assertIsNone(cleared)
+
 
 if __name__ == "__main__":
     unittest.main()

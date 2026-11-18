@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "name": "operator-session-automaton",
+  "fail_closed": true,
+  "survives_compact": true,
+  "states": {
+    "OP-019": {
+      "rule": "no-harmful-chain",
+      "transitions": [
+        "fetched->exec",
+        "read_secret->egress",
+        "symlink->write",
+        "build_hook->runner",
+        "check_off->push"
+      ]
+    },
+    "OP-020": {
+      "rule": "no-second-spelling",
+      "persist_across_compact": true,
+      "persist_across_reopen": true,
+      "match": "canonical_target_equivalence"
+    },
+    "OP-024": {
+      "rule": "runaway-brake",
+      "default_threshold": 8,
+      "window_s": 300,
+      "quiet_s": 900,
+      "persist_across_compact": true,
+      "hold_mutations": true
+    },
+    "OP-025": {
+      "rule": "turnover-hold",
+      "trigger": "pre_compact",
+      "release": "owner_or_explicit_ack",
+      "hold_mutations": true
+    }
+  }
+}

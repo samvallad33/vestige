@@ -55,6 +55,7 @@ pub fn schema() -> Value {
 #[derive(Debug, Deserialize)]
 struct CurateArgs {
     action: String,
+    #[serde(alias = "memoryId", alias = "memory_id", alias = "node_id")]
     id: Option<String>,
     source_id: Option<String>,
     target_id: Option<String>,

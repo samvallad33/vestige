@@ -1,70 +1,69 @@
 #!/bin/bash
 # vestige-pulse-daemon.sh — UserPromptSubmit hook for recent Vestige insights
 #
-# HOOK #2 of the 2026-04-20 upgrade: v2.2 PULSE AT THE CLAUDE-CODE LAYER.
-#
-# This hook polls the vestige-mcp event changelog at
-# http://127.0.0.1:3927/api/changelog and watches for DreamCompleted or
-# ConnectionDiscovered events with meaningful insight payloads. When one fires,
-# it prints context to stdout and exits 0. Claude Code injects UserPromptSubmit
-# stdout into the next turn's context.
-#
-# Rate limit: fires at most once per 20 minutes per session to avoid
-# interrupting flow state during focused work.
-#
-# The effect: fresh Vestige dream/connection events can reach Claude before it
-# answers the next prompt, without blocking the user or requiring a manual MCP
-# call first.
-#
-# Fails open: if vestige-mcp is not running or the dashboard API is unavailable,
-# exits 0 silently. Never blocks Claude.
+# Polls /api/changelog for DreamCompleted, BackfillCompleted, or
+# ConnectionDiscovered events and emits proper hookSpecificOutput JSON with
+# full mem-... handles. Rate-limited to once per 20 minutes per session.
+# Fails open silently if vestige-mcp dashboard is offline.
 
 set -u
 
-# State files for rate limiting
-STATE_DIR="${VESTIGE_PULSE_STATE_DIR:-/tmp/vestige-pulse-daemon}"
+PY_BIN=""
+for _cand in python3 python; do
+  if command -v "$_cand" >/dev/null 2>&1 && "$_cand" -I -c "import sys" >/dev/null 2>&1; then
+    PY_BIN="$_cand"
+    break
+  fi
+done
+CURL_BIN="$(command -v curl 2>/dev/null || true)"
+[ -n "$PY_BIN" ] && [ -n "$CURL_BIN" ] || exit 0
+
+STATE_DIR="${VESTIGE_PULSE_STATE_DIR:-${TMPDIR:-/tmp}/vestige-pulse-daemon}"
 mkdir -p "$STATE_DIR"
 LAST_FIRE_FILE="$STATE_DIR/last_fire"
 SESSION_ID_FILE="$STATE_DIR/session_id"
 
 INPUT="$(cat)"
-SESSION_ID="$(printf '%s' "$INPUT" | /usr/bin/python3 -I -c 'import sys,json;d=json.load(sys.stdin);print(d.get("session_id",""))' 2>/dev/null || printf '')"
+SESSION_ID="$(VESTIGE_PULSE_IN="$INPUT" "$PY_BIN" -I -c '
+import json, os
+try:
+    d = json.loads(os.environ.get("VESTIGE_PULSE_IN", "") or "{}")
+except Exception:
+    d = {}
+print(d.get("session_id") or "")
+' 2>/dev/null || printf '')"
 
-# Rate limit: 20 minutes between fires per session
 MIN_INTERVAL_SEC=1200
-NOW=$(date +%s)
+NOW=$(date +%s 2>/dev/null || echo 0)
 
 if [ -f "$LAST_FIRE_FILE" ]; then
   LAST_FIRE=$(cat "$LAST_FIRE_FILE" 2>/dev/null || echo 0)
   LAST_SESSION=$(cat "$SESSION_ID_FILE" 2>/dev/null || echo "")
-  # Only rate-limit within the same session
   if [ "$LAST_SESSION" = "$SESSION_ID" ] && [ $((NOW - LAST_FIRE)) -lt $MIN_INTERVAL_SEC ]; then
     exit 0
   fi
 fi
 
 PORT="${VESTIGE_DASHBOARD_PORT:-3927}"
-
-# Probe health before polling the changelog
-if ! /usr/bin/curl -fsS -m 0.5 "http://127.0.0.1:${PORT}/api/health" > /dev/null 2>&1; then
+if ! "$CURL_BIN" -fsS -m 0.5 "http://127.0.0.1:${PORT}/api/health" > /dev/null 2>&1; then
   exit 0
 fi
 
-# Check recent events via the REST changelog API for DreamCompleted in the
-# last 15 minutes. This is simpler than a full WebSocket subscription and
-# works with UserPromptSubmit semantics (inject once per prompt, not persistent).
-# If a DreamCompleted event with insights_generated > 0 is found, inject context.
-RESULT="$(/usr/bin/curl -fsS -m 2 \
-  "http://127.0.0.1:${PORT}/api/changelog?start=$(date -u -v-15M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%SZ)&limit=50" \
+SINCE_UTC="$("$PY_BIN" -I -c '
+from datetime import datetime, timedelta, timezone
+print((datetime.now(timezone.utc) - timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+' 2>/dev/null || true)"
+
+[ -n "$SINCE_UTC" ] || exit 0
+
+RESULT="$("$CURL_BIN" -fsS -m 2 \
+  "http://127.0.0.1:${PORT}/api/changelog?start=${SINCE_UTC}&limit=50" \
   2>/dev/null || printf '')"
 
-if [ -z "$RESULT" ]; then
-  exit 0
-fi
+[ -n "$RESULT" ] || exit 0
 
-INSIGHT="$(VESTIGE_CHANGELOG_JSON="$RESULT" /usr/bin/python3 -I <<'PYEOF'
+INSIGHT="$(VESTIGE_CHANGELOG_JSON="$RESULT" "$PY_BIN" -I -c '
 import json, os, sys
-
 
 def as_int(value):
     try:
@@ -76,22 +75,14 @@ try:
     data = json.loads(os.environ.get("VESTIGE_CHANGELOG_JSON", ""))
 except Exception:
     sys.exit(0)
-
 if not isinstance(data, dict):
     sys.exit(0)
 
-events = data.get("events", []) or []
-
-# Find the most recent DreamCompleted with insights_generated > 0
-# OR ConnectionDiscovered with a meaningful target
-for ev in events:
+for ev in (data.get("events") or []):
     if not isinstance(ev, dict):
         continue
     etype = ev.get("type", "")
-    payload = ev.get("data")
-    if not isinstance(payload, dict):
-        payload = ev
-
+    payload = ev.get("data") if isinstance(ev.get("data"), dict) else ev
     if etype in ("DreamCompleted", "dream", "consolidation"):
         insights = as_int(payload.get("insights_generated") or payload.get("insightsGenerated"))
         if insights > 0:
@@ -101,37 +92,44 @@ for ev in events:
                 or payload.get("connectionsPersisted")
                 or payload.get("connections_found")
                 or payload.get("connectionsFound")
-                or payload.get("connectionFound")
                 or stats.get("connections")
             )
-            print(f"DREAM: {insights} insights, {connections} new connections. Dream cycle completed while you were working. Consider calling mcp__vestige__dream(memory_count=50) to inspect the fresh cluster bridges; or mcp__vestige__explore_connections(action='bridges') on the latest activity.")
+            print(f"DREAM: {insights} insights, {connections} new connections surfaced. Inspect via curate(action=\"dream\") or causal_walk.")
             sys.exit(0)
-    if etype in ("ConnectionDiscovered", "connection"):
-        src = str(payload.get("source_id") or payload.get("sourceId") or payload.get("source") or "")[:8]
-        tgt = str(payload.get("target_id") or payload.get("targetId") or payload.get("target") or "")[:8]
+    elif etype in ("ConnectionDiscovered", "connection"):
+        src = str(payload.get("source_id") or payload.get("sourceId") or payload.get("source") or "")
+        tgt = str(payload.get("target_id") or payload.get("targetId") or payload.get("target") or "")
         if src and tgt:
-            print(f"CONNECTION: Vestige discovered a new edge [{src}] <-> [{tgt}] while you were working. Spreading activation surfaced a bridge you had not queried. Inspect via mcp__vestige__explore_connections(action='bridges', from='{src}', to='{tgt}').")
+            print(f"CONNECTION: New causal edge [{src}] <-> [{tgt}] discovered. Inspect via recall(handle=\"{src}\") or causal_walk(from_handle=\"{tgt}\").")
             sys.exit(0)
-PYEOF
-)"
+    elif etype in ("BackfillCompleted", "backfill"):
+        mid = str(payload.get("memory_id") or payload.get("memoryId") or "")
+        rid = str(payload.get("receipt_id") or payload.get("receiptId") or "")
+        if mid:
+            print(f"RSB: Retroactive salience raised {mid} (receipt {rid}). Inspect via recall(handle=\"{mid}\").")
+            sys.exit(0)
+' 2>/dev/null || printf '')"
 
 if [ -z "$INSIGHT" ]; then
   exit 0
 fi
 
-# Update rate-limit state
 echo "$NOW" > "$LAST_FIRE_FILE"
 echo "$SESSION_ID" > "$SESSION_ID_FILE"
 
-# UserPromptSubmit stdout is injected into Claude's context. Do not use exit 2
-# here: Claude Code treats that as a blocking prompt validation failure.
-cat <<PULSEMSG
-[VESTIGE PULSE — autonomous insight from the cognitive engine]
-
-$INSIGHT
-
-This context was injected because Vestige generated a fresh insight while the session was active. Mention it naturally if it is relevant to the user's current prompt.
-
-Rate-limited to 1 pulse per 20 minutes per session. See ~/.claude/hooks/vestige-pulse-daemon.sh.
-PULSEMSG
+VESTIGE_PULSE_INSIGHT="$INSIGHT" "$PY_BIN" -I -c '
+import json, os
+insight = os.environ.get("VESTIGE_PULSE_INSIGHT", "").strip()
+msg = (
+    "[VESTIGE PULSE — autonomous insight from the cognitive engine]\n\n"
+    f"{insight}\n\n"
+    "Surface this naturally if relevant to the current task."
+)
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": msg
+    }
+}))
+'
 exit 0

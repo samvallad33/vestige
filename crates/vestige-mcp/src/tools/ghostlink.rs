@@ -329,6 +329,9 @@ pub fn load_laws(
 }
 
 fn home_dir() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(home));
+    }
     directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
 }
 
@@ -610,8 +613,8 @@ fn heal_poc(storage: &Arc<Storage>, args: &Value) -> Result<Value, String> {
 
     // 2. Run the suite once, save the log under ~/Downloads (never /tmp).
     let ((classification, output), command_line) = run_suite(&repo_path, test_command.as_deref());
-    let runs_dir = directories::BaseDirs::new()
-        .map(|d| d.home_dir().join("Downloads/vestige-heal-runs"))
+    let runs_dir = home_dir()
+        .map(|h| h.join("Downloads/vestige-heal-runs"))
         .unwrap_or_else(|| PathBuf::from("vestige-heal-runs"));
     std::fs::create_dir_all(&runs_dir)
         .map_err(|e| format!("could not create {}: {e}", runs_dir.display()))?;

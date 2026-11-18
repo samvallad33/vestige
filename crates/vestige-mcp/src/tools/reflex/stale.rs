@@ -50,7 +50,7 @@ pub(super) fn retirements_of(tool: &str, result: &Value) -> Vec<Retirement> {
         .map(str::to_string);
     let mut out = Vec::new();
     match (tool, result.get("action").and_then(Value::as_str)) {
-        ("memory", Some("edit")) => {
+        ("memory", Some("edit")) | ("curate", Some("edit" | "supersede")) => {
             if let Some(old) = id("supersedes") {
                 out.push(Retirement {
                     old,
@@ -67,8 +67,8 @@ pub(super) fn retirements_of(tool: &str, result: &Value) -> Vec<Retirement> {
                 });
             }
         }
-        ("memory", Some("demoted")) => {
-            if let Some(old) = id("nodeId") {
+        ("memory", Some("demoted")) | ("curate", Some("demote" | "demoted")) => {
+            if let Some(old) = id("nodeId").or_else(|| id("id")) {
                 out.push(Retirement {
                     old,
                     how: "demoted as wrong or unhelpful".into(),
@@ -77,8 +77,8 @@ pub(super) fn retirements_of(tool: &str, result: &Value) -> Vec<Retirement> {
                 });
             }
         }
-        ("suppress", Some("suppress")) => {
-            if let Some(old) = id("id") {
+        ("suppress", Some("suppress")) | ("curate", Some("suppress" | "suppressed")) => {
+            if let Some(old) = id("id").or_else(|| id("nodeId")) {
                 out.push(Retirement {
                     old,
                     how: "suppressed".into(),
@@ -107,7 +107,7 @@ pub(super) fn retirements_of(tool: &str, result: &Value) -> Vec<Retirement> {
                 }
             }
         }
-        ("smart_ingest", _) => {
+        ("smart_ingest", _) | ("remember", _) => {
             let mut links: Vec<Value> = result
                 .get("links")
                 .and_then(Value::as_array)
@@ -254,6 +254,27 @@ mod tests {
             &json!({"nodeId": b, "links": [{"edge": "supersedes", "source": b, "target": a, "receiptId": "eff-2"}]}),
         );
         assert_eq!((ing[0].old.as_str(), ing[0].new.as_deref()), (a, Some(b)));
+        let cur_edit = retirements_of(
+            "curate",
+            &json!({"action": "edit", "nodeId": b, "supersedes": a, "receiptId": "eff-3"}),
+        );
+        assert_eq!((cur_edit[0].old.as_str(), cur_edit[0].new.as_deref()), (a, Some(b)));
+        assert_eq!(
+            retirements_of("curate", &json!({"action": "demote", "id": a})).len(),
+            1
+        );
+        assert_eq!(
+            retirements_of("curate", &json!({"action": "suppress", "id": a})).len(),
+            1
+        );
+        assert_eq!(
+            retirements_of(
+                "remember",
+                &json!({"nodeId": b, "links": [{"kind": "supersedes", "source": b, "target": a}]})
+            )
+            .len(),
+            1
+        );
         assert!(retirements_of("recall", &json!({"supersedes": a})).is_empty());
         assert!(retirements_of("memory", &json!({"action": "promoted", "nodeId": a})).is_empty());
     }

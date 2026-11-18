@@ -243,6 +243,12 @@ pub(super) struct Index {
     /// [W2-028/031] 64-bit bloom register over durable user-directive turns & their turn indices.
     pub(super) standing_register: u64,
     pub(super) standing_directive_turns: Vec<usize>,
+    /// User turns explicitly asserting compound personal preferences (`"i prefer"`, `"i'd like to"`, `"i'd rather"`).
+    pub(super) preference_directive_turns: Vec<usize>,
+    /// [#746] Torrens functional title register & conservation-of-possession spatial log.
+    pub(super) torrens_records: Vec<super::torrens::TorrensRecord>,
+    pub(super) torrens_superseded: Vec<bool>,
+    pub(super) spatial_events: Vec<super::torrens::SpatialEvent>,
 }
 
 /// Compact cache-aligned turn metadata (`<= 24 bytes`) for L3-resident linear scans.
@@ -515,6 +521,28 @@ pub fn utterance_is_standing_policy(text: &str) -> bool {
     opens_np && words.iter().filter(|w| is_content(w)).count() >= 2
 }
 
+// hardcode-scan: closed-class (compound personal preference modal grammar)
+pub(super) fn has_compound_preference_frame(text: &str) -> bool {
+    let prose = text.split("```").next().unwrap_or(text).trim();
+    if prose.is_empty() {
+        return false;
+    }
+    let lower = prose.to_lowercase();
+    let hit = [
+        "i prefer ", "i'd prefer ", "i\u{2019}d prefer ",
+        "i'd like to ", "i\u{2019}d like to ", "i'd rather ", "i\u{2019}d rather ",
+    ]
+    .iter()
+    .any(|pat| {
+        lower.starts_with(pat)
+            || lower.contains(&format!(". {pat}"))
+            || lower.contains(&format!(", {pat}"))
+            || lower.contains(&format!("; {pat}"))
+            || lower.contains(&format!("so {pat}"))
+    });
+    hit && raw_tokens(prose).iter().filter(|w| is_content(w)).count() >= 3
+}
+
 /// [W2-028/031] Closed-class durable user-directive detector (superset of `utterance_is_standing_policy`
 /// catching first-person modal/negation constraints mid-utterance such as "I never...", "From now on...").
 // hardcode-scan: closed-class (durable user directive grammar)
@@ -523,22 +551,27 @@ pub(super) fn is_durable_user_directive(text: &str) -> bool {
         return true;
     }
     let prose = text.split("```").next().unwrap_or(text).trim();
-    if prose.is_empty() || prose.ends_with('?') {
+    if prose.is_empty() {
         return false;
     }
     let lower = prose.to_lowercase();
-    let has_trigger = [
-        "i always ", "i never ", "i cannot ", "i can't ", "i can\u{2019}t ",
-        "i won't ", "i won\u{2019}t ", "i must ", "i don't ", "i don\u{2019}t ",
-        "we always ", "we never ", "from now on ", "please always ", "please never ",
-    ]
-    .iter()
-    .any(|pat| {
-        lower.starts_with(pat)
-            || lower.contains(&format!(". {pat}"))
-            || lower.contains(&format!(", {pat}"))
-            || lower.contains(&format!("; {pat}"))
-    });
+    let has_compound_pref = has_compound_preference_frame(prose);
+    if prose.ends_with('?') && !has_compound_pref {
+        return false;
+    }
+    let has_trigger = has_compound_pref
+        || [
+            "i always ", "i never ", "i cannot ", "i can't ", "i can\u{2019}t ",
+            "i won't ", "i won\u{2019}t ", "i must ", "i don't ", "i don\u{2019}t ",
+            "we always ", "we never ", "from now on ", "please always ", "please never ",
+        ]
+        .iter()
+        .any(|pat| {
+            lower.starts_with(pat)
+                || lower.contains(&format!(". {pat}"))
+                || lower.contains(&format!(", {pat}"))
+                || lower.contains(&format!("; {pat}"))
+        });
     has_trigger && raw_tokens(prose).iter().filter(|w| is_content(w)).count() >= 3
 }
 
@@ -1175,6 +1208,7 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
     let mut constraint_terms: DetHashSet<u32> = DetHashSet::default();
     let mut standing_register: u64 = 0;
     let mut standing_directive_turns: Vec<usize> = Vec::new();
+    let mut preference_directive_turns: Vec<usize> = Vec::new();
     let mut header_dict: DetHashMap<u64, Vec<HeaderKey>> = DetHashMap::default();
     let mut header_max_words = 0usize;
     for (si, s) in sessions.iter().enumerate() {
@@ -1463,6 +1497,9 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
                 && !is_short_question
                 && content.len() >= 4;
             let turn_idx = turns.len();
+            if field == 0 && (is_personal_constraint || has_compound_preference_frame(prose_body)) {
+                preference_directive_turns.push(turn_idx);
+            }
             if field == 0 && (is_standing_policy || is_personal_constraint || is_durable_user_directive(prose_body)) {
                 for &cid in &content {
                     standing_register |= 1u64 << (cid % 64);
@@ -1481,16 +1518,12 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
                 ));
             }
             let id = if t.id.is_empty() { format!("{}#{}", s.id, ti) } else { t.id.clone() };
-            let body_for_headers = if header_max_words > 0 {
-                let body = if extract_header_titles(prose_body).is_some() {
-                    prose_body.split_once('\n').map(|(_, rest)| rest).unwrap_or(prose_body)
-                } else {
-                    prose_body
-                };
-                body.to_string()
+            let body_for_headers = if extract_header_titles(prose_body).is_some() {
+                prose_body.split_once('\n').map(|(_, rest)| rest).unwrap_or(prose_body)
             } else {
-                String::new()
-            };
+                prose_body
+            }
+            .to_string();
             turn_tech_handles.push(tech_handles);
             turn_prose_cache.push(prose_body.to_string());
             turn_cues.push(intern_cues(&t.content, &mut cue_vocab));
@@ -1667,17 +1700,30 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
             if s_lat <= s_prev {
                 continue;
             }
-            let lat_prose = &turn_prose_cache[later];
-            let prev_prose = &turn_prose_cache[prev];
+            let lat_prose = super::torrens::strip_leading_ordinal(&turn_prose_cache[later]);
+            let prev_prose = super::torrens::strip_leading_ordinal(&turn_prose_cache[prev]);
+            let torrens_pair_key_match = match (
+                super::torrens::parse_torrens_sentence(prev_prose, prev),
+                super::torrens::parse_torrens_sentence(lat_prose, later),
+            ) {
+                (Some(rp), Some(rl)) => Some(rp.key_hash == rl.key_hash && rp.val_phrase != rl.val_phrase),
+                _ => None,
+            };
+            if torrens_pair_key_match == Some(false) {
+                continue;
+            }
             let later_digits = digit_token_set(lat_prose);
             let prev_digits = digit_token_set(prev_prose);
             let digit_shift = !later_digits.is_empty() && !prev_digits.is_empty() && later_digits != prev_digits;
             let has_rev_cue = turns[later].is_personal_constraint || digit_shift;
-            let contradicts = crate::advanced::contradiction::appears_contradictory(
-                prev_prose,
-                lat_prose,
-                crate::advanced::contradiction::SubjectIdentity::AlreadyEstablished,
-            );
+            let contradicts = torrens_pair_key_match == Some(true)
+                || (lat_prose.len() <= 420
+                    && prev_prose.len() <= 420
+                    && crate::advanced::contradiction::appears_contradictory(
+                        prev_prose,
+                        lat_prose,
+                        crate::advanced::contradiction::SubjectIdentity::AlreadyEstablished,
+                    ));
             if contradicts || has_rev_cue {
                 if !turns[later].supersedes_turns.contains(&prev) {
                     turns[later].supersedes_turns.push(prev);
@@ -1749,23 +1795,24 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
             }
         }
     }
+    let mut ep_policies: DetHashMap<&str, Vec<usize>> = DetHashMap::default();
     for si in 0..ns_count {
-        if session_ep_keys[si].is_empty() {
+        let ep = session_ep_keys[si].as_str();
+        if ep.is_empty() {
             continue;
         }
-        for sj in 0..si {
-            if session_ep_keys[sj] != session_ep_keys[si] {
-                continue;
-            }
-            for &p_ti in &session_turns[sj] {
-                if !turns[p_ti].is_standing_policy {
-                    continue;
-                }
+        if let Some(prev_policies) = ep_policies.get(ep) {
+            for &p_ti in prev_policies {
                 for &t_ti in &session_turns[si] {
                     if !turns[t_ti].policy_backlinks.contains(&p_ti) {
                         turns[t_ti].policy_backlinks.push(p_ti);
                     }
                 }
+            }
+        }
+        for &p_ti in &session_turns[si] {
+            if turns[p_ti].is_standing_policy {
+                ep_policies.entry(ep).or_default().push(p_ti);
             }
         }
     }
@@ -1952,7 +1999,18 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
     let session_bloom = build_session_bloom(&session_bags);
     let turn_meta = build_turn_meta(&turns, &turn_bloom);
 
-    let mut turn_superseded = vec![false; turns.len()];
+    let is_monologue_stream = !turns.iter().any(|t| t.field == 1)
+        && !turns
+            .iter()
+            .take(16)
+            .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
+    let (torrens_records, torrens_superseded, spatial_events) = if is_monologue_stream {
+        super::torrens::build_torrens_and_spatial_index(&turn_prose_cache, &turns)
+    } else {
+        (Vec::new(), vec![false; turns.len()], Vec::new())
+    };
+
+    let mut turn_superseded = torrens_superseded.clone();
     for t in &turns {
         for &old in &t.supersedes_turns {
             if old < turn_superseded.len() {
@@ -2132,5 +2190,9 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
         turn_meta,
         standing_register,
         standing_directive_turns,
+        preference_directive_turns,
+        torrens_records,
+        torrens_superseded,
+        spatial_events,
     }
 }

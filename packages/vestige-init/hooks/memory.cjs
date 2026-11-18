@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const net = require('net');
 const { spawn } = require('child_process');
 const readline = require('readline');
 const { defaults, trigger } = require('../lib/memory-triggers.cjs');
@@ -16,49 +17,214 @@ const atomic = (file, value) => {
   fs.writeFileSync(temp, JSON.stringify(value), { mode: 0o600 });
   fs.renameSync(temp, file);
 };
+function resolveSpawn(binary, args = []) {
+  if (typeof binary === 'string' && /\.(?:c|m)?js$/i.test(binary)) return [process.execPath, [binary, ...args]];
+  if (process.platform === 'win32' && typeof binary === 'string' && !/\.(?:exe|cmd|bat|com)$/i.test(binary)) {
+    try {
+      const fd = fs.openSync(binary, 'r');
+      const buf = Buffer.alloc(256);
+      const n = fs.readSync(fd, buf, 0, 256, 0);
+      fs.closeSync(fd);
+      const head = buf.subarray(0, n).toString('utf8').split(/\r?\n/)[0] || '';
+      if (head.startsWith('#!')) {
+        if (/node(?:\.exe)?\s*$/i.test(head)) return [process.execPath, [binary, ...args]];
+        if (/(?:^|[\\/])(?:ba)?sh\s*$/i.test(head)) {
+          const dirs = (process.env.PATH || '').split(';').concat(['C:\\Program Files\\Git\\bin', 'C:\\Program Files\\Git\\usr\\bin']);
+          for (const dir of dirs.filter(Boolean)) {
+            const sh = path.join(dir, 'sh.exe');
+            if (fs.existsSync(sh)) return [sh, [binary, ...args]];
+          }
+        }
+      }
+    } catch {}
+  }
+  return [binary, args];
+}
+function dataDirCandidates(args = [], env = process.env) {
+  for (let i = 0; i < args.length; i++) {
+    const a = String(args[i] || '');
+    if (a === '--data-dir' && i + 1 < args.length && args[i + 1]) return [path.resolve(args[i + 1])];
+    if (a.startsWith('--data-dir=') && a.length > 11) return [path.resolve(a.slice(11))];
+  }
+  const expandHome = value => {
+    const home = env.HOME || env.USERPROFILE || os.homedir();
+    if (value === '~') return home;
+    if (value.startsWith('~/') || value.startsWith('~\\')) return path.join(home, value.slice(2));
+    return value;
+  };
+  if (env.VESTIGE_DATA_DIR && String(env.VESTIGE_DATA_DIR).trim()) {
+    return [path.resolve(expandHome(String(env.VESTIGE_DATA_DIR).trim()))];
+  }
+  const home = env.HOME || env.USERPROFILE || os.homedir();
+  if (process.platform === 'win32') {
+    const roaming = env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    const local = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    return [...new Set([path.join(roaming, 'vestige', 'core', 'data'), path.join(local, 'vestige', 'core', 'data')])];
+  }
+  if (process.platform === 'darwin') {
+    return [path.join(home, 'Library', 'Application Support', 'com.vestige.core')];
+  }
+  const xdg = env.XDG_DATA_HOME || path.join(home, '.local', 'share');
+  return [path.join(xdg, 'vestige'), path.join(xdg, 'core')];
+}
+
+function resolveDataDir(args = [], env = process.env) {
+  const cands = dataDirCandidates(args, env);
+  return cands.find(dir => fs.existsSync(path.join(dir, '.serve.endpoint'))) || cands[0];
+}
+
+function shouldDirectAttach(binary, env = process.env) {
+  if (env.VESTIGE_DIRECT_ATTACH === '0') return false;
+  if (env.VESTIGE_DIRECT_ATTACH === '1') return true;
+  return /^vestige-mcp(?:\.exe)?$/i.test(path.basename(String(binary || '')));
+}
+
+function tryDirectAttach(binary, args = [], timeoutMs = 80, env = process.env) {
+  if (!shouldDirectAttach(binary, env)) return Promise.resolve(null);
+  const dir = resolveDataDir(args, env);
+  if (!dir) return Promise.resolve(null);
+  const epPath = path.join(dir, '.serve.endpoint');
+  let parts;
+  try {
+    const raw = fs.readFileSync(epPath, 'utf8').trim();
+    parts = raw.split(/\s+/);
+  } catch {
+    return Promise.resolve(null);
+  }
+  if (parts.length !== 3) return Promise.resolve(null);
+  const [addr, token, pidStr] = parts;
+  const pid = Number(pidStr);
+  if (!token || !Number.isInteger(pid) || pid <= 0) return Promise.resolve(null);
+  let target;
+  if (addr === 'unix') {
+    const sockPath = path.join(dir, '.serve.sock');
+    if (!fs.existsSync(sockPath)) return Promise.resolve(null);
+    target = { path: sockPath };
+  } else {
+    const port = Number(addr);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) return Promise.resolve(null);
+    target = { host: '127.0.0.1', port };
+  }
+  return new Promise(resolve => {
+    let settled = false;
+    let buf = '';
+    const sock = net.createConnection(target);
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hsTimer);
+      sock.removeListener('connect', onConnect);
+      sock.removeListener('data', onData);
+      sock.removeListener('error', onFail);
+      sock.removeListener('close', onFail);
+      if (!result) sock.destroy();
+      resolve(result);
+    };
+    const hsTimer = setTimeout(() => finish(null), Math.max(15, Math.min(80, timeoutMs)));
+    const onFail = () => finish(null);
+    const onConnect = () => sock.write(`vestige-attach/1 ${token}\n`);
+    const onData = chunk => {
+      buf += chunk.toString('utf8');
+      const nl = buf.indexOf('\n');
+      if (nl < 0) {
+        if (buf.length > 512) finish(null);
+        return;
+      }
+      const line = buf.slice(0, nl).trimEnd();
+      const rest = buf.slice(nl + 1);
+      if (line !== `vestige-attached/1 ${pid}`) {
+        finish(null);
+        return;
+      }
+      finish({ socket: sock, initialBuffer: rest });
+    };
+    sock.on('connect', onConnect);
+    sock.on('data', onData);
+    sock.on('error', onFail);
+    sock.on('close', onFail);
+  });
+}
+
 function rpc(binary, args = [], timeoutMs = 210, env = process.env) {
-  const child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'], env });
+  let child = null;
+  let socket = null;
+  let lines = null;
   let diagnostics = '';
-  child.stderr.on('data', chunk => { if (env.VESTIGE_HOOK_DIAGNOSTICS === '1') diagnostics = (diagnostics + chunk).slice(-2000); });
+  let directAttached = false;
   const pending = new Map(); let seq = 0; let closed = false; let disposed = false; let timer;
   const rejectAll = error => { closed = true; for (const [,p] of pending) p.reject(error); pending.clear(); };
-  child.on('error', rejectAll);
-  child.on('exit', () => rejectAll(new Error('Vestige disconnected')));
-  child.stdin.on('error', rejectAll);
-  const lines = readline.createInterface({ input: child.stdout });
-  lines.on('line', line => {
+  const writeRaw = text => {
+    if (closed) return;
+    if (socket && !socket.destroyed) socket.write(text);
+    else if (child && child.stdin && !child.stdin.destroyed) child.stdin.write(text);
+  };
+  const onLine = line => {
+    if (!line) return;
     let msg; try { msg = JSON.parse(line); } catch { return; }
     const p = pending.get(msg.id); if (!p) return;
     pending.delete(msg.id);
     if (msg.error) p.reject(new Error(msg.error.message || 'RPC failed')); else p.resolve(msg.result);
-  });
-  const call = (method, params) => new Promise((resolve, reject) => {
-    if (closed) return reject(new Error('Vestige unavailable'));
-    const id = ++seq; pending.set(id, { resolve, reject, method });
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-  });
+  };
   const close = () => {
     if (disposed) return;
     disposed = true; clearTimeout(timer);
     rejectAll(new Error('Vestige transport closed'));
     // The result is already admitted, or its queue entry remains for retry. A slow
     // child shutdown must not keep the chat hook alive beyond its work budget.
-    lines.close();
-    child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    child.unref();
+    if (lines) lines.close();
+    if (socket) { socket.destroy(); socket = null; }
+    if (child) {
+      child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      child.unref();
+    }
   };
+  const call = (method, params) => new Promise((resolve, reject) => {
+    if (closed) return reject(new Error('Vestige unavailable'));
+    const id = ++seq; pending.set(id, { resolve, reject, method });
+    writeRaw(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+  });
   timer = setTimeout(() => { const stages = [...pending.values()].map(p => p.method).join(','); rejectAll(new Error(`memory deadline exceeded (${stages})${diagnostics ? `: ${diagnostics}` : ''}`)); close(); }, timeoutMs);
   return {
     diagnostics() { return diagnostics; },
+    isDirectAttached() { return directAttached; },
     async tool(name, arguments_) {
       const r = await call('tools/call', { name, arguments: arguments_ });
       if (r.isError) throw new Error(`Vestige ${name} refused`);
       return r.structuredContent || JSON.parse(r.content[0].text);
     },
     async ready() {
+      const attached = shouldDirectAttach(binary, env)
+        ? await tryDirectAttach(binary, args, Math.min(80, timeoutMs), env)
+        : null;
+      if (disposed || closed) {
+        if (attached?.socket) attached.socket.destroy();
+        throw new Error('Vestige transport closed');
+      }
+      if (attached) {
+        directAttached = true;
+        socket = attached.socket;
+        socket.on('error', () => rejectAll(new Error('Vestige disconnected')));
+        socket.on('close', () => rejectAll(new Error('Vestige disconnected')));
+        lines = readline.createInterface({ input: socket });
+        lines.on('line', onLine);
+        if (attached.initialBuffer) {
+          for (const leftover of attached.initialBuffer.split(/\r?\n/)) {
+            if (leftover) onLine(leftover);
+          }
+        }
+      } else {
+        const [cmd, cmdArgs] = resolveSpawn(binary, args);
+        child = spawn(cmd, cmdArgs, { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: true });
+        child.stderr.on('data', chunk => { if (env.VESTIGE_HOOK_DIAGNOSTICS === '1') diagnostics = (diagnostics + chunk).slice(-2000); });
+        child.on('error', rejectAll);
+        child.on('exit', () => rejectAll(new Error('Vestige disconnected')));
+        child.stdin.on('error', rejectAll);
+        lines = readline.createInterface({ input: child.stdout });
+        lines.on('line', onLine);
+      }
       await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vestige-memory-hook', version: '6.2.2' } });
-      child.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
+      writeRaw('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
     },
     close,
   };
@@ -548,12 +714,21 @@ function ingestItem(fact) {
   return item;
 }
 
-async function run({ event, client, configFile, input, deadlineMs = 190 }) {
+async function run({ event, client, configFile, input, deadlineMs }) {
+  const envDeadline = Number(process.env.VESTIGE_HOOK_DEADLINE_MS);
+  const baseDeadline = Number.isFinite(deadlineMs) && deadlineMs > 0
+    ? deadlineMs
+    : (Number.isFinite(envDeadline) && envDeadline > 0 ? envDeadline : (process.platform === 'win32' ? 900 : 190));
   const started = performance.now(); let transport;
   const dir = path.dirname(configFile);
   const log = message => { try { const file = path.join(dir, 'errors.log'); if (fs.existsSync(file) && fs.statSync(file).size > 128 * 1024) fs.renameSync(file, `${file}.previous`); fs.appendFileSync(file, `${new Date().toISOString()} ${event}: ${message}\n`, { mode: 0o600 }); } catch {} };
   try {
     const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    const effectiveDeadline = Number.isFinite(deadlineMs) && deadlineMs > 0
+      ? deadlineMs
+      : (Number.isFinite(envDeadline) && envDeadline > 0
+        ? envDeadline
+        : (Number.isFinite(config.deadlineMs) && config.deadlineMs > 0 ? config.deadlineMs : baseDeadline));
     const session = input.session_id || input.conversation_id;
     if (!session || typeof session !== 'string') throw new Error('missing session identifier');
     const queue = path.join(dir, 'pending', digest(`${client}:${session}`));
@@ -568,7 +743,7 @@ async function run({ event, client, configFile, input, deadlineMs = 190 }) {
         if (!fs.existsSync(file)) atomic(file, { ...fact, intent_id, queued_at: Date.now() });
       }
     }
-    transport = rpc(config.binary, config.binaryArgs || [], Math.max(1, deadlineMs - (performance.now() - started)), { ...process.env, VESTIGE_HTTP_ENABLED: '0', VESTIGE_DASHBOARD_ENABLED: 'false', VESTIGE_AUTOPILOT_ENABLED: '0' });
+    transport = rpc(config.binary, config.binaryArgs || [], Math.max(1, effectiveDeadline - (performance.now() - started)), { ...process.env, VESTIGE_HTTP_ENABLED: '0', VESTIGE_DASHBOARD_ENABLED: 'false', VESTIGE_AUTOPILOT_ENABLED: '0' });
     await transport.ready();
     let saved = [];
     if (['turn', 'compact', 'end'].includes(event)) {
@@ -617,10 +792,12 @@ async function run({ event, client, configFile, input, deadlineMs = 190 }) {
 }
 async function main() {
   const args = process.argv.slice(2); const value = flag => args[args.indexOf(flag) + 1];
-  const failOpen = setTimeout(() => { process.stdout.write('{}\n'); process.exit(0); }, 205);
+  const envDeadline = Number(process.env.VESTIGE_HOOK_DEADLINE_MS);
+  const cliCeiling = Number.isFinite(envDeadline) && envDeadline > 0 ? envDeadline + 120 : (process.platform === 'win32' ? 1150 : 205);
+  const failOpen = setTimeout(() => { process.stdout.write('{}\n', () => process.exit(0)); }, cliCeiling);
   let raw = ''; for await (const chunk of process.stdin) { raw += chunk; if (raw.length > 65536) throw new Error('hook input too large'); }
   const result = await run({ event: value('--event'), client: value('--client'), configFile: value('--config'), input: JSON.parse(raw || '{}') });
-  clearTimeout(failOpen); process.stdout.write(JSON.stringify(result) + '\n');
+  clearTimeout(failOpen); process.stdout.write(JSON.stringify(result) + '\n', () => process.exit(0));
 }
-module.exports = { thingWords, thingKey, thingKeys, dayOfText, yearlyOfText, indexTags, run, rpc, explicitFact, extractFacts, sentences, formatContext, output, admissionOf, linksFor, drainQueue, ingestItem };
-if (require.main === module) main().catch(() => { process.stdout.write('{}\n'); process.exit(0); });
+module.exports = { thingWords, thingKey, thingKeys, dayOfText, yearlyOfText, indexTags, run, rpc, resolveSpawn, tryDirectAttach, resolveDataDir, explicitFact, extractFacts, sentences, formatContext, output, admissionOf, linksFor, drainQueue, ingestItem };
+if (require.main === module) main().catch(() => { process.stdout.write('{}\n', () => process.exit(0)); });

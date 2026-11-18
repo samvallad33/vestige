@@ -116,6 +116,9 @@ pub(super) struct TurnLedger {
     /// A receipt named the SHA but left facts out: `(sha, missing)`.
     #[serde(default)]
     pub receipt_gaps: Vec<(String, Vec<String>)>,
+    /// Whether `SessionStart` has already audited instruction files in `cwd`.
+    #[serde(default)]
+    pub instruction_checked: bool,
 }
 
 impl TurnLedger {
@@ -176,6 +179,9 @@ pub(super) fn host_json(event: &str, format: &str, text: &str, d: &HostDecision)
         }
         if let Some(b) = &d.permit_behavior {
             v.insert("permitBehavior".into(), json!(b));
+        }
+        if let Some(u) = &d.updated_input {
+            v.insert("updatedInput".into(), u.clone());
         }
         return Value::Object(v);
     }
@@ -317,6 +323,7 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
         "SessionStart" => {
             lines.extend(unverified_lines(g, inp, storage));
             lines.extend(resume_lines(g, inp));
+            lines.extend(instruction_file_lines(g, inp, storage));
         }
         "PreToolUse" => lines.extend(scope_lines(g, inp, storage)),
         "PostToolUse" => {
@@ -531,6 +538,71 @@ fn unverified_lines(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Vec<
         }
     }
     lines
+}
+
+fn instruction_file_lines(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Vec<String> {
+    if inp.cwd.is_empty() {
+        return Vec::new();
+    }
+    let already = g.session(&inp.session).ledger.instruction_checked;
+    if already && !matches!(inp.source.as_str(), "compact" | "clear") {
+        return Vec::new();
+    }
+    g.session(&inp.session).ledger.instruction_checked = true;
+    const FILES: &[&str] = &[
+        "CLAUDE.md",
+        "AGENTS.md",
+        "GEMINI.md",
+        ".cursorrules",
+        ".windsurfrules",
+        ".vestige-rules",
+    ];
+    let retired = g.p.retired.clone();
+    let cwd = Path::new(&inp.cwd);
+    let mut issues = Vec::new();
+    for rel in FILES {
+        let path = cwd.join(rel);
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() || meta.len() > 128 * 1024 {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for handle in memory_handles(&text) {
+            match classify_handle(storage, &retired, &handle) {
+                HandleDisposition::Live(_) => {}
+                HandleDisposition::Replaced(target) => {
+                    issues.push(format!("{rel}: {handle} -> {target}"));
+                }
+                HandleDisposition::Suppressed => {
+                    issues.push(format!("{rel}: {handle} (suppressed)"));
+                }
+                HandleDisposition::Missing => {
+                    issues.push(format!("{rel}: {handle} (missing)"));
+                }
+            }
+            if issues.len() >= 8 {
+                break;
+            }
+        }
+        if issues.len() >= 8 {
+            break;
+        }
+    }
+    if issues.is_empty() {
+        Vec::new()
+    } else {
+        vec![trim_chars(
+            &format!(
+                "Vestige ledger: instruction files cite stale or missing handles ({}).",
+                issues.join("; ")
+            ),
+            1500,
+        )]
+    }
 }
 
 fn resume_lines(g: &mut Global, inp: &Input) -> Vec<String> {
@@ -799,11 +871,367 @@ fn pre_tool_decision(g: &mut Global, inp: &Input, storage: &Arc<Storage>, d: &mu
             return;
         }
     }
-    if let Some((updated, note)) = swap_replaced(inp, storage) {
-        d.updated_input = Some(updated);
-        d.permission_decision = Some("allow".into());
-        d.permission_reason = Some(note);
+    if let Err(deny_reason) = coach_check_limits(inp) {
+        d.permission_decision = Some("deny".into());
+        d.permission_reason = Some(deny_reason);
+        return;
     }
+    let mut current_input = inp.tool_input.clone();
+    let mut notes = Vec::new();
+    if let Some((coached, coach_note)) = coach_rewrite_input(&inp.tool, &current_input) {
+        current_input = coached;
+        notes.push(coach_note);
+    }
+    let mut swapped_inp = inp.clone();
+    swapped_inp.tool_input = current_input.clone();
+    if let Some((updated, swap_note)) = swap_replaced(&swapped_inp, storage) {
+        current_input = updated;
+        notes.push(swap_note);
+    }
+    if !notes.is_empty() {
+        d.updated_input = Some(current_input);
+        d.permission_decision = Some("allow".into());
+        d.permission_reason = Some(notes.join(" "));
+    }
+}
+
+fn is_vestige_tool_name(tool: &str) -> bool {
+    let trimmed = tool.trim();
+    if let Some(rest) = trimmed.strip_prefix("mcp__") {
+        return rest
+            .split("__")
+            .next()
+            .is_some_and(|srv| srv.contains("vestige"));
+    }
+    matches!(
+        tool_leaf(trimmed),
+        "session"
+            | "remember"
+            | "recall"
+            | "causal_walk"
+            | "curate"
+            | "precedent"
+            | "memory"
+            | "smart_ingest"
+            | "ghostlink"
+    )
+}
+
+fn coach_check_limits(inp: &Input) -> Result<(), String> {
+    if !is_vestige_tool_name(&inp.tool) {
+        return Ok(());
+    }
+    let leaf = tool_leaf(&inp.tool);
+    let Some(obj) = inp.tool_input.as_object() else {
+        return Ok(());
+    };
+    if matches!(leaf, "curate" | "memory")
+        && matches!(
+            obj.get("action").and_then(Value::as_str),
+            Some("delete" | "purge")
+        )
+    {
+        return Err("Call Coach [CC-010]: Strata is append-only; delete/purge are unavailable_in_4_0. Use curate(action=\"suppress\", ...) to hide a record permanently or curate(action=\"supersede\", ...) to replace a belief.".to_string());
+    }
+    if leaf == "remember"
+        && obj
+            .get("action")
+            .and_then(Value::as_str)
+            .is_none_or(|a| a == "save")
+        && !obj.contains_key("items")
+        && let Some(content) = obj.get("content").and_then(Value::as_str)
+        && content.trim().is_empty()
+    {
+        return Err("Call Coach [CC-011]: remember `content` is empty or whitespace-only. Provide non-empty `content` or `items`.".to_string());
+    }
+    let is_weave = (leaf == "ghostlink"
+        && obj
+            .get("mode")
+            .and_then(Value::as_str)
+            .is_none_or(|m| m == "weave"))
+        || (leaf == "curate" && obj.get("action").and_then(Value::as_str) == Some("weave"));
+    if is_weave && let Some(note) = obj.get("note").and_then(Value::as_str) {
+        let count = note.chars().count();
+        if count > 500 {
+            let mut fixed = obj.clone();
+            let shortened: String = note.chars().take(500).collect();
+            fixed.insert("note".into(), Value::String(shortened));
+            return Err(format!(
+                "Call Coach [CC-002]: weave note is {count} characters (limit: 500). Shorten `note` to <= 500 chars; corrected call: {}",
+                Value::Object(fixed)
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn coach_rewrite_input(tool: &str, tool_input: &Value) -> Option<(Value, String)> {
+    let (updated, note, _, _) = coach_rewrite_detailed(tool, tool_input)?;
+    Some((updated, note))
+}
+
+fn coach_rewrite_detailed(
+    tool: &str,
+    tool_input: &Value,
+) -> Option<(Value, String, Vec<&'static str>, u64)> {
+    if !is_vestige_tool_name(tool) {
+        return None;
+    }
+    let leaf = tool_leaf(tool);
+    let obj = tool_input.as_object()?;
+    let mut next = obj.clone();
+    let mut notes = Vec::new();
+    let mut rules = Vec::new();
+    let mut saved_chars = 0u64;
+    let has = |map: &serde_json::Map<String, Value>, k: &str| {
+        map.get(k).is_some_and(|v| !v.is_null())
+    };
+
+    if matches!(leaf, "memory" | "curate" | "ghostlink" | "remember") && !has(&next, "memoryId") {
+        if let Some(val) = next.remove("memory_id").filter(|v| !v.is_null()) {
+            next.insert("memoryId".into(), val);
+            notes.push("[CC-001] renamed memory_id -> memoryId".to_string());
+            rules.push("CC-001");
+        } else if leaf == "curate"
+            && matches!(
+                next.get("action").and_then(Value::as_str),
+                Some("demote" | "promote" | "suppress")
+            )
+            && let Some(val) = next.remove("node_id").filter(|v| !v.is_null())
+        {
+            next.insert("memoryId".into(), val);
+            notes.push("[CC-001] renamed node_id -> memoryId".to_string());
+            rules.push("CC-001");
+        }
+    }
+    if leaf == "recall" && !has(&next, "handle") && !has(&next, "query") {
+        let src_key = if has(&next, "id") {
+            Some("id")
+        } else if has(&next, "tag") {
+            Some("tag")
+        } else {
+            None
+        };
+        if let Some(k) = src_key
+            && let Some(val) = next.remove(k)
+        {
+            next.insert("handle".into(), val);
+            notes.push(format!("[CC-006] renamed {k} -> handle"));
+            rules.push("CC-006");
+        }
+    }
+    if leaf == "remember"
+        && !has(&next, "content")
+        && !has(&next, "items")
+        && let Some(k) = if has(&next, "text") {
+            Some("text")
+        } else if has(&next, "message") {
+            Some("message")
+        } else {
+            None
+        }
+        && let Some(val) = next.remove(k)
+    {
+        next.insert("content".into(), val);
+        notes.push(format!("[CC-007] renamed {k} -> content"));
+        rules.push("CC-007");
+    }
+    if leaf == "causal_walk"
+        && !has(&next, "from_handle")
+        && !has(&next, "start_points")
+        && let Some(k) = if has(&next, "handle") {
+            Some("handle")
+        } else if has(&next, "memory_id") {
+            Some("memory_id")
+        } else if has(&next, "memoryId") {
+            Some("memoryId")
+        } else {
+            None
+        }
+        && let Some(val) = next.remove(k)
+    {
+        next.insert("from_handle".into(), val);
+        notes.push(format!("[CC-008] renamed {k} -> from_handle"));
+        rules.push("CC-008");
+    }
+    if leaf == "precedent"
+        && (!has(&next, "action")
+            || matches!(
+                next.get("action").and_then(Value::as_str),
+                Some("get" | "inspect")
+            )
+            || matches!(
+                next.get("query").and_then(Value::as_str),
+                Some("receipt" | "replay")
+            ))
+        && !has(&next, "receipt_id")
+        && let Some(k) = if has(&next, "id") {
+            Some("id")
+        } else if has(&next, "digest") {
+            Some("digest")
+        } else {
+            None
+        }
+        && let Some(val) = next.remove(k)
+    {
+        next.insert("receipt_id".into(), val);
+        notes.push(format!("[CC-009] renamed {k} -> receipt_id"));
+        rules.push("CC-009");
+    }
+    if leaf == "session" {
+        let mut session_touched = false;
+        if next.get("view").and_then(Value::as_str) == Some("tools")
+            && !has(&next, "tool")
+            && let Some(val) = next.remove("tool_name").filter(|v| !v.is_null())
+        {
+            next.insert("tool".into(), val);
+            session_touched = true;
+        }
+        if !has(&next, "action") && (next.is_empty() || has(&next, "view")) {
+            next.insert("action".into(), json!("status"));
+            session_touched = true;
+        }
+        if session_touched {
+            notes.push("[CC-012] normalized session status/tool selector".to_string());
+            rules.push("CC-012");
+        }
+    }
+    if leaf == "recall" && !has(&next, "handle") && !has(&next, "id") && !has(&next, "tag") {
+        let mut changed = false;
+        if !next.contains_key("limit") {
+            next.insert("limit".into(), json!(10));
+            changed = true;
+            saved_chars += 2400;
+        }
+        if !next.contains_key("detail_level") {
+            next.insert("detail_level".into(), json!("summary"));
+            changed = true;
+            saved_chars += 3600;
+        }
+        if changed {
+            notes.push("[CC-003] defaulted recall limit=10, detail_level=\"summary\"".to_string());
+            rules.push("CC-003");
+        }
+    }
+    if leaf == "smart_ingest" && !next.contains_key("output_profile") {
+        next.insert("output_profile".into(), json!("compact"));
+        notes.push("[CC-004] defaulted smart_ingest output_profile=\"compact\"".to_string());
+        rules.push("CC-004");
+        saved_chars += 1800;
+    }
+    if leaf == "causal_walk" && !next.contains_key("scan_limit") {
+        next.insert("scan_limit".into(), json!(500));
+        notes.push("[CC-005] defaulted causal_walk scan_limit=500".to_string());
+        rules.push("CC-005");
+        saved_chars += 2000;
+    }
+
+    if notes.is_empty() {
+        None
+    } else {
+        Some((
+            Value::Object(next),
+            format!("Vestige Call Coach: {}.", notes.join("; ")),
+            rules,
+            saved_chars,
+        ))
+    }
+}
+
+/// Offline Call Coach replay (#520): evaluates recorded tool calls against
+/// CC-001..CC-012 and reports prevented failures, rewrites, saved chars, and receipts.
+pub fn coach_replay_jsonl(paths: &[PathBuf]) -> Value {
+    #[derive(Default)]
+    struct Tally {
+        prevented_failures: u64,
+        rewritten_calls: u64,
+        saved_chars: u64,
+        receipts: Vec<String>,
+    }
+    let mut by_rule: std::collections::BTreeMap<String, Tally> = std::collections::BTreeMap::new();
+    let mut total_calls = 0u64;
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(row) = serde_json::from_str::<Value>(trimmed) else {
+                continue;
+            };
+            total_calls += 1;
+            let tool = row
+                .get("tool_name")
+                .or_else(|| row.get("tool"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let tool_input = row
+                .get("tool_input")
+                .or_else(|| row.get("arguments"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let receipt = row
+                .get("receipt_id")
+                .or_else(|| row.get("receipt"))
+                .or_else(|| row.get("call_id"))
+                .or_else(|| row.get("tool_use_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("unreceipted")
+                .to_string();
+            let inp = Input {
+                tool: tool.to_string(),
+                tool_input: tool_input.clone(),
+                ..Input::default()
+            };
+            if let Err(err) = coach_check_limits(&inp) {
+                let code = err
+                    .split('[')
+                    .nth(1)
+                    .and_then(|s| s.split(']').next())
+                    .unwrap_or("CC-002")
+                    .to_string();
+                let entry = by_rule.entry(code).or_default();
+                entry.prevented_failures += 1;
+                entry.receipts.push(receipt);
+                continue;
+            }
+            if let Some((_, _, rules, saved_chars)) = coach_rewrite_detailed(tool, &tool_input) {
+                for rid in rules {
+                    let entry = by_rule.entry(rid.to_string()).or_default();
+                    if matches!(
+                        rid,
+                        "CC-001" | "CC-006" | "CC-007" | "CC-008" | "CC-009" | "CC-012"
+                    ) {
+                        entry.prevented_failures += 1;
+                    }
+                    entry.rewritten_calls += 1;
+                    entry.saved_chars += saved_chars;
+                    if entry.receipts.len() < 100 {
+                        entry.receipts.push(receipt.clone());
+                    }
+                }
+            }
+        }
+    }
+    let rules: Vec<Value> = by_rule
+        .into_iter()
+        .map(|(rule, t)| {
+            json!({
+                "rule": rule,
+                "prevented_failures": t.prevented_failures,
+                "rewritten_calls": t.rewritten_calls,
+                "saved_chars": t.saved_chars,
+                "receipts": t.receipts,
+            })
+        })
+        .collect();
+    json!({
+        "total_calls": total_calls,
+        "rules": rules,
+    })
 }
 
 fn permit_decision(g: &mut Global, inp: &Input, d: &mut HostDecision) {
@@ -941,7 +1369,7 @@ fn debts(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Vec<String> {
             )),
         }
     }
-    reasons.extend(citation_reasons(storage, g, inp));
+    reasons.extend(citation_reasons(storage, &g.p.retired, &held_ids(g, &inp.session, &inp.agent), inp));
     reasons
 }
 
@@ -968,15 +1396,19 @@ fn overdue_item(inp: &Input, reasons: &[String], blocks: u32) -> Value {
     })
 }
 
-fn citation_reasons(storage: &Arc<Storage>, g: &Global, inp: &Input) -> Vec<String> {
+fn citation_reasons(
+    storage: &Arc<Storage>,
+    retired: &[super::stale::Retirement],
+    held: &HashSet<String>,
+    inp: &Input,
+) -> Vec<String> {
     let text = &inp.last_assistant_message;
     if text.is_empty() {
         return Vec::new();
     }
     let mut reasons = Vec::new();
-    let held = held_ids(g, &inp.session, &inp.agent);
     for handle in memory_handles(text) {
-        reasons.extend(memory_reason(storage, &handle, &held));
+        reasons.extend(memory_reason(storage, retired, &handle, held));
         if reasons.len() >= 8 {
             break;
         }
@@ -1004,27 +1436,32 @@ fn citation_reasons(storage: &Arc<Storage>, g: &Global, inp: &Input) -> Vec<Stri
     reasons
 }
 
-fn memory_reason(storage: &Arc<Storage>, handle: &str, held: &HashSet<String>) -> Vec<String> {
+fn memory_reason(
+    storage: &Arc<Storage>,
+    retired: &[super::stale::Retirement],
+    handle: &str,
+    held: &HashSet<String>,
+) -> Vec<String> {
     let mut out = Vec::new();
-    if let Some(successor) = successor_of(storage, handle) {
-        let named = if successor.is_empty() {
-            "a successor".to_string()
-        } else {
-            successor
-        };
-        out.push(format!("Turn blocked: {handle} was replaced by {named}."));
-        return out;
-    }
-    let resolution = storage.resolve_handle(handle);
-    if resolution.ids.len() != 1 {
-        out.push(format!("Turn blocked: {handle} is missing."));
-        return out;
-    }
-    let id = &resolution.ids[0];
-    if !held.contains(id) && !held.contains(handle) {
+    let id = match classify_handle(storage, retired, handle) {
+        HandleDisposition::Replaced(named) => {
+            out.push(format!("Turn blocked: {handle} was replaced by {named}."));
+            return out;
+        }
+        HandleDisposition::Suppressed => {
+            out.push(format!("Turn blocked: {handle} is suppressed."));
+            return out;
+        }
+        HandleDisposition::Missing => {
+            out.push(format!("Turn blocked: {handle} is missing."));
+            return out;
+        }
+        HandleDisposition::Live(id) => id,
+    };
+    if !held.contains(&id) && !held.contains(handle) {
         out.push(format!("Turn blocked: {handle} was not read this session."));
     }
-    if claim_state(storage, id) == Claim::Unverified {
+    if claim_state(storage, &id) == Claim::Unverified {
         out.push(format!(
             "Turn blocked: decision {id} has no execution receipt; it is an unverified claim."
         ));
@@ -1098,27 +1535,105 @@ fn has_execution_receipt(storage: &Arc<Storage>, node: &vestige_core::KnowledgeN
     false
 }
 
-fn successor_of(storage: &Arc<Storage>, handle: &str) -> Option<String> {
-    let superseded = storage.superseded_node_ids().ok()?;
-    let id = if superseded.contains(handle) {
-        handle.to_string()
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HandleDisposition {
+    Live(String),
+    Replaced(String),
+    Suppressed,
+    Missing,
+}
+
+fn classify_handle(
+    storage: &Arc<Storage>,
+    retired: &[super::stale::Retirement],
+    handle: &str,
+) -> HandleDisposition {
+    let pairs = storage.supersession_pairs().unwrap_or_default();
+    let superseded = storage.superseded_node_ids().unwrap_or_default();
+
+    let start = if superseded.contains(handle) || pairs.iter().any(|(o, _)| o == handle) {
+        Some(handle.to_string())
     } else {
         let resolution = storage.resolve_handle(handle);
-        let candidate = resolution.ids.first()?.clone();
-        if !superseded.contains(&candidate) {
-            return None;
-        }
-        candidate
-    };
-    let edges = storage.get_connections_for_memory(&id).unwrap_or_default();
-    let named = edges.into_iter().find_map(|edge| {
-        if edge.link_type == "supersedes" && edge.target_id == id {
-            Some(edge.source_id)
+        if resolution.ids.len() == 1 {
+            Some(resolution.ids[0].clone())
         } else {
             None
         }
-    });
-    Some(named.unwrap_or_default())
+    };
+
+    if let Some(id) = start {
+        if superseded.contains(&id) || pairs.iter().any(|(o, _)| o == &id) {
+            let mut cur = id.clone();
+            let mut visited = HashSet::new();
+            visited.insert(cur.clone());
+            for _ in 0..8 {
+                let Some((_, next)) = pairs.iter().find(|(o, _)| o == &cur) else {
+                    break;
+                };
+                if next.is_empty() || !visited.insert(next.clone()) {
+                    break;
+                }
+                cur = next.clone();
+            }
+            if cur != id
+                && !cur.is_empty()
+                && !superseded.contains(&cur)
+                && storage.resolve_handle(&cur).ids.len() == 1
+            {
+                return HandleDisposition::Replaced(cur);
+            }
+            let edges = storage.get_connections_for_memory(&id).unwrap_or_default();
+            if let Some(succ) = edges.into_iter().find_map(|edge| {
+                if edge.link_type == "supersedes"
+                    && edge.target_id == id
+                    && edge.source_id != id
+                    && !superseded.contains(&edge.source_id)
+                    && storage.resolve_handle(&edge.source_id).ids.len() == 1
+                {
+                    Some(edge.source_id)
+                } else {
+                    None
+                }
+            }) {
+                return HandleDisposition::Replaced(succ);
+            }
+            return HandleDisposition::Suppressed;
+        }
+        let edges = storage.get_connections_for_memory(&id).unwrap_or_default();
+        if let Some(succ) = edges.into_iter().find_map(|edge| {
+            if edge.link_type == "supersedes"
+                && edge.target_id == id
+                && edge.source_id != id
+                && !superseded.contains(&edge.source_id)
+                && storage.resolve_handle(&edge.source_id).ids.len() == 1
+            {
+                Some(edge.source_id)
+            } else {
+                None
+            }
+        }) {
+            return HandleDisposition::Replaced(succ);
+        }
+        return HandleDisposition::Live(id);
+    }
+
+    if let Some(entry) = retired.iter().find(|r| r.old == handle) {
+        if entry.how.contains("suppressed") {
+            return HandleDisposition::Suppressed;
+        }
+        if let Some(next) = entry.new.as_deref().filter(|s| !s.is_empty()) {
+            return HandleDisposition::Replaced(next.to_string());
+        }
+    }
+    HandleDisposition::Missing
+}
+
+fn successor_of(storage: &Arc<Storage>, handle: &str) -> Option<String> {
+    match classify_handle(storage, &[], handle) {
+        HandleDisposition::Replaced(succ) => Some(succ),
+        _ => None,
+    }
 }
 
 fn unsaved(g: &Global, session: &str) -> Vec<String> {
@@ -1143,30 +1658,71 @@ fn held_ids(g: &Global, session: &str, agent: &str) -> HashSet<String> {
         .unwrap_or_default()
 }
 
+fn swap_handle_keys(
+    value: &mut Value,
+    parent_key: Option<&str>,
+    storage: &Arc<Storage>,
+    swapped: &mut Vec<String>,
+) {
+    const HANDLE_KEYS: &[&str] = &[
+        "id",
+        "memoryId",
+        "memory_id",
+        "node_id",
+        "from_handle",
+        "handle",
+        "to",
+        "source",
+        "source_id",
+        "target",
+        "target_id",
+        "supersedes",
+    ];
+    match value {
+        Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                swap_handle_keys(v, Some(k.as_str()), storage, swapped);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                swap_handle_keys(item, parent_key, storage, swapped);
+            }
+        }
+        Value::String(s) if parent_key.is_some_and(|k| HANDLE_KEYS.contains(&k)) => {
+            for handle in memory_handles(s) {
+                if let Some(successor) = successor_of(storage, &handle)
+                    && !successor.is_empty()
+                    && successor != handle
+                    && s.as_str() == handle
+                {
+                    *s = successor.clone();
+                    let label = format!("{handle} -> {successor}");
+                    if !swapped.contains(&label) {
+                        swapped.push(label);
+                    }
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn swap_replaced(inp: &Input, storage: &Arc<Storage>) -> Option<(Value, String)> {
     let leaf = tool_leaf(&inp.tool);
-    if !matches!(leaf, "remember" | "curate" | "memory" | "smart_ingest") {
+    if !matches!(
+        leaf,
+        "remember" | "curate" | "memory" | "smart_ingest" | "ghostlink" | "causal_walk"
+    ) {
         return None;
     }
     if !inp.tool_input.is_object() {
         return None;
     }
     let mut updated = inp.tool_input.clone();
-    let blob = updated.to_string();
     let mut swapped = Vec::new();
-    for handle in memory_handles(&blob) {
-        let Some(successor) = successor_of(storage, &handle) else {
-            continue;
-        };
-        if successor.is_empty() || successor == handle {
-            continue;
-        }
-        let next = updated.to_string().replace(&handle, &successor);
-        if let Ok(parsed) = serde_json::from_str::<Value>(&next) {
-            updated = parsed;
-            swapped.push(format!("{handle} -> {successor}"));
-        }
-    }
+    swap_handle_keys(&mut updated, None, storage, &mut swapped);
     if swapped.is_empty() {
         return None;
     }
@@ -1227,10 +1783,22 @@ fn is_prove(inp: &Input) -> bool {
     (leaf == "causal_walk" || leaf == "prove") && action == "prove"
 }
 
-fn is_edit_tool(tool: &str) -> bool {
+pub(super) fn is_edit_tool(tool: &str) -> bool {
     matches!(
         tool_leaf(tool),
-        "Edit" | "Write" | "MultiEdit" | "NotebookEdit"
+        "Edit"
+            | "Write"
+            | "MultiEdit"
+            | "NotebookEdit"
+            | "Replace"
+            | "CreateFile"
+            | "WriteFile"
+            | "EditFile"
+            | "apply_patch"
+            | "edit_file"
+            | "write_file"
+            | "replace_file_content"
+            | "multi_replace_file_content"
     )
 }
 
@@ -1243,10 +1811,26 @@ fn is_git_commit(command: &str) -> bool {
     for part in flat.split([';', '\n']) {
         let words: Vec<&str> = part
             .split_whitespace()
-            .filter(|w| !(w.contains('=') && !w.starts_with('-')))
+            .skip_while(|w| w.contains('=') && !w.starts_with('-'))
             .collect();
-        if words.first().copied() == Some("git") && words.contains(&"commit") {
-            return true;
+        if words.first().copied() != Some("git") {
+            continue;
+        }
+        let mut i = 1;
+        while i < words.len() {
+            let w = words[i];
+            if matches!(w, "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace") {
+                i += 2;
+                continue;
+            }
+            if w.starts_with('-') {
+                i += 1;
+                continue;
+            }
+            if w == "commit" {
+                return true;
+            }
+            break;
         }
     }
     false
@@ -1858,5 +2442,220 @@ mod tests {
                 .starts_with("Vestige ledger:")
         );
         assert!(!out.to_string().contains("[REQUIRED]"));
+    }
+
+    #[test]
+    fn call_coach_normalizes_aliases_and_refuses_overlong_weave_notes() {
+        let (updated, note) = coach_rewrite_input(
+            "mcp__vestige__curate",
+            &json!({"action": "demote", "memory_id": "mem-0000000000000042"}),
+        )
+        .expect("alias should rewrite");
+        assert_eq!(updated["memoryId"], "mem-0000000000000042");
+        assert!(updated.get("memory_id").is_none());
+        assert!(note.contains("CC-001"));
+
+        // Explicit agent arguments are never rewritten
+        assert!(
+            coach_rewrite_input(
+                "mcp__vestige__recall",
+                &json!({"query": "auth", "limit": 25, "detail_level": "full"}),
+            )
+            .is_none()
+        );
+
+        let long_note = "a".repeat(505);
+        let bad_inp = Input {
+            tool: "mcp__vestige__curate".into(),
+            tool_input: json!({"action": "weave", "note": long_note}),
+            ..Input::default()
+        };
+        let err = coach_check_limits(&bad_inp).unwrap_err();
+        assert!(err.contains("CC-002") && err.contains("505"));
+
+        // CC-006..CC-012 & offline replay
+        let (r6, n6) = coach_rewrite_input("mcp__vestige__recall", &json!({"id": "mem-0000000000000010"})).unwrap();
+        assert_eq!(r6["handle"], "mem-0000000000000010");
+        assert!(n6.contains("CC-006"));
+        let (r7, _) = coach_rewrite_input("mcp__vestige__remember", &json!({"text": "saved note"})).unwrap();
+        assert_eq!(r7["content"], "saved note");
+        let (r8, _) = coach_rewrite_input("mcp__vestige__causal_walk", &json!({"memoryId": "mem-0000000000000010", "scan_limit": 100})).unwrap();
+        assert_eq!(r8["from_handle"], "mem-0000000000000010");
+        let (r9, _) = coach_rewrite_input("mcp__vestige__precedent", &json!({"query": "receipt", "digest": "eff-0123456789abcdef"})).unwrap();
+        assert_eq!(r9["receipt_id"], "eff-0123456789abcdef");
+        let (r12, _) = coach_rewrite_input("mcp__vestige__session", &json!({"view": "tools", "tool_name": "recall"})).unwrap();
+        assert_eq!(r12["action"], "status");
+        assert_eq!(r12["tool"], "recall");
+
+        let del_inp = Input {
+            tool: "mcp__vestige__curate".into(),
+            tool_input: json!({"action": "delete", "id": "mem-0000000000000010"}),
+            ..Input::default()
+        };
+        assert!(coach_check_limits(&del_inp).unwrap_err().contains("CC-010"));
+
+        let empty_inp = Input {
+            tool: "mcp__vestige__remember".into(),
+            tool_input: json!({"content": "   "}),
+            ..Input::default()
+        };
+        assert!(coach_check_limits(&empty_inp).unwrap_err().contains("CC-011"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let log_path = tmp.path().join("calls.jsonl");
+        std::fs::write(
+            &log_path,
+            concat!(
+                "{\"receipt_id\":\"c1\",\"tool_name\":\"mcp__vestige__recall\",\"tool_input\":{\"id\":\"mem-0000000000000001\"}}\n",
+                "{\"receipt_id\":\"c2\",\"tool_name\":\"mcp__vestige__recall\",\"tool_input\":{\"query\":\"auth\"}}\n",
+                "{\"receipt_id\":\"c3\",\"tool_name\":\"mcp__vestige__curate\",\"tool_input\":{\"action\":\"delete\"}}\n"
+            ),
+        )
+        .unwrap();
+        let replay = coach_replay_jsonl(&[log_path]);
+        assert_eq!(replay["total_calls"], 3);
+        let rules = replay["rules"].as_array().unwrap();
+        assert!(rules.iter().any(|r| r["rule"] == "CC-006" && r["prevented_failures"] == 1));
+        assert!(rules.iter().any(|r| r["rule"] == "CC-003" && r["saved_chars"].as_u64().unwrap() > 0));
+        assert!(rules.iter().any(|r| r["rule"] == "CC-010" && r["prevented_failures"] == 1));
+    }
+
+    #[test]
+    fn git_commit_detector_checks_subcommand_not_flags() {
+        assert!(is_git_commit("git commit -m fix"));
+        assert!(is_git_commit("git -C /repo commit --amend"));
+        assert!(is_git_commit("cargo test && git -c user.name=a commit -m ok"));
+        assert!(!is_git_commit("git log --grep commit -n 5"));
+        assert!(!is_git_commit("git show commit:deadbeef"));
+    }
+
+    #[test]
+    fn instruction_file_and_suppressed_citation_checks_flag_bad_handles() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let id = store
+            .ingest_in_scope(
+                vestige_core::IngestInput {
+                    content: "Real rule".into(),
+                    tags: vec!["pinned".into()],
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap()
+            .id;
+        let retired = store
+            .ingest_in_scope(
+                vestige_core::IngestInput {
+                    content: "Bad secret rule".into(),
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap()
+            .id;
+        store.suppress_memory(&retired).unwrap();
+
+        std::fs::write(
+            dir.path().join("CLAUDE.md"),
+            format!("Keep {id}, drop mem-000000000000dead, avoid {retired}\n"),
+        )
+        .unwrap();
+
+        let mut g = Global::load(dir.path().to_path_buf());
+        g.p.retired.push(super::super::stale::Retirement {
+            old: retired.clone(),
+            how: "suppressed".into(),
+            ..Default::default()
+        });
+        let inp = Input {
+            event: "SessionStart".into(),
+            session: "s-inst".into(),
+            cwd: dir.path().to_string_lossy().into_owned(),
+            source: "startup".into(),
+            ..Input::default()
+        };
+        let lines = instruction_file_lines(&mut g, &inp, &store);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("mem-000000000000dead (missing)"), "{}", lines[0]);
+        assert!(lines[0].contains(&format!("{retired} (suppressed)")), "{}", lines[0]);
+        assert!(!lines[0].contains(&id), "live handle should pass: {}", lines[0]);
+        // Second startup without compact/clear is idempotent
+        assert!(instruction_file_lines(&mut g, &inp, &store).is_empty());
+
+        // Citation check blocks suppressed handle with explicit reason
+        let stop_inp = Input {
+            event: "Stop".into(),
+            session: "s-inst".into(),
+            last_assistant_message: format!("Per {retired}, skip validation."),
+            ..Input::default()
+        };
+        let reasons = citation_reasons(&store, &g.p.retired, &HashSet::new(), &stop_inp);
+        assert!(
+            reasons.iter().any(|r| r.contains(&retired) && r.contains("is suppressed")),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn swap_replaced_rewrites_handle_keys_without_mutating_prose() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let old = store
+            .ingest_in_scope(
+                vestige_core::IngestInput {
+                    content: "Old endpoint v1".into(),
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap()
+            .id;
+        let new = store
+            .ingest_in_scope(
+                vestige_core::IngestInput {
+                    content: "New endpoint v2".into(),
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap()
+            .id;
+        crate::strata_memory::save_links(
+            store.as_ref(),
+            &new,
+            &[(crate::strata_memory::DeclaredLink::Supersedes, old.clone())],
+        )
+        .unwrap();
+
+        let inp = Input {
+            tool: "mcp__vestige__curate".into(),
+            tool_input: json!({
+                "action": "edit",
+                "memoryId": old,
+                "content": format!("Replacing prose mention {old}")
+            }),
+            ..Input::default()
+        };
+        let (updated, note) = swap_replaced(&inp, &store).expect("should swap replaced key");
+        assert_eq!(updated["memoryId"], new);
+        assert_eq!(updated["content"], format!("Replacing prose mention {old}"));
+        assert!(note.contains(&new));
+
+        // Native Strata edit chain (`update_node_content`) retires old -> successor in supersession_pairs.
+        store.update_node_content(&new, "New endpoint v3").unwrap();
+        let edited_inp = Input {
+            tool: "mcp__vestige__curate".into(),
+            tool_input: json!({
+                "action": "demote",
+                "memoryId": new
+            }),
+            ..Input::default()
+        };
+        let (updated2, note2) = swap_replaced(&edited_inp, &store).expect("should swap edited id");
+        let swapped_id = updated2["memoryId"].as_str().unwrap();
+        assert_ne!(swapped_id, new);
+        assert_eq!(store.resolve_handle(swapped_id).ids.len(), 1);
+        assert!(note2.contains(swapped_id));
     }
 }

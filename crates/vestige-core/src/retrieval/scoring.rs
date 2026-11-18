@@ -148,6 +148,27 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     let zero_rel_scaffolding = rel_prior_active && domain_groups >= 1;
 
     let nick_bind = ix.nicks.bindings_in(&q.text);
+    let mut routing_addr_toks: DetHashSet<String> = DetHashSet::default();
+    for raw_span in q.text.split_whitespace() {
+        let trimmed = raw_span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '.' | ')' | ']' | '"' | '\''));
+        let is_email = trimmed.contains('@')
+            && trimmed
+                .split_once('@')
+                .is_some_and(|(u, d)| !u.is_empty() && d.contains('.'));
+        let digit_cnt = trimmed.chars().filter(|c| c.is_ascii_digit()).count();
+        let is_phone = digit_cnt >= 7 && (trimmed.starts_with('+') || trimmed.starts_with('(') || trimmed.contains('-'));
+        if is_email || is_phone {
+            for rt in raw_tokens(trimmed) {
+                routing_addr_toks.insert(rt);
+            }
+        }
+    }
+    let non_routing_content_cnt = raw_q
+        .iter()
+        .filter(|w| is_content(w) && !routing_addr_toks.contains(*w))
+        .count();
+    let demote_routing_addrs = !routing_addr_toks.is_empty() && non_routing_content_cnt >= 2;
+
     let mut label_group: DetHashMap<String, usize> = DetHashMap::default();
     let mut seen_toks = DetHashSet::default();
     let mut hyp_added: DetHashSet<u32> = DetHashSet::default();
@@ -161,6 +182,18 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
             continue;
         }
         if !seen_toks.insert(w.clone()) {
+            continue;
+        }
+        if demote_routing_addrs && routing_addr_toks.contains(w) {
+            if let Some(id) = ix.vocab.get(w) {
+                terms.push(QTerm { id, weight: 0.125, group: None, exact_hit: false });
+            }
+            if p.enable_stemming {
+                let st = stem(w);
+                if let Some(id) = ix.vocab.get(&stem_term(&st)) {
+                    terms.push(QTerm { id, weight: 0.08, group: None, exact_hit: false });
+                }
+            }
             continue;
         }
         let is_frame = can_demote_framing && frame_token(w);
@@ -545,6 +578,7 @@ pub(super) fn named_partner(a: &str, b: &str) -> bool {
 pub(super) fn rank_standing_rules(
     ix: &Index,
     plan: &QueryPlan,
+    eff_it: &QueryIntent,
     episodic_user_quote: bool,
     t_mask: &[u64],
     top_k: usize,
@@ -552,14 +586,17 @@ pub(super) fn rank_standing_rules(
     if ix.standing_rules.is_empty() || episodic_user_quote {
         return Vec::new();
     }
-    let it = &plan.intent;
+    let it = eff_it;
     // Multi-evidence recall keeps every standing policy on the stratified channel,
     // including zero-overlap rules. The episodic floor stays off for these intents,
     // so the channel can fire without taking one of the five episodic slots.
     let multi_evidence = it.multi_hop || it.sniper_how_many || it.temporal || it.is_event_sequence;
     let mut latest_by_key: DetHashMap<&str, (usize, i32, i32, i64)> = DetHashMap::default();
     for (ri, r) in ix.standing_rules.iter().enumerate() {
-        let scope_hits = r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
+        let mut scope_hits = r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
+        if scope_hits == 0 && super::seating::c2_policy_inflects_query(ix, r.turn, plan) {
+            scope_hits = 1;
+        }
         let asst_hits = r.assistant_nouns.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
         let spec = 5 * scope_hits + asst_hits;
         let fires = if r.has_explicit_scope {

@@ -50,9 +50,10 @@
     "hooks/guard.cjs",
     "hooks/operator-lite.py",
     "hooks/operator-gate.py",
-    "hooks/lite_core.py"
+    "hooks/lite_core.py",
+    "hooks/session_automaton.json"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test --test-concurrency=4 test/*.test.js"
   }
 }

@@ -789,13 +789,23 @@ pub fn stem(word: &str) -> String {
 
 /// Parse the free-form date strings used by real conversation logs into Unix seconds (UTC).
 pub fn parse_date(s: &str) -> i64 {
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+    let st = s.trim();
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(st) {
         return dt.timestamp();
     }
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        return dt.and_utc().timestamp();
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(st, fmt) {
+            return dt.and_utc().timestamp();
+        }
     }
-    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(st, "%Y-%m-%d") {
         return d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp()).unwrap_or(0);
     }
     let cleaned: String = s

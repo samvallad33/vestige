@@ -46,6 +46,10 @@ path = "src/bin/restore.rs"
 name = "vestige"
 path = "src/bin/cli.rs"
 
+[[bin]]
+name = "memory_arena"
+path = "src/bin/memory_arena.rs"
+
 [dependencies]
 # ============================================================================
 # VESTIGE CORE - The cognitive science engine

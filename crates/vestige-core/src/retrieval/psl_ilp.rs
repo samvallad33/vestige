@@ -113,10 +113,20 @@ pub(super) fn apply_psl_ilp_tail_closure(
         return;
     }
 
+    let is_monologue = !ix.turns.iter().any(|t| t.field == 1)
+        && !ix
+            .turns
+            .iter()
+            .take(16)
+            .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
     let mut best_cand: Option<(usize, u64)> = None;
     for ti in 0..ix.turns.len() {
         if final_turn_indices.contains(&ti)
-            || ix.turns[ti].is_question
+            || (if is_monologue {
+                ix.turns[ti].is_pure_info_question
+            } else {
+                ix.turns[ti].is_question
+            })
             || ix.turns[ti].is_backchannel
             || turn_is_superseded(ix, ti)
             || turn_score_q16[ti] == 0

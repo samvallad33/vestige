@@ -41,6 +41,7 @@ mod supersession;
 mod taxa;
 mod temporal_allen;
 mod tokens;
+mod torrens;
 mod viterbi;
 mod wand;
 #[cfg(test)]
@@ -272,9 +273,21 @@ pub struct RankedItem {
     pub matched: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PremiseCoverage {
+    /// Deterministic premise-coverage verdict (`"COVERED"`, `"PARTIAL_PREMISE"`, or `"ABSTAIN"`).
+    pub status: &'static str,
+    pub total_groups: usize,
+    pub max_episode_groups: usize,
+    pub union_groups: usize,
+    pub grounded_groups: usize,
+    pub grounded_covered: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RankResult {
     pub intent: QueryIntent,
+    pub premise_coverage: PremiseCoverage,
     pub sessions: Vec<RankedItem>,
     pub turns: Vec<RankedItem>,
     /// Stratified governing channel: standing imperative policies that apply to the query

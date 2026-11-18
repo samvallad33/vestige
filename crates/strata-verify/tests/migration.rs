@@ -74,17 +74,10 @@ fn v3_fixture_inferred_edges_are_legacy_inferred() {
 }
 
 fn sha256_file(path: &Path) -> String {
-    let output = std::process::Command::new("sha256sum")
-        .arg(path)
-        .output()
-        .expect("sha256sum");
-    assert!(output.status.success(), "sha256sum failed");
-    String::from_utf8(output.stdout)
-        .expect("sha256sum utf8")
-        .split_whitespace()
-        .next()
-        .expect("sha256 digest")
-        .to_string()
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).expect("read for sha256");
+    let digest = Sha256::digest(&bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Untouched log: chain + receipt checksum + signature + counts all pass.

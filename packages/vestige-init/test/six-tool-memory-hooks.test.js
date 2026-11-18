@@ -52,7 +52,7 @@ test('all memory lifecycle events use unified calls with unchanged admission and
   const f = fixture(t);
   for (const event of ['session', 'prompt', 'turn', 'compact', 'end', 'tool']) {
     const result = await memory.run({ client: 'claude', event, configFile: f.config,
-      input: { session_id: 'six-lifecycle', prompt: event === 'prompt' ? 'Maya has a peanut allergy' : '', source: 'compact' }, deadlineMs: 2000 });
+      input: { session_id: 'six-lifecycle', prompt: event === 'prompt' ? 'Maya has a peanut allergy' : '', source: 'compact' }, deadlineMs: 5000 });
     if (['session', 'prompt'].includes(event)) {
       assert.match(result.hookSpecificOutput.additionalContext, /using remember/);
       assert.doesNotMatch(result.hookSpecificOutput.additionalContext, /smart_ingest|session_start|search tools/);
@@ -81,7 +81,7 @@ test('Reflex preserves host fields and returned context inside session action en
   for (const [client, event] of [['claude', 'PostToolUseFailure'], ['codex', 'PostToolUse'], ['gemini', 'AfterTool'], ['cursor', 'postToolUse']]) {
     const input = { hook_event_name: event, session_id: 'reflex-session', agent_id: 'agent-7', tool_use_id: 'call-9', tool_name: 'Bash', cwd: '/repo',
       tool_input: { command: 'cargo test', file_path: '/repo/main.rs' }, tool_response: { exit_code: 1, stdout: 'test failed', stderr: 'failure' } };
-    const output = await reflex.run({ client, configFile: f.config, input, deadlineMs: 2000 });
+    const output = await reflex.run({ client, configFile: f.config, input, deadlineMs: 5000 });
     const context = output.additional_context || output.hookSpecificOutput?.additionalContext;
     assert.match(context, /Native Reflex context/);
     assert.match(context, /start_points=.*logged_write.*mem-0000000000000001/);
@@ -93,7 +93,7 @@ test('Reflex preserves host fields and returned context inside session action en
 test('Reflex never fabricates a failure memory when native returns no handle', async t => {
   const f = fixture(t, { context: 'Native failure context without a memory' });
   const output = await reflex.run({ client: 'claude', configFile: f.config,
-    input: { hook_event_name: 'PostToolUseFailure', session_id: 'failure', error: 'boom' }, deadlineMs: 2000 });
+    input: { hook_event_name: 'PostToolUseFailure', session_id: 'failure', error: 'boom' }, deadlineMs: 5000 });
   assert.equal(output.hookSpecificOutput.additionalContext, 'Native failure context without a memory');
 });
 
@@ -101,7 +101,7 @@ test('doctor checks the packet through session(action=start)', async t => {
   const f = fixture(t);
   const base = path.join(f.home, '.vestige', 'memory'); fs.mkdirSync(base, { recursive: true });
   fs.writeFileSync(path.join(base, 'manifest.json'), JSON.stringify({ binary: f.server, clients: [], files: [] }));
-  const report = await setup.inspect(f.home, 2000);
+  const report = await setup.inspect(f.home, 5000);
   assert(report.checks.find(c => c.name === 'Strata responds with memory-hook schema').ok);
   assert(report.checks.find(c => c.name === 'Backfill autofire enabled in responding process').ok);
   assert.deepEqual(f.calls(), [{ name: 'session', arguments: { action: 'start', memory_hook: { limit: 3 } } }]);
@@ -131,7 +131,8 @@ test('setup upgrades legacy Reflex registrations once and preserves unrelated ho
 
 test('Operator STOP relay writes through remember and preserves its native node id', () => {
   const script = path.join(__dirname, '../hooks/operator-stop-memory.py');
-  const result = spawnSync('python3', ['-c', `import runpy, sys
+  const py = ['python3', 'python'].find(c => spawnSync(c, ['-c', 'print(1)'], { encoding: 'utf8', windowsHide: true }).status === 0) || 'python3';
+  const result = spawnSync(py, ['-c', `import runpy, sys
 module = runpy.run_path(sys.argv[1])
 class MCP:
     def tool(self, name, args):

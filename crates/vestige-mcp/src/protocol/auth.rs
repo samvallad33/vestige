@@ -51,6 +51,9 @@ fn expand_home(dir: PathBuf) -> PathBuf {
     let Ok(rest) = dir.strip_prefix("~") else {
         return dir;
     };
+    if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        return PathBuf::from(home).join(rest);
+    }
     match directories::BaseDirs::new() {
         Some(base) => base.home_dir().join(rest),
         None => dir,

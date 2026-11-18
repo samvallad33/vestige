@@ -321,6 +321,13 @@ pub(super) fn decode_viterbi_chain(
         }
     }
 
+    let is_monologue = !ix.turns.iter().any(|t| t.field == 1)
+        && !ix
+            .turns
+            .iter()
+            .take(16)
+            .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
+
     // Generalized k-hop extension (`step = 2..MAX_CHAIN_LEN`, lengths 3..=6)
     let mut alpha_pow_q16 = Q16;
     for step in 2..MAX_CHAIN_LEN {
@@ -350,13 +357,21 @@ pub(super) fn decode_viterbi_chain(
                 // AND bridge into an unvisited session.
                 let info_gain = (tv_mask & !mask_acc[step - 1][ui]) != 0;
                 let new_sess = (sess_mask[step - 1][ui] & tv_sess_bit) == 0;
+                let wh_terminal_ok = is_monologue
+                    && ((plan.intent.sniper_where && ix.turns[v_ti].has_spatial)
+                        || (plan.intent.sniper_when && ix.turns[v_ti].has_temporal)
+                        || (!ix.turns[v_ti].entities.is_empty() && trans >= (Q16 >> 2)));
                 if step == 2 {
                     // Preserve 3rd-hop semantics when crossing out of u's session with positive transition
                     let u_root = nodes[prev[1][ui]];
-                    if !info_gain && !(tv_sess != ix.turns[u_root].session && new_sess && tv_mask != 0) {
+                    if !info_gain
+                        && !(tv_sess != ix.turns[u_root].session
+                            && new_sess
+                            && (tv_mask != 0 || wh_terminal_ok))
+                    {
                         continue;
                     }
-                } else if !info_gain || !new_sess {
+                } else if (!info_gain && !(step == 3 && wh_terminal_ok)) || !new_sess {
                     continue;
                 }
 
@@ -521,10 +536,19 @@ pub(super) fn find_coupled_session_bridge_turns(
             continue;
         }
         let sess_couple_q16 = u_cond.min(w_cond).saturating_add((u_cond + w_cond) >> 2);
+        let is_monologue = !ix.turns.iter().any(|t| t.field == 1)
+            && !ix
+                .turns
+                .iter()
+                .take(16)
+                .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
         for &ti in &ix.session_turns[si] {
             let t = &ix.turns[ti];
-            if t.is_question
-                || t.is_backchannel
+            if (if is_monologue {
+                t.is_pure_info_question
+            } else {
+                t.is_question
+            }) || t.is_backchannel
                 || turn_is_superseded(ix, ti)
                 || seed_turns.contains(&ti)
             {

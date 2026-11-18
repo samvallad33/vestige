@@ -129,6 +129,8 @@ pub(crate) mod zero_overlap;
 pub mod wordnet;
 /// Packed ConceptNet 5.7.0 2-hop commonsense bridge (sha256-pinned, Issue #817).
 pub mod conceptnet;
+/// Packed Wikidata CC0 1.0 topological containment & composition graph (sha256-pinned).
+pub mod wikidata;
 
 // ============================================================================
 // PUBLIC API RE-EXPORTS

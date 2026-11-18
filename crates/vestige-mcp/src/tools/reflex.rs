@@ -63,6 +63,7 @@ pub mod pairing;
 mod stale;
 mod witness;
 
+pub use enforce::coach_replay_jsonl;
 pub use stale::record as record_retirement;
 pub(crate) use witness::{actor_for, config_for, session_tag};
 

@@ -16,7 +16,11 @@
 # Exit 0 = clean, 1 = findings.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-python3 - <<'PY'
+PY_BIN=python3
+if ! "$PY_BIN" -c 'import sys' >/dev/null 2>&1; then
+    PY_BIN=python
+fi
+"$PY_BIN" - <<'PY'
 import os, re, sys
 
 # HARDCODE_SCAN_ROOT lets the self-test point the scan at a fixture tree.
@@ -64,12 +68,13 @@ def is_test_file(p):
     return p.endswith("_tests.rs") or p.endswith("/tests.rs") or "/tests/" in p
 
 for root, _, files in os.walk(ROOT):
-    if any(s in root + "/" for s in SKIP_DIRS):
+    root_norm = root.replace("\\", "/")
+    if any(s in root_norm + "/" for s in SKIP_DIRS):
         continue
     for f in files:
         if not f.endswith(".rs"):
             continue
-        p = os.path.join(root, f)
+        p = os.path.join(root, f).replace("\\", "/")
         if p in SKIP_PATHS or is_test_file(p):
             continue
         lines = open(p, encoding="utf-8", errors="replace").read().split("\n")

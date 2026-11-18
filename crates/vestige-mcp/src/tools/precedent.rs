@@ -166,6 +166,9 @@ pub(crate) fn operator_home() -> PathBuf {
             return p;
         }
     }
+    if let Some(h) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        return PathBuf::from(h).join(".operator");
+    }
     let mut p = directories::BaseDirs::new()
         .map(|d| d.home_dir().to_path_buf())
         .unwrap_or_default();
