@@ -1,0 +1,12 @@
+{
+  "name": "@vestige/guard",
+  "version": "6.2.3",
+  "description": "Signed claim-verification SDK against Vestige Strata memories (#420)",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "license": "AGPL-3.0-only"
+}
