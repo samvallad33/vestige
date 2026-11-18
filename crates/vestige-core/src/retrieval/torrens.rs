@@ -159,11 +159,30 @@ pub(super) fn parse_torrens_sentence(raw_prose: &str, turn: usize) -> Option<Tor
     }
     let norm_quotes = normalize_quote_possessive(clean_raw);
     let clean = norm_quotes.as_str();
-    // Single-sentence guard: reject multi-sentence paragraphs
-    if let Some(dot_pos) = clean.find(['.', '!', '?']) {
-        if dot_pos + 1 < clean.len() && clean[dot_pos + 1..].trim().len() > 2 {
+    // Single-sentence guard: reject multi-sentence paragraphs. A period that closes a short
+    // capitalized token (`Inc.`, `Ltd.`, `D.C.`, `St.`) is an abbreviation, not a boundary,
+    // so `"The chief executive officer of Apple Inc. is Tim Cook."` stays one record.
+    let mut scan_from = 0usize;
+    while let Some(rel) = clean[scan_from..].find(['.', '!', '?']) {
+        let dot_pos = scan_from + rel;
+        let rest = clean[dot_pos + 1..].trim();
+        if rest.len() <= 2 {
+            break;
+        }
+        let is_abbrev = clean.as_bytes()[dot_pos] == b'.' && {
+            let head = &clean[..dot_pos];
+            let tok = head
+                .rsplit(|c: char| c.is_whitespace() || c == '.' || c == ',')
+                .next()
+                .unwrap_or("");
+            let next_lower = rest.chars().next().is_some_and(|c| c.is_lowercase());
+            let tok_len = tok.chars().count();
+            !tok.is_empty() && tok_len <= 4 && starts_upper(tok) && (tok_len <= 2 || next_lower)
+        };
+        if !is_abbrev {
             return None;
         }
+        scan_from = dot_pos + 1;
     }
     let cased = cased_word_tokens(clean);
     if !(4..=26).contains(&cased.len()) {
@@ -668,33 +687,44 @@ pub(super) fn build_torrens_and_spatial_index(
 }
 
 /// Score alignment in Q16.16 between a live Torrens record's predicate and remaining query relation cues,
-/// returning `(score_q16, newly_consumed_stem_mask)`.
+/// returning `(score_q16, hard_mask, soft_mask)`.
+///
+/// Cue bits are consumed in two tiers. `hard` bits come from lexical evidence on the record
+/// predicate (exact stem, shared prefix, WordNet phrase closure of the query word itself).
+/// `soft` bits come from ontology expansion (hypernyms, ConceptNet, gloss concepts). A soft
+/// claim never blocks a later hard claim on the same cue, so an intermediate hop that only
+/// resembles a cue (`born in the city of` ~ `continent`) cannot starve the terminal hop that
+/// states it (`located in the continent of`).
 fn score_predicate_match_masked_q16(
     rec: &TorrensRecord,
     q_stems: &[String],
-    used_mask: u64,
+    hard_mask: u64,
+    soft_mask: u64,
     q_phrase_links: &[(String, u64)],
     q_expanded: &[(String, u64)],
-) -> (u64, u64) {
+) -> (u64, u64, u64) {
     let mut score: u64 = 0;
-    let mut new_mask = used_mask;
+    let mut new_hard = hard_mask;
+    let mut new_soft = soft_mask;
     for ps in &rec.pred_stems {
         for (idx, qs) in q_stems.iter().take(64).enumerate() {
             let bit = 1u64 << idx;
-            if (new_mask & bit) != 0 {
+            if (new_hard & bit) != 0 {
                 continue;
             }
             if qs == ps {
                 score = score.saturating_add(Q16 * 3);
-                new_mask |= bit;
+                new_hard |= bit;
                 break;
             }
-            if ps.len() >= 5
-                && qs.len() >= 5
-                && (ps.starts_with(qs.as_str()) || qs.starts_with(ps.as_str()))
+            // Shared prefix: 5+ chars, or a 4-char derivational root that the other stem
+            // extends by at most two chars (`loca`(tion) ~ `locat`(ed)).
+            let (short, long) = if ps.len() <= qs.len() { (ps.as_str(), qs.as_str()) } else { (qs.as_str(), ps.as_str()) };
+            if long.starts_with(short)
+                && (short.len() >= 5 || (short.len() == 4 && long.len() <= short.len() + 2))
             {
                 score = score.saturating_add(Q16 * 2);
-                new_mask |= bit;
+                new_hard |= bit;
                 break;
             }
         }
@@ -710,18 +740,18 @@ fn score_predicate_match_masked_q16(
     if rec_phrase.contains(' ') {
         if let Some((_, bits)) = q_phrase_links
             .iter()
-            .find(|(qe, b)| qe == &rec_phrase && (*b & !new_mask) != 0)
+            .find(|(qe, b)| qe == &rec_phrase && (*b & !new_hard) != 0)
         {
             score = score.saturating_add(Q16 * 3);
-            new_mask |= *bits;
+            new_hard |= *bits;
         }
     }
     for pr in &rec.pred_raw {
         let pr_root = deriv_root(pr);
         for (qe, qe_bits) in q_phrase_links {
-            if (*qe_bits & !new_mask) != 0 && (qe == pr || deriv_root(qe) == pr_root) {
+            if (*qe_bits & !new_hard) != 0 && (qe == pr || deriv_root(qe) == pr_root) {
                 score = score.saturating_add(Q16 * 2);
-                new_mask |= *qe_bits;
+                new_hard |= *qe_bits;
                 break;
             }
         }
@@ -733,31 +763,37 @@ fn score_predicate_match_masked_q16(
     for pr in &rec.pred_raw {
         for up in crate::wordnet::holonyms_and_upward(pr, 8) {
             let up_st = deriv_root(up);
+            let claimed = new_hard | new_soft;
             if let Some((idx, _)) = q_stems
                 .iter()
                 .take(64)
                 .enumerate()
-                .find(|&(idx, qs)| (new_mask & (1u64 << idx)) == 0 && qs == &up_st)
+                .find(|&(idx, qs)| (claimed & (1u64 << idx)) == 0 && qs == &up_st)
             {
                 score = score.saturating_add(Q16);
-                new_mask |= 1u64 << idx;
+                new_soft |= 1u64 << idx;
                 matched_wn_hyper_any = true;
                 break;
             }
         }
-        if !matched_wn_hyper_any && (new_mask == used_mask) && exp_bonus < max_exp_bonus {
+        if !matched_wn_hyper_any
+            && new_hard == hard_mask
+            && new_soft == soft_mask
+            && exp_bonus < max_exp_bonus
+        {
+            let claimed = new_hard | new_soft;
             if let Some((_, qe_bits)) = q_expanded
                 .iter()
-                .find(|(qe, b)| (*b & !new_mask) != 0 && qe == pr)
+                .find(|(qe, b)| (*b & !claimed) != 0 && qe == pr)
             {
                 exp_bonus = max_exp_bonus;
-                new_mask |= *qe_bits;
+                new_soft |= *qe_bits & !new_hard;
                 break;
             }
             let pst = deriv_root(pr);
             let pst_trim = pst.trim_end_matches(|c| c == 'y' || c == 'i');
             if let Some((_, qe_bits)) = q_expanded.iter().find(|(qe, b)| {
-                if (*b & !new_mask) == 0 {
+                if (*b & !claimed) == 0 {
                     return false;
                 }
                 let qst = deriv_root(qe);
@@ -768,7 +804,7 @@ fn score_predicate_match_masked_q16(
                         && (pst_trim.starts_with(qst_trim) || qst_trim.starts_with(pst_trim)))
             }) {
                 exp_bonus = exp_bonus.saturating_add(Q16 >> 1).min(max_exp_bonus);
-                new_mask |= *qe_bits;
+                new_soft |= *qe_bits & !new_hard;
                 continue;
             }
             for mid in crate::wordnet::expansion_lemmas(pr).into_iter().chain(
@@ -778,19 +814,19 @@ fn score_predicate_match_masked_q16(
             ) {
                 if let Some((_, qe_bits)) = q_expanded
                     .iter()
-                    .find(|(qe, b)| (*b & !new_mask) != 0 && qe == mid)
+                    .find(|(qe, b)| (*b & !claimed) != 0 && qe == mid)
                 {
                     exp_bonus = max_exp_bonus;
-                    new_mask |= *qe_bits;
+                    new_soft |= *qe_bits & !new_hard;
                     break;
                 }
             }
         }
     }
-    if new_mask == used_mask {
-        return (0, used_mask);
+    if new_hard == hard_mask && new_soft == soft_mask {
+        return (0, hard_mask, soft_mask);
     }
-    (score.saturating_add(exp_bonus), new_mask)
+    (score.saturating_add(exp_bonus), new_hard, new_soft)
 }
 
 /// Deduce a multi-hop functional chain (`k = 2..=5` live Torrens hops) for relational WH-queries
@@ -925,7 +961,7 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
         }
         if matches!(
             w,
-            "what" | "which" | "who" | "where" | "when" | "the" | "was" | "were" | "are" | "did" | "does" | "for" | "with" | "from" | "that" | "associated" | "serves" | "name" | "known" | "current" | "hold" | "holds" | "pertain" | "belongs"
+            "what" | "which" | "who" | "whose" | "where" | "when" | "the" | "was" | "into" | "come" | "comes" | "came" | "were" | "are" | "did" | "does" | "for" | "with" | "from" | "that" | "associated" | "serves" | "name" | "known" | "current" | "hold" | "holds" | "pertain" | "belongs"
         ) {
             continue;
         }
@@ -1006,7 +1042,10 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
         cur_subj: String,
         turns: Vec<usize>,
         visited: Vec<String>,
-        used_mask: u64,
+        hard_mask: u64,
+        soft_mask: u64,
+        last_min_bit: u32,
+        order_q16: u64,
         score_q16: u64,
         seed_was_proper: bool,
         first_hop_matched: bool,
@@ -1019,7 +1058,10 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
             cur_subj: s.to_string(),
             turns: Vec::new(),
             visited: vec![s.to_string()],
-            used_mask: 0,
+            hard_mask: 0,
+            soft_mask: 0,
+            last_min_bit: 64,
+            order_q16: 0,
             score_q16: 0,
             seed_was_proper: is_proper_seed(s),
             first_hop_matched: false,
@@ -1065,8 +1107,14 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
                 if st.turns.contains(&rec.turn) || st.visited.iter().any(|v| v == next_ent) {
                     continue;
                 }
-                let (raw_hop_sc, next_mask) =
-                    score_predicate_match_masked_q16(rec, &q_stems, st.used_mask, &q_phrase_links, &q_expanded);
+                let (raw_hop_sc, next_hard, next_soft) = score_predicate_match_masked_q16(
+                    rec,
+                    &q_stems,
+                    st.hard_mask,
+                    st.soft_mask,
+                    &q_phrase_links,
+                    &q_expanded,
+                );
                 let hop_sc = if is_inv {
                     if raw_hop_sc == 0 {
                         0
@@ -1100,8 +1148,22 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
                 let mut next_turns = st.turns.clone();
                 next_turns.push(rec.turn);
                 let next_score = st.score_q16.saturating_add(edge_gain);
-                let cues = next_mask.count_ones();
-                let prev_cues = st.used_mask.count_ones();
+                let cues = (next_hard | next_soft).count_ones();
+                let prev_cues = (st.hard_mask | st.soft_mask).count_ones();
+                // A hard claim on a cue that an earlier hop only claimed softly is new evidence too.
+                let hard_upgrade = (next_hard & !st.hard_mask) != 0;
+                // Nested relational questions read outside-in (`the capital of the country that X
+                // comes from`): each deeper hop answers a cue further LEFT in the query. A hop whose
+                // leftmost new cue sits left of the previous hop's earns an order credit.
+                let new_bits = ((next_hard | next_soft) & !(st.hard_mask | st.soft_mask))
+                    | (next_hard & !st.hard_mask);
+                let (next_last_min, next_order) = if new_bits != 0 {
+                    let mb = new_bits.trailing_zeros();
+                    let credit = if st.last_min_bit < 64 && mb < st.last_min_bit { Q16 >> 1 } else { 0 };
+                    (mb, st.order_q16.saturating_add(credit))
+                } else {
+                    (st.last_min_bit, st.order_q16)
+                };
                 let next_first_matched = if hop == 0 {
                     raw_hop_sc >= Q16
                 } else {
@@ -1112,13 +1174,24 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
                 // its final hop matched an explicit query/ontology target (`hop_sc >= (Q16 >> 1)`)
                 // and consumed a new query cue (`cues > prev_cues`, preventing overshoot past an already-solved target)
                 // or is the unique 2-hop idiomatic target (`hop == 1 && fwd_degree == 1`).
-                let solved_new_cue = cues > prev_cues || (hop == 1 && next_first_matched && fwd_degree == 1);
+                let solved_new_cue = cues > prev_cues
+                    || hard_upgrade
+                    || (hop == 1 && next_first_matched && fwd_degree == 1);
                 if next_turns.len() >= 2
                     && hop_sc >= (Q16 >> 1)
                     && solved_new_cue
                     && (cues >= 2 || hop_sc >= Q16 || (hop == 1 && next_first_matched && fwd_degree == 1))
                 {
-                    let term_total = next_score.saturating_add((cues as u64) * Q16);
+                    // Lexical (hard) cues outweigh ontology-resemblance (soft) cues 4:1, and every
+                    // hop past the first must pay for itself, so a long chain of loose resemblances
+                    // cannot outscore a short chain of stated relations.
+                    let hard_cnt = next_hard.count_ones() as u64;
+                    let soft_only = (next_soft & !next_hard).count_ones() as u64;
+                    let term_total = next_score
+                        .saturating_add(hard_cnt * Q16)
+                        .saturating_add(soft_only * (Q16 >> 2))
+                        .saturating_add(next_order)
+                        .saturating_sub((next_turns.len() as u64 - 1) * (Q16 >> 1));
                     if best_chain
                         .as_ref()
                         .map_or(true, |(_, bs, _)| term_total > *bs)
@@ -1142,7 +1215,10 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
                         cur_subj: next_ent.to_string(),
                         turns: next_turns,
                         visited: next_vis,
-                        used_mask: next_mask,
+                        hard_mask: next_hard,
+                        soft_mask: next_soft,
+                        last_min_bit: next_last_min,
+                        order_q16: next_order,
                         score_q16: next_score,
                         seed_was_proper: st.seed_was_proper,
                         first_hop_matched: next_first_matched,

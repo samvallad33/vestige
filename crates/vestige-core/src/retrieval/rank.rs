@@ -2767,12 +2767,16 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             })
             .count();
         let is_encyclopedic_multi_doc = is_monologue_corpus && ns >= 5 && nt >= ns * 2;
+        // A corpus where most turns compile to functional Torrens records is a fact ledger:
+        // relational questions there are implicit multi-hop even with one preposition
+        // (`On which continent was X originally made?`), so the chain walk decides admissibility.
+        let torrens_dense = ix.torrens_records.len() * 2 >= nt.max(1);
         if is_monologue_corpus
             && !is_encyclopedic_multi_doc
-            && (!head0_solved || rel_hop_cues >= 2)
+            && (!head0_solved || rel_hop_cues >= 2 || torrens_dense)
             && !ix.torrens_records.is_empty()
             && (wh_slots(&q.text) != 0 || q.text.trim_end().ends_with('?'))
-            && (eff_it.current_state || rel_hop_cues >= 2)
+            && (eff_it.current_state || rel_hop_cues >= 2 || torrens_dense)
         {
             let (t_chain, chain_cues) = super::torrens::resolve_torrens_chain_q16(ix, &q.text);
             let slot0_cues = final_turn_indices
