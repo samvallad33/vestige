@@ -1,0 +1,29 @@
+{
+  "name": "@vestige/client",
+  "version": "6.2.3",
+  "description": "Zero-config TypeScript/Node SDK and Vercel AI SDK / Letta adapters for Vestige Causal Proof Engine",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    },
+    "./vercel-ai": {
+      "types": "./adapters/vercel-ai.d.ts",
+      "import": "./adapters/vercel-ai.js"
+    },
+    "./letta": {
+      "types": "./adapters/letta.d.ts",
+      "import": "./adapters/letta.js"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

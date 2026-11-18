@@ -392,6 +392,15 @@ fn stop_runtime(
 }
 
 fn main() {
+    if std::env::args().any(|a| a == vestige_mcp::watchdog::WATCHDOG_FLAG) {
+        if let Err(e) = vestige_mcp::watchdog::run_watchdog_child_loop() {
+            eprintln!("Watchdog loop error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    let _ = vestige_mcp::watchdog::harden_process();
+
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

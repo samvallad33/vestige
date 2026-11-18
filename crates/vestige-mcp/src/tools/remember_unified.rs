@@ -224,9 +224,55 @@ pub async fn execute(
     // write already committed; a graph refusal is reported, not fatal.
     let standing_policies = register_standing_policies(storage, scope, &raw_args);
 
+    // Wave 14M (#774): Mandatory Birth Certificate & causal-anchor auto-bind.
+    let explicit_links: Vec<String> = raw_args
+        .get("links")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let explicit_files: Vec<String> = parsed.files.clone().unwrap_or_default();
+    let active_receipt_hash = ingest_res
+        .get("receiptId")
+        .and_then(Value::as_str)
+        .map(|s| *blake3::hash(s.as_bytes()).as_bytes());
+    let prov_outcome = strata_gate::verify_or_autobind(strata_gate::ProvenanceInput {
+        writer_id: "vestige-mcp".to_string(),
+        passport_digest: None,
+        session_id: scope.to_string(),
+        prev_session_ts: None,
+        session_ts: Utc::now().timestamp_millis().max(0) as u64,
+        explicit_links,
+        explicit_files,
+        active_tool_receipt: active_receipt_hash,
+    });
+    let birth_cert_json = match prov_outcome {
+        strata_gate::ProvenanceOutcome::Admitted(cert) => json!({
+            "status": "admitted",
+            "writer_id": cert.writer_id,
+            "session_id": cert.session_id,
+            "anchors_count": cert.anchors.len(),
+            "auto_bound": cert.auto_bound,
+        }),
+        strata_gate::ProvenanceOutcome::Quarantined(q) => json!({
+            "status": "quarantined",
+            "code": q.code,
+            "reason": q.reason,
+        }),
+        strata_gate::ProvenanceOutcome::ClockSpoofRejected(s) => json!({
+            "status": "clock_spoof_rejected",
+            "prev_ts": s.prev_ts,
+            "attempted_ts": s.attempted_ts,
+        }),
+    };
+
     // Step 6: Format upgraded response
     let mut response = ingest_res;
     if let Some(obj) = response.as_object_mut() {
+        obj.insert("birth_certificate".to_string(), birth_cert_json);
         obj.insert("backfilled_handles".to_string(), json!(backfilled_handles));
         obj.insert("backfill_receipts".to_string(), json!(backfill_receipts));
         obj.insert("backfill_skipped".to_string(), json!(backfill_skipped));

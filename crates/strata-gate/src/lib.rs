@@ -32,6 +32,7 @@ pub mod admit;
 pub mod inputs;
 pub mod log;
 pub mod policy;
+pub mod provenance;
 pub mod record;
 pub mod rederive;
 pub mod runtime;
@@ -49,6 +50,10 @@ pub use policy::{
 pub use record::{
     ActionKindCode, AlertRecord, CanaryRecord, DutyKind, EffectRecord, GapDetail, GapRecord,
     GateError, GateEvent, GateRecord, LessonAlarmRecord, Propose, RecordKind, Verdict, action_kind,
+};
+pub use provenance::{
+    BirthCertificate, CausalAnchor, ClockSpoofAttempt, MissingProvenanceReceipt, ProvenanceInput,
+    ProvenanceOutcome, check_monotonic_ts, verify_or_autobind,
 };
 pub use rederive::{RederiveError, rederive_verdicts};
 pub use runtime::GateRuntime;

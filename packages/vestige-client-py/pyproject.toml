@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vestige-client"
+version = "6.2.3"
+description = "Zero-config Python SDK and framework adapters (LangChain, CrewAI, LlamaIndex, AutoGen) for Vestige Causal Proof Engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "AGPL-3.0-only" }
+dependencies = []
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.2"]
+crewai = ["crewai>=0.50"]
+llamaindex = ["llama-index-core>=0.10"]
+autogen = ["pyautogen>=0.2"]
+all = ["langchain-core>=0.2", "crewai>=0.50", "llama-index-core>=0.10", "pyautogen>=0.2"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vestige_client*"]

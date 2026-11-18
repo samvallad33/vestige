@@ -3658,6 +3658,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-import"
+version = "6.2.3"
+dependencies = [
+ "blake3",
+ "borsh",
+ "serde",
+ "serde_json",
+ "strata-gate",
+]
+
+[[package]]
 name = "strata-kernel"
 version = "6.2.2"
 dependencies = [
@@ -3699,6 +3710,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "strata",
  "strata-kernel",
  "tempfile",
@@ -4410,6 +4422,7 @@ dependencies = [
  "sha2 0.11.0",
  "strata",
  "strata-gate",
+ "strata-import",
  "strata-kernel",
  "strata-mesh",
  "strata-migrate",
