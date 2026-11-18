@@ -1,0 +1,15 @@
+[package]
+name = "strata-crypto"
+version = "6.2.3"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Tranche 2: MMR inclusion proofs, ACTA receipts, crypto-erasure, GF(2^8) Reed-Solomon self-repair, PQ hybrid envelopes, time-travel recall, compensating transactions, compliance exports, and vestige why/bisect/top"
+publish = false
+
+[workspace]
+
+[dependencies]
+blake3 = "1"
+borsh = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
