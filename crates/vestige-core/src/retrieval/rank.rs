@@ -3464,7 +3464,8 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         &t_own,
         &s_score,
         &bridge_boost,
-        torrens_locked_head || (taxa_promoted && nt >= 24),
+        torrens_locked_head,
+        taxa_promoted && nt >= TAXA_SESSION_LOCK_MIN_TURNS,
         k,
     );
 
@@ -3557,6 +3558,21 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     }
 }
 
+/// Prefix of the turn stream inspected for a named speaker label that is
+/// neither empty nor the generic `user` / `assistant` dialogue roles.
+/// Shared by the W2-001 late-pass named-speaker check and the taxa session lock.
+const NAMED_SPEAKER_PREFIX: usize = 32;
+
+/// Minimum corpus size (turn count) at which a taxa turn promotion may also
+/// hard-lock its session at rank 1. Names the previous `nt >= 24` threshold.
+const TAXA_SESSION_LOCK_MIN_TURNS: usize = 24;
+
+fn corpus_has_named_speakers(ix: &Index) -> bool {
+    ix.turns.iter().take(NAMED_SPEAKER_PREFIX).any(|t| {
+        !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant"
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_session_late_sync_and_margin_swap(
     ix: &Index,
@@ -3570,7 +3586,8 @@ fn apply_session_late_sync_and_margin_swap(
     t_own: &[f32],
     s_score: &[f32],
     bridge_boost: &[f32],
-    hard_locked_head: bool,
+    torrens_locked_head: bool,
+    taxa_lock_candidate: bool,
     k: usize,
 ) {
     if final_turn_indices.is_empty() {
@@ -3598,7 +3615,24 @@ fn apply_session_late_sync_and_margin_swap(
     let head_ti = final_turn_indices[0];
     let head_sess = ix.turns[head_ti].session;
 
-    // 0. If `torrens` or `taxa` hard-locked Slot 0 (`CoRA`, `NoLiMa`, `BABILong`), sync `head_sess` directly to #1:
+    // Keep the upstream taxa *turn* promotion, but only force that turn's session
+    // to #1 when the corpus has no named speakers (monologue rescue for CoRA /
+    // NoLiMa / BABILong) or the taxa head already ties or beats the current #1
+    // session score. A weaker taxa head must not overwrite a stronger session.
+    let taxa_session_lock = if !taxa_lock_candidate {
+        false
+    } else if !corpus_has_named_speakers(ix) {
+        true
+    } else {
+        match final_session_indices.first() {
+            None => true,
+            Some(&incumbent) => s_score.get(head_sess).copied().unwrap_or(0.0)
+                >= s_score.get(incumbent).copied().unwrap_or(0.0),
+        }
+    };
+    let hard_locked_head = torrens_locked_head || taxa_session_lock;
+
+    // 0. If `torrens` or the gated `taxa` lock hard-locked Slot 0, sync `head_sess` to #1:
     if hard_locked_head {
         if let Some(pos) = final_session_indices.iter().position(|&s| s == head_sess) {
             if pos > 0 {
@@ -3689,9 +3723,7 @@ fn apply_session_late_sync_and_margin_swap(
                 && !inc_covers_head
                 && head_own > inc_best_own;
             // Late-pass head turn sync on non-named chats (`BEAM` 106/222 S@1 misses where gold is in turns[:5]):
-            let has_named = ix.turns.iter().take(32).any(|t| {
-                !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant"
-            });
+            let has_named = corpus_has_named_speakers(ix);
             let beam_late_sync = !has_named
                 && nominee == head_sess
                 && prom_n >= inc_n
