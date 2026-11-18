@@ -83,6 +83,7 @@ strata-gate = { path = "../strata-gate" }
 strata-import = { path = "../strata-import" }
 strata-passport = { path = "../strata-passport" }
 strata-runtime = { path = "../strata-runtime" }
+strata-simd = { path = "../strata-simd" }
 blake3 = "1"
 
 # ============================================================================
