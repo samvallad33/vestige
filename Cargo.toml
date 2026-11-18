@@ -14,6 +14,7 @@ exclude = [
     # can path-depend without cargo seeing multiple workspace roots;
     # re-parent deliberately at integration time.
     "crates/strata",
+    "crates/strata-causal-math",
     "crates/strata-crypto",
     "crates/strata-episodic",
     "crates/strata-gate",
