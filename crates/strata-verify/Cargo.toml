@@ -33,6 +33,7 @@ ed25519-dalek = { version = "3", default-features = false, features = ["fast", "
 [dev-dependencies]
 ed25519-dalek = { version = "3", default-features = false, features = ["fast", "rand_core"] }
 tempfile = "3"
+sha2 = "0.11"
 strata-store = { path = "../strata-store" }
 # Tests migrate a fixture. Not linked into dependents of this crate.
 strata-migrate = { path = "../strata-migrate", features = ["sqlite-reader"] }

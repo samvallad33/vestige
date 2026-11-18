@@ -44,6 +44,7 @@ import os
 import queue
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -51,11 +52,15 @@ import time
 
 try:
     import fcntl
-except ImportError:                                   # Windows: one writer is not enforced there
+except ImportError:                                   # Windows: fallback to msvcrt lock
     fcntl = None
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 VERSION = "0.2.0"
-HOME = os.path.expanduser("~")
+HOME = os.environ.get("HOME") or os.path.expanduser("~")
 OP_HOME = os.environ.get("OPERATOR_HOME") or os.path.join(HOME, ".operator")
 RECEIPTS = os.path.join(OP_HOME, "receipts")
 STATE_DIR = os.path.join(OP_HOME, "state")
@@ -198,16 +203,71 @@ def scan(st):
     return rows
 
 
+def _try_direct_attach(binary, deadline):
+    if os.environ.get("VESTIGE_DIRECT_ATTACH") == "0":
+        return None
+    if os.path.basename(str(binary or "")).lower() not in ("vestige-mcp", "vestige-mcp.exe") and os.environ.get("VESTIGE_DIRECT_ATTACH") != "1":
+        return None
+    for d in data_dirs():
+        ep = os.path.join(d, ".serve.endpoint")
+        if not os.path.isfile(ep):
+            continue
+        try:
+            parts = open(ep, "r", encoding="utf-8").read().strip().split()
+            if len(parts) != 3:
+                continue
+            addr, token, pid_str = parts
+            pid = int(pid_str)
+            sock = None
+            left = min(0.08, max(0.02, deadline - time.time()))
+            if addr == "unix" and hasattr(socket, "AF_UNIX"):
+                sock_path = os.path.join(d, ".serve.sock")
+                if not os.path.exists(sock_path):
+                    continue
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.settimeout(left)
+                sock.connect(sock_path)
+            else:
+                port = int(addr)
+                if port <= 0 or port > 65535:
+                    continue
+                sock = socket.create_connection(("127.0.0.1", port), timeout=left)
+            sock.sendall(("vestige-attach/1 %s\n" % token).encode("utf-8"))
+            rfile = sock.makefile("rb")
+            welcome = rfile.readline(256).decode("utf-8", "replace").rstrip("\r\n")
+            if welcome == "vestige-attached/1 %d" % pid:
+                sock.settimeout(None)
+                return sock, rfile
+            rfile.close()
+            sock.close()
+        except Exception:
+            try:
+                if sock is not None:
+                    sock.close()
+            except Exception:
+                pass
+    return None
+
+
 class Mcp(object):
-    """A short MCP client over a spawned vestige-mcp's stdio."""
+    """A short MCP client over direct attach or a spawned vestige-mcp's stdio."""
 
     def __init__(self, binary, deadline):
         self.deadline = deadline
         self.next_id = 1
         self.lines = queue.Queue()
-        self.proc = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL)
-        threading.Thread(target=self._pump, daemon=True).start()
+        self.proc = None
+        self.sock = None
+        self._rfile = None
+        attached = _try_direct_attach(binary, deadline)
+        if attached is not None:
+            self.sock, self._rfile = attached
+            stream = self._rfile
+        else:
+            self.proc = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL)
+            stream = self.proc.stdout
+        threading.Thread(target=self._pump, args=(stream,), daemon=True).start()
         try:
             self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                         "clientInfo": {"name": "operator-stop-memory", "version": VERSION}})
@@ -216,14 +276,21 @@ class Mcp(object):
             self.close()  # construction failure must not leave an orphan MCP process
             raise
 
-    def _pump(self):
-        for raw in self.proc.stdout:
-            self.lines.put(raw)
+    def _pump(self, stream):
+        try:
+            for raw in stream:
+                self.lines.put(raw)
+        except Exception:
+            pass
         self.lines.put(None)
 
     def send(self, obj):
-        self.proc.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
-        self.proc.stdin.flush()
+        data = (json.dumps(obj) + "\n").encode("utf-8")
+        if self.sock is not None:
+            self.sock.sendall(data)
+        else:
+            self.proc.stdin.write(data)
+            self.proc.stdin.flush()
 
     def request(self, method, params):
         rid, self.next_id = self.next_id, self.next_id + 1
@@ -265,14 +332,26 @@ class Mcp(object):
         return value if isinstance(value, dict) else {}
 
     def close(self):
-        try:
-            self.proc.stdin.close()
-        except Exception:
-            pass
-        try:
-            self.proc.wait(timeout=max(0.001, min(0.02, self.deadline - time.time())))
-        except Exception:
-            self.proc.kill()
+        if self.sock is not None:
+            try:
+                if self._rfile is not None:
+                    self._rfile.close()
+            except Exception:
+                pass
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            return
+        if self.proc is not None:
+            try:
+                self.proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                self.proc.wait(timeout=max(0.001, min(0.02, self.deadline - time.time())))
+            except Exception:
+                self.proc.kill()
 
 
 def tagged(mcp, tag):
@@ -423,6 +502,12 @@ def main():
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
                 return 0                              # another call is recording; it picks these up
+        elif msvcrt:
+            try:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return 0
         st = load_state()
         known = set(st["done"]) | set(r["digest"][:16] for r in st["pending"])
         for row in scan(st):

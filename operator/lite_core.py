@@ -255,7 +255,7 @@ RULES = {
                "sent to a remote API removes something the owner may not get back. It needs the owner's approval."),
     "OP-022": ("protected-file", "STOP",
                "The owner gave this file a contract: append-only files may only grow at the end, read-only "
-               "files may not change. Anything else needs the owner."),
+               "files may not change, and no-export files may not be sent outbound. Anything else needs the owner."),
     "OP-025": ("watch-turnover", "STOP",
                "A session that was compacted takes the watch before it changes anything: it reads what it was "
                "stopped from, what the owner allowed and the permits still open, from the gate's own receipts, "
@@ -329,7 +329,7 @@ MCP_SENSITIVE_PATH_RE = re.compile(
 
 def load_config():
     cfg = {"protected_roots": [], "protected_files": [], "disabled_rules": [], "mode_overrides": {},
-           "scratch_ok": [], "file_contracts": []}     # file_contracts: OP-022, set by the owner's `protect`
+           "scratch_ok": [], "file_contracts": [], "no_export_paths": []}     # file_contracts: OP-022, set by the owner's `protect`
     try:
         with open(pj(OP_HOME, "commitments.json"), encoding="utf-8") as f:
             user = json.load(f)
@@ -5216,11 +5216,12 @@ def floor_hits(e, cwd):
     return [("OP-012", d, FLOOR_HINT) for d in list(dict.fromkeys(found))[:1]]
 
 
-# ---- protected files: the owner's contracts on how a named file may change (OP-022) --------------- #
+# ---- protected files: the owner's contracts on how a named file may change or leave (OP-022) ------ #
 # append-only: bytes may only be added at the end, so what is there now is never rewritten.
 # read-only:   no change at all without the owner.
+# no-export:   ordinary private files/folders that may not be uploaded or exported outbound (#506).
 # Contracts live in commitments.json under "file_contracts", which only the owner writes (OP-000).
-FILE_CONTRACTS = ("append-only", "read-only")
+FILE_CONTRACTS = ("append-only", "read-only", "no-export")
 
 
 APPEND_ONLY_PROGS = {"echo", "printf", "cat", "date", "jq"}        # programs that write nothing but stdout
@@ -5246,7 +5247,185 @@ def file_contracts(cfg, cwd):
     for c in (cfg or {}).get("file_contracts") or []:
         if isinstance(c, dict) and c.get("contract") in FILE_CONTRACTS and isinstance(c.get("path"), str) and c["path"].strip():
             out.append((norm(c["path"], cwd), c["contract"]))
+    for p in (cfg or {}).get("no_export_paths") or []:
+        if isinstance(p, str) and p.strip():
+            out.append((norm(p, cwd), "no-export"))
     return out
+
+
+def no_export_contracts(cfg, cwd):
+    """[(path, frozenset(lower_hosts))] for files/folders declared protected against outbound export."""
+    out = []
+    for c in (cfg or {}).get("file_contracts") or []:
+        if isinstance(c, dict) and c.get("contract") == "no-export" and isinstance(c.get("path"), str) and c["path"].strip():
+            hosts = frozenset(str(h).strip().lower() for h in (c.get("allow_hosts") or []) if str(h).strip())
+            out.append((norm(c["path"], cwd), hosts))
+    for p in (cfg or {}).get("no_export_paths") or []:
+        if isinstance(p, str) and p.strip():
+            out.append((norm(p, cwd), frozenset()))
+    return out
+
+
+def _extract_shell_upload_paths(prog, rest, seg, ecwd):
+    """Outbound local source paths carried by a shell HTTP or remote-transfer command segment."""
+    found = []
+    if prog in ("curl", "wget", "http", "https", "xh"):
+        for ii, a in enumerate(rest):
+            if a in ("-T", "--upload-file", "--post-file") and ii + 1 < len(rest):
+                found.append(rest[ii + 1])
+            elif a.startswith(("--upload-file=", "--post-file=")):
+                found.append(a.split("=", 1)[1])
+            elif a.startswith("-T") and len(a) > 2 and not a.startswith("--"):
+                found.append(a[2:])
+            elif a in ("-F", "--form", "--form-string", "-d", "--data", "--data-raw",
+                       "--data-binary", "--data-urlencode") and ii + 1 < len(rest):
+                v_up = rest[ii + 1]
+                for sym in ("@", "<"):
+                    if sym in v_up:
+                        cand = v_up.split(sym, 1)[1].split(";", 1)[0].strip("'\"")
+                        if cand and cand != "-":
+                            found.append(cand)
+                        break
+            elif a.startswith(("-F", "--form=", "--form-string=", "-d@", "-d<", "--data=",
+                               "--data-binary=", "--data-raw=", "--data-urlencode=")):
+                for sym in ("@", "<"):
+                    if sym in a:
+                        cand = a.split(sym, 1)[1].split(";", 1)[0].strip("'\"")
+                        if cand and cand != "-":
+                            found.append(cand)
+                        break
+            elif a.startswith("@") and len(a) > 1 and a != "@-":
+                found.append(a[1:].split(";", 1)[0].strip("'\""))
+            elif prog in ("http", "https", "xh") and "@" in a and not a.startswith(("http://", "https://", "-")):
+                left, right = a.split("@", 1)
+                if left and right and "/" not in left:
+                    found.append(right.split(";", 1)[0].strip("'\""))
+        for m in re.finditer(r"(?<![<\d])<(?![<(])\s*([^\s<>|&;()]+)", seg or ""):
+            cand = m.group(1).strip("'\"")
+            if cand:
+                found.append(cand)
+    elif prog in ("scp", "rsync", "sftp", "rclone", "aws", "gsutil"):
+        plain = [a for a in rest if not a.startswith("-")]
+        remote_re = re.compile(r"^(?:[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:|s3://|gs://|[A-Za-z0-9_-]{2,}:(?!/))")
+        remotes = [a for a in plain if remote_re.match(a) and not re.match(r"^[A-Za-z]:[/\\]", a)]
+        if remotes and len(plain) >= 2:
+            for a in plain[:-1]:
+                if not remote_re.match(a) or re.match(r"^[A-Za-z]:[/\\]", a):
+                    found.append(a)
+    return [norm(p, ecwd) for p in found if p]
+
+
+def _segment_dest_hosts(seg, rest):
+    """Remote destination hostnames named in URLs or user@host: targets of an outbound segment."""
+    hosts = [h.lower() for h in _hosts(seg or "") if h]
+    for a in rest or []:
+        if re.match(r"^[A-Za-z]:[/\\]", a) or "://" in a or a.startswith("-"):
+            continue
+        m = re.match(r"^(?:[^@\s/:]+@)?([A-Za-z0-9.-]+\.[A-Za-z]{2,}|localhost|\d+\.\d+\.\d+\.\d+):", a)
+        if m:
+            hosts.append(m.group(1).lower())
+    return list(dict.fromkeys(hosts))
+
+
+def outbound_export_hits(payload, cwd, effects, cfg):
+    """OP-022 (`no-export`): blocks outbound upload/export of owner-declared private files/folders (#506)
+    across shell HTTP/transfer CLIs, piped file readers into outbound senders, and closed/MCP export tools,
+    unless every destination host is in the contract's `allow_hosts` (or a single-use owner permit is used)."""
+    contracts = no_export_contracts(cfg, cwd)
+    if not contracts:
+        return []
+    tool_raw = str(payload.get("tool_name") or payload.get("toolName") or "")
+    tool = tool_raw.lower()
+    ti = payload.get("tool_input") or payload.get("toolInput") or payload.get("input") or {}
+    ti = ti if isinstance(ti, dict) else {"command": ti}
+    hits = []
+    hint = ("Remove the protected private file from the outbound call, ask the owner to allow a specific "
+            "destination with `%s protect <path> --no-export --allow-host <host>`, or ask for a one-time permit."
+            % self_cmd())
+
+    def authorized(allow_hosts, dest_hosts):
+        return bool(allow_hosts and dest_hosts and all(h in allow_hosts for h in dest_hosts))
+
+    shell_call = tool in SHELL_TOOLS or ("command" in ti and tool not in WRITE_TOOLS and not tool.startswith("mcp__"))
+    if shell_call or (tool.startswith("mcp__") and effects):
+        cmd = str(ti.get("command") or ti.get("cmd") or ti.get("script") or "")
+        for e in effects or []:
+            prog = posixpath.basename(str(e.get("prog") or ""))
+            ecwd = e.get("cwd") if e.get("cwd") and not str(e["cwd"]).startswith(UNKNOWN_CWD) else cwd
+            rest = [str(x) for x in (e.get("rest") or ((e.get("flags") or []) + (e.get("args") or [])))]
+            seg = str(e.get("seg") or e.get("text") or "")
+            up_paths = _extract_shell_upload_paths(prog, rest, seg, ecwd)
+            if not up_paths:
+                continue
+            dest_hosts = _segment_dest_hosts(seg, rest)
+            dst_label = dest_hosts[0] if dest_hosts else "an outbound endpoint"
+            for rpath in up_paths:
+                for ppath, allow_hosts in contracts:
+                    if is_inside(rpath, ppath) and not authorized(allow_hosts, dest_hosts):
+                        hits.append(("OP-022", "%s is no-export, and `%s` would send %s to %s"
+                                     % (short_home(ppath), seg[:70], short_home(rpath), dst_label), hint))
+        # Also catch `cat/base64 <private_file> | curl/wget/http/xh/nc ...` pipelines
+        if cmd and "|" in mask_quotes(cmd):
+            stages = [s.strip() for s in re.split(r"(?<!\|)\|(?!\|)", cmd) if s.strip()]
+            for idx in range(len(stages) - 1):
+                src_toks = tokenize(stages[idx])
+                dst_toks = tokenize(stages[idx + 1])
+                if not src_toks or not dst_toks:
+                    continue
+                sprog = posixpath.basename(src_toks[0])
+                dprog = posixpath.basename(dst_toks[0])
+                if sprog in ("cat", "head", "tail", "base64", "xxd", "gzip", "tar", "zip") and \
+                        dprog in ("curl", "wget", "http", "https", "xh", "nc", "ncat", "netcat"):
+                    dest_hosts = _segment_dest_hosts(stages[idx + 1], dst_toks[1:])
+                    dst_label = dest_hosts[0] if dest_hosts else dprog
+                    for a in src_toks[1:]:
+                        if a.startswith("-"):
+                            continue
+                        rpath = norm(a.strip("'\""), cwd)
+                        for ppath, allow_hosts in contracts:
+                            if is_inside(rpath, ppath) and not authorized(allow_hosts, dest_hosts):
+                                hits.append(("OP-022", "%s is no-export, and `%s | %s` would stream %s to %s"
+                                             % (short_home(ppath), sprog, dprog, short_home(rpath), dst_label), hint))
+        return hits
+
+    # Non-shell custom/MCP tools: skip pure local reads and local file-editor WRITE_TOOLS
+    if tool in WRITE_TOOLS or tool in ("read", "glob", "grep", "ls", "view", "read_file"):
+        return []
+    if tool.startswith("mcp__") and mcp_reads_only(tool, ti):
+        return []
+
+    dest_hosts = []
+    for s in _strings(ti, []):
+        dest_hosts += [h.lower() for h in _hosts(s) if h]
+    for hk in ("host", "destination_host", "endpoint", "receiver"):
+        hv = ti.get(hk)
+        if isinstance(hv, str) and hv.strip() and "://" not in hv and "/" not in hv:
+            dest_hosts.append(hv.strip().lower())
+    dest_hosts = list(dict.fromkeys(dest_hosts))
+    dst_label = dest_hosts[0] if dest_hosts else (tool_raw or "outbound tool")
+
+    cand_paths = []
+    for k, v in ti.items():
+        if k in ("url", "endpoint", "method", "headers", "token", "api_key"):
+            continue
+        for s in _strings(v, []):
+            st = s.strip()
+            if not st or "://" in st or len(st) > 512:
+                continue
+            if "/" in st or "\\" in st or st.startswith("~") or "." in st:
+                cand_paths.append(norm(st.lstrip("@"), cwd))
+    for rpath in cand_paths:
+        for ppath, allow_hosts in contracts:
+            if is_inside(rpath, ppath) and not authorized(allow_hosts, dest_hosts):
+                hits.append(("OP-022", "%s is no-export, and %s would export %s to %s"
+                             % (short_home(ppath), tool_raw, short_home(rpath), dst_label), hint))
+    if not hits and re.search(r"(?:^|__)(?:export_backup|upload_backup|export_private)(?:_|$)", tool):
+        for ppath, allow_hosts in contracts:
+            if not authorized(allow_hosts, dest_hosts):
+                hits.append(("OP-022", "%s is no-export, and %s exports private data without an approved destination"
+                             % (short_home(ppath), tool_raw), hint))
+                break
+    return hits
 
 
 def _file_bytes(path):
@@ -5316,6 +5495,8 @@ def _git_touches(e, path, cwd):
 
 def protected_change(path, contract, tool, ti, effects, cwd):
     """Why this call breaks the contract on path, or '' when it keeps it."""
+    if contract == "no-export":
+        return ""                          # no-export governs outbound export (outbound_export_hits), not local edits
     if tool in WRITE_TOOLS:
         if not any(same_path(w, path) for e in effects for w in e.get("writes") or []):
             return ""
@@ -5415,7 +5596,7 @@ def cmd_append(argv):
               % (short_home(path), self_cmd(), short_home(path)))
         return 2
     data = sys.stdin.buffer.read()
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
     try:
         if fcntl:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -5555,15 +5736,27 @@ def cmd_protected(argv):
 
 
 def cmd_protect(argv):
-    """`protect <path> --append-only|--read-only|--remove`: the owner names a file and its contract."""
+    """`protect <path> --append-only|--read-only|--no-export [--allow-host <host>]|--remove`: the owner names a file and its contract."""
     if any(os.environ.get(k) for k in AGENT_ENV):
         print("Refusing: protect changes the owner's rules, so the owner runs it from their own terminal.")
         return 3
-    flags = [a for a in argv if a.startswith("--")]
-    paths = [a for a in argv if not a.startswith("--")]
-    want = {"--append-only": "append-only", "--read-only": "read-only", "--remove": None}
-    if len(paths) != 1 or len(flags) != 1 or flags[0] not in want:
-        print("usage: %s protect <path> --append-only|--read-only|--remove" % self_cmd())
+    allow_hosts, rest = [], []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--allow-host" and i + 1 < len(argv):
+            allow_hosts.append(argv[i + 1].strip().lower())
+            i += 2
+        elif argv[i].startswith("--allow-host="):
+            allow_hosts.append(argv[i].split("=", 1)[1].strip().lower())
+            i += 1
+        else:
+            rest.append(argv[i])
+            i += 1
+    flags = [a for a in rest if a.startswith("--")]
+    paths = [a for a in rest if not a.startswith("--")]
+    want = {"--append-only": "append-only", "--read-only": "read-only", "--no-export": "no-export", "--remove": None}
+    if len(paths) != 1 or len(flags) != 1 or flags[0] not in want or (allow_hosts and flags[0] != "--no-export"):
+        print("usage: %s protect <path> --append-only|--read-only|--no-export [--allow-host <host>]|--remove" % self_cmd())
         return 2
     path = norm(paths[0], os.getcwd())
     cpath = pj(OP_HOME, "commitments.json")
@@ -5577,7 +5770,10 @@ def cmd_protect(argv):
         return 1
     keep = [c for c in user.get("file_contracts") or [] if not (isinstance(c, dict) and same_path(norm(str(c.get("path") or ""), "/"), path))]
     if want[flags[0]]:
-        keep.append({"path": path, "contract": want[flags[0]]})
+        entry = {"path": path, "contract": want[flags[0]]}
+        if allow_hosts:
+            entry["allow_hosts"] = sorted(set(h for h in allow_hosts if h))
+        keep.append(entry)
     user["file_contracts"] = keep
     os.makedirs(OP_HOME, exist_ok=True)
     tmp = cpath + ".tmp"
@@ -6618,6 +6814,7 @@ def classify(payload, cfg):
                     effects_out += sub_fx
                     if "xargs-substituted" not in meta["transforms"]:
                         meta["transforms"].append("xargs-substituted")
+    hits += guarded(outbound_export_hits, [], payload, cwd, effects_out, cfg)
     hits = list(dict.fromkeys(hits))                         # the same finding reached by two routes is one hit
     return tool_raw, cwd, hits, " | ".join(previews)[:400], meta, effects_out
 

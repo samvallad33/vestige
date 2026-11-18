@@ -332,7 +332,8 @@ fn vestige_bin() -> PathBuf {
     if let Ok(path) = std::env::var("VESTIGE_BIN") {
         return PathBuf::from(path);
     }
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/vestige");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../../target/debug/vestige{}", std::env::consts::EXE_SUFFIX));
     assert!(path.is_file(), "build vestige at {}", path.display());
     path
 }
@@ -341,7 +342,8 @@ fn mcp_bin() -> PathBuf {
     if let Ok(path) = std::env::var("VESTIGE_MCP_BIN") {
         return PathBuf::from(path);
     }
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/vestige-mcp");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../../target/debug/vestige-mcp{}", std::env::consts::EXE_SUFFIX));
     assert!(path.is_file(), "build vestige-mcp at {}", path.display());
     path
 }

@@ -51,7 +51,11 @@ INTEGRITY = "reference_digest_not_signature"
 # The pin is operator-lite/operator-gate.py in this repository (Operator Lite 6.2.2).
 LITE_CORE_FILE = "lite_core.py"
 LITE_CORE_VERSION = "6.2.2"
-LITE_CORE_SHA256 = "9de59e80f5ffa1d8ce380351d950dd612660d998020f791e483b17493f95a63d"
+LITE_CORE_SHA256 = "19ae92e5a3dcc0e3d1508ee331f303dfa79cd4f35b8dad511026fa5859f1871d"
+AUTOMATON_FILE = "session_automaton.json"
+AUTOMATON_VERSION = 1
+AUTOMATON_SHA256 = "7aab3625e5366bdda7823f09e0096bb45675a84c46ec928e81b0bd2be537702f"
+_AUTOMATON = {"doc": None, "status": "unloaded"}
 IS_WINDOWS = os.name == "nt"
 
 
@@ -417,6 +421,12 @@ RULES = {
                "Initiating financial charges, payouts, or deleting cloud infrastructure via MCP tools is owner-only."),
     "OP-CANARY": ("canary", "STOP",
                   "Verification canary: this string exists only to prove the gate is wired."),
+    "OP-LATTICE": ("lattice-flow-control", "STOP",
+                   "Information-flow lattice forbids uncommitted labels or tainted secret/untrusted flows."),
+    "OP-TOCTOU": ("check-to-use-hash-bind", "STOP",
+                  "File bytes changed between the check receipt and this consequential use."),
+    "OP-SPAWN": ("every-spawn-gate", "STOP",
+                 "Agent-triggered package installs must disable lifecycle scripts unless owner-approved."),
     # shadow-only candidates: recorded, never blocking, promote after reviewing the log
     "OP-S01": ("work-loss", "SHADOW", "git reset --hard / clean / branch -D can discard uncommitted work."),
     "OP-S02": ("outbound-comms", "SHADOW", "Sending a message/email/forward on the owner's behalf."),
@@ -1427,14 +1437,15 @@ def check_local_model_mutate(toks):
 
 MIGRATION_PATH_RE = re.compile(r"(?:^|/)(?:migrations/|db/migrate/|alembic/versions/|prisma/migrations/|drizzle/|supabase/migrations/).*\.(?:sql|py)$")
 def check_migration_rewrite(path, cwd):
-    if not path or not MIGRATION_PATH_RE.search(path):
+    cp = canon(path)
+    if not cp or not MIGRATION_PATH_RE.search(cp):
         return None
-    if path.endswith("__init__.py"):
+    if cp.endswith("__init__.py"):
         return None
-    p = resolve(path, cwd)
+    p = resolve(cp, cwd)
     root = git_top(p)
     if root:
-        rel = os.path.relpath(p, root)
+        rel = os.path.relpath(p, root).replace("\\", "/")
         out = git_out(root, ["cat-file", "-e", "HEAD:" + rel])
         if out is not None:
             return "modifies applied database migration %s tracked in HEAD" % os.path.basename(p)
@@ -1453,7 +1464,7 @@ def check_lockfile_destroy(toks, cwd):
                 p = resolve(a, cwd)
                 root = git_top(p)
                 if root:
-                    rel = os.path.relpath(p, root)
+                    rel = os.path.relpath(p, root).replace("\\", "/")
                     out = git_out(root, ["cat-file", "-e", "HEAD:" + rel])
                     if out is not None:
                         return "deletes tracked package lockfile %s" % base
@@ -1619,7 +1630,7 @@ def check_checker_delete(toks, cwd):
                 p = resolve(a, cwd)
                 root = git_top(p)
                 if root:
-                    rel = os.path.relpath(p, root)
+                    rel = os.path.relpath(p, root).replace("\\", "/")
                     out = git_out(root, ["cat-file", "-e", "HEAD:" + rel])
                     if out is not None:
                         return "deletes tracked typechecker/linter config %s" % base
@@ -2116,7 +2127,7 @@ def check_governance_weaken(toks, cwd):
                 p = resolve(a, cwd)
                 root = git_top(p)
                 if root:
-                    rel = os.path.relpath(p, root)
+                    rel = os.path.relpath(p, root).replace("\\", "/")
                     out = git_out(root, ["cat-file", "-e", "HEAD:" + rel])
                     if out is not None:
                         return "deletes tracked governance file %s" % base
@@ -3173,9 +3184,15 @@ def split_segments(cmd):
     return [s.strip() for s in segs if s.strip()]
 
 
+def _win_protect_paths(s):
+    if not IS_WINDOWS or "\\" not in s:
+        return s
+    return re.sub(r'\\(?![\\"\'$`])', "/", s)
+
+
 def tokenize(seg):
     try:
-        return shlex.split(seg, posix=True)
+        return shlex.split(_win_protect_paths(seg), posix=True)
     except ValueError:
         return seg.split()
 
@@ -6075,11 +6092,20 @@ PRECIOUS_RE = re.compile(r"(?:^|/)(?:\.env(?:\.[\w.\-]+)?|[^/]*\.(?:sqlite3?|db|
 
 def git_top(path):
     """The repository a path sits in: the nearest folder at or above it that holds .git. None outside one."""
-    p = path if os.path.isdir(path) else posixpath.dirname(path.rstrip("/"))
+    p = canon(str(path or ""))
+    if not p:
+        return None
+    if not os.path.isdir(p):
+        p = canon(posixpath.dirname(p.rstrip("/")))
     for _ in range(40):
-        if p and os.path.exists(pj(p, ".git")):
+        if not p:
+            return None
+        if IS_WINDOWS and re.fullmatch(r"[A-Za-z]:/?", p):
+            root_p = p[0].upper() + ":/"
+            return root_p if os.path.exists(root_p + ".git") else None
+        if os.path.exists(pj(p, ".git")):
             return p
-        up = posixpath.dirname(p.rstrip("/")) if p else ""
+        up = posixpath.dirname(p.rstrip("/"))
         if not up or up == p:
             return None
         p = up
@@ -7395,7 +7421,7 @@ def chain_reach(payload, cwd, effects, seen=None):
     step = lambda m: ("earlier in this same command, `%s`" % str(m.get("preview", ""))[:90]) if m.get("same") else \
         "at %s `%s` (receipt %s)" % (when(m), str(m.get("preview", ""))[:90], m.get("receipt") or "n/a")
     last = lambda kind, test=lambda m: True: next((m for m in reversed(seen) if m.get("kind") == kind and test(m)), None)
-    link_at = lambda path: last("symlinked", lambda m: m.get("path") == path)
+    link_at = lambda path: last("symlinked", lambda m: same_path(m.get("path"), path))
     through = lambda wp, m: ("OP-019", "write through %s, a link this session made to %s %s" % (wp, m.get("target"), step(m)), CHAIN_HINT)
     # a write through a link an earlier call made
     written = list(write_paths(tool, ti, cwd)) if tool in WRITE_TOOLS else []
@@ -7418,8 +7444,9 @@ def chain_reach(payload, cwd, effects, seen=None):
             prog, args = os.path.basename(bare[0]), bare[1:]
             plain = [a for a in args if not a.startswith("-")]
             # running a file this session fetched
-            for ran in chain_runs(bare, seg, cwd, piped, [x.get("path") for x in seen if x.get("kind") == "fetched"]):
-                m = last("fetched", lambda x, ran=ran: x.get("path") == ran)
+            fetched_paths = [canon(x.get("path")) for x in seen if x.get("kind") == "fetched" and x.get("path")]
+            for ran in chain_runs(bare, seg, cwd, piped, fetched_paths):
+                m = last("fetched", lambda x, ran=ran: same_path(x.get("path"), ran))
                 if m:
                     found.append(("OP-019", "running %s, which this session fetched from %s %s" % (ran, m.get("url"), step(m)),
                                   ("Fetch it on its own first, read the file" if m.get("same") else "Read the file")
@@ -10774,10 +10801,30 @@ def _probe_secure_enclave():
 
 
 def _probe_cng():
-    """No CNG signature unless NCrypt reports the key as non-exportable and export fails."""
+    """No CNG signature unless NCrypt reports an explicit hardware key as non-exportable."""
+    key_name = os.environ.get("OPERATOR_CNG_KEY")
+    if not key_name:
+        return None
     try:
         import ctypes
-        ctypes.WinDLL("ncrypt")
+        import ctypes.wintypes as wt
+        ncrypt = ctypes.WinDLL("ncrypt")
+        h_prov = wt.HANDLE()
+        if ncrypt.NCryptOpenStorageProvider(ctypes.byref(h_prov), "Microsoft Platform Crypto Provider", 0) != 0:
+            return None
+        try:
+            h_key = wt.HANDLE()
+            if ncrypt.NCryptOpenKey(h_prov, ctypes.byref(h_key), key_name, 0, 0) != 0:
+                return None
+            policy = wt.DWORD(0)
+            cb = wt.DWORD(0)
+            rc = ncrypt.NCryptGetProperty(h_key, "Export Policy", ctypes.byref(policy), ctypes.sizeof(policy), ctypes.byref(cb), 0)
+            if rc != 0 or policy.value != 0:
+                ncrypt.NCryptFreeObject(h_key)
+                return None
+            ncrypt.NCryptFreeObject(h_key)
+        finally:
+            ncrypt.NCryptFreeObject(h_prov)
     except Exception:
         return None
     return None
@@ -10952,6 +10999,511 @@ def consume_permit(action_digest, session):
         return pm
     except Exception:
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Wave 13 Operator Proof Kernel (#674..#690): lattice flow, handle vaults,
+# pinned automaton, subagent ceiling, TOCTOU hash bind, post-state assertion,
+# every-spawn script gate, and untrusted-memory quarantine.
+# --------------------------------------------------------------------------- #
+LATTICE_RANK = {"public": 0, "session": 1, "untrusted-bytes": 2, "secret": 3}
+EXTERNAL_READ_TOOLS = {"webfetch", "web_fetch", "fetch", "http_get", "curl", "read_url", "read_resource"}
+CONSEQUENTIAL_TOOLS = SHELL_TOOLS | WRITE_TOOLS | {"calldynamictool", "callmcptool"}
+PKG_INSTALL_PROGS = {"npm": ("install", "i", "add", "ci"), "pnpm": ("install", "i", "add"),
+                     "yarn": ("add", "install"), "bun": ("add", "install", "i"),
+                     "pip": ("install",), "pip3": ("install",)}
+AMBIENT_PUB_ENV = ("NPM_TOKEN", "NODE_AUTH_TOKEN", "PYPI_TOKEN", "TWINE_PASSWORD", "CARGO_REGISTRY_TOKEN")
+UNTRUSTED_MEM_PROMOTE = {}
+
+
+def load_automaton():
+    """Load the SHA256-pinned session automaton (#683). Mismatch refuses to allow."""
+    if _AUTOMATON["doc"] is not None:
+        return _AUTOMATON["doc"]
+    path = pj(os.path.dirname(os.path.abspath(__file__)), AUTOMATON_FILE)
+    if not os.path.exists(path):
+        alt = pj(OP_HOME, "gate", AUTOMATON_FILE)
+        if os.path.exists(alt):
+            path = alt
+    try:
+        raw = open(path, "rb").read()
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != AUTOMATON_SHA256:
+            _AUTOMATON["status"] = "hash-mismatch:%s" % digest[:16]
+            return None
+        doc = json.loads(raw.decode("utf-8"))
+        if not isinstance(doc, dict) or not isinstance(doc.get("states"), dict):
+            _AUTOMATON["status"] = "invalid-image"
+            return None
+        _AUTOMATON["doc"] = doc
+        _AUTOMATON["status"] = "pinned:%s" % digest[:16]
+        return doc
+    except Exception:
+        _AUTOMATON["status"] = "unreadable"
+        return None
+
+
+def file_bytes_sha256(path):
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            while True:
+                blk = f.read(65536)
+                if not blk:
+                    break
+                h.update(blk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def vault_dir():
+    return pj(OP_HOME, "vault")
+
+
+def quarantine_dir():
+    return pj(OP_HOME, "quarantine")
+
+
+def vault_store_raw(digest, tool, resp, label):
+    if not proof_handle(digest):
+        return None
+    vdir = vault_dir()
+    os.makedirs(vdir, mode=0o700, exist_ok=True)
+    vp = pj(vdir, digest + ".json")
+    tmp = vp + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"receipt": digest, "handle": proof_handle(digest), "tool": tool,
+                   "label": label, "raw": resp, "ts": time.time()}, f, sort_keys=True)
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, vp)
+    return vp
+
+
+def classify_result_label(payload, cwd):
+    """Assign lattice label: public | session | untrusted-bytes | secret (#677)."""
+    tool_raw = str(payload.get("tool_name") or payload.get("toolName") or "")
+    tl = tool_raw.lower()
+    ti = tool_input_of(payload)
+    target = str(ti.get("file_path") or ti.get("path") or ti.get("target_file") or "")
+    if target:
+        p = resolve(target, cwd)
+        if CRED_STORE_FILE_RE.search(p) or PRIVATE_KEY_NAMES.search(p) or "/.gnupg/" in p or "/.ssh/" in p or "/.aws/" in p:
+            return "secret"
+        if tl in ("read", "read_file", "view_file", "view"):
+            return "session" if cwd and is_inside(p, cwd) else "untrusted-bytes"
+    if tl in EXTERNAL_READ_TOOLS or tl.startswith("mcp__") or tl in ("callmcptool", "calldynamictool", "subagent"):
+        return "untrusted-bytes"
+    if tl in SHELL_TOOLS or tl in POWERSHELL_TOOLS:
+        cmd = str(ti.get("command") or ti.get("cmd") or "")
+        for tok in tokenize(cmd):
+            p = resolve(tok, cwd)
+            if CRED_STORE_FILE_RE.search(p) or PRIVATE_KEY_NAMES.search(p) or "/.aws/credentials" in p or "/.ssh/id_" in p:
+                return "secret"
+        if _hosts(cmd) or re.search(r"\b(curl|wget|fetch|http|https|xh)\b", cmd):
+            return "untrusted-bytes"
+    return "session" if tl in WRITE_TOOLS else "public"
+
+
+def session_lattice_state(session):
+    """Reconstruct session lattice ceiling and uncommitted labels from receipt chain (#678)."""
+    if not session:
+        return {"label": "public", "source_receipt": None, "uncommitted": None, "denied_tools": set()}
+    label = "public"
+    source_rd = None
+    uncommitted = None
+    denied_tools = set()
+    rows = receipt_rows()
+    for rec in rows:
+        if rec.get("session") != session:
+            continue
+        dec = rec.get("decision")
+        if dec == "TRUST_RESET":
+            label, source_rd, uncommitted = "public", None, None
+            denied_tools = set()
+            continue
+        if rec.get("label_uncommitted"):
+            uncommitted = rec.get("digest") or rec.get("receipt_digest")
+        rl = rec.get("result_label")
+        if rl in LATTICE_RANK and LATTICE_RANK[rl] >= LATTICE_RANK[label]:
+            label = rl
+            source_rd = rec.get("digest")
+        if dec == "SUBAGENT_CHILD_DENY" and rec.get("denied_tool"):
+            denied_tools.add(str(rec["denied_tool"]).lower())
+    return {"label": label, "source_receipt": source_rd, "uncommitted": uncommitted, "denied_tools": denied_tools}
+
+
+def _call_has_egress(payload, effects):
+    ti = tool_input_of(payload)
+    blob = json.dumps(ti, ensure_ascii=False)
+    for e in effects or []:
+        prog = os.path.basename(str(e.get("prog") or "")).lower()
+        args = [str(a) for a in e.get("args") or []]
+        seg = str(e.get("seg") or "")
+        if _sends_out(prog, args, seg):
+            return _sends_out(prog, args, seg)
+        if _hosts(seg) and any(not LOCAL_HOST_RE.match(h) for h in _hosts(seg)):
+            return _hosts(seg)[0]
+    tool = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+    if tool.startswith("mcp__") or tool in EXTERNAL_READ_TOOLS:
+        hosts = [h for h in _hosts(blob) if not LOCAL_HOST_RE.match(h)]
+        if hosts:
+            return hosts[0]
+    return None
+
+
+def lattice_join_hits(payload, cwd, effects):
+    """Stop consequential calls when active lattice join forbids the flow (#678, #682)."""
+    sid = session_of(payload)
+    if not sid:
+        return []
+    st = session_lattice_state(sid)
+    if st["uncommitted"]:
+        return [("OP-LATTICE", "prior tool result receipt op-receipt-%s has uncommitted label (fail-closed)"
+                 % str(st["uncommitted"])[:16],
+                 "Re-run label check or run trust-reset from owner terminal.")]
+    tool = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+    if tool and tool in st["denied_tools"]:
+        return [("OP-054", "parent cannot invoke tool `%s` denied inside subagent ceiling" % tool,
+                 "Subagent privilege ceiling prevents escalating denied child tools to parent.")]
+    egress = _call_has_egress(payload, effects)
+    if st["label"] == "secret" and egress and st["source_receipt"]:
+        return [("OP-033", "secret-labeled session state (op-receipt-%s) cannot flow to outbound egress `%s`"
+                 % (str(st["source_receipt"])[:16], egress),
+                 "Keep secret material off outbound channels or get an explicit owner permit.")]
+    if st["label"] == "untrusted-bytes" and st["source_receipt"]:
+        if tool in SHELL_TOOLS or tool in POWERSHELL_TOOLS:
+            return [("OP-LATTICE", "untrusted-bytes input (op-receipt-%s) blocks unapproved shell execution"
+                     % str(st["source_receipt"])[:16],
+                     "Inspect untrusted result handle first or obtain an owner permit.")]
+    return []
+
+
+def spawn_lifecycle_hits(effects, ti, tool, cwd):
+    """One gate for every spawn: block lifecycle scripts on agent package installs (#686)."""
+    if os.environ.get("OPERATOR_STRICT_SPAWN") != "1" and tool not in SHELL_TOOLS:
+        return []
+    hits = []
+    for e in effects or []:
+        prog = os.path.basename(str(e.get("prog") or "")).lower()
+        args = [str(a) for a in e.get("args") or []]
+        flags = [str(f) for f in e.get("flags") or []]
+        if prog in PKG_INSTALL_PROGS and args and args[0] in PKG_INSTALL_PROGS[prog]:
+            if os.environ.get("OPERATOR_STRICT_SPAWN") == "1" and "--ignore-scripts" not in flags:
+                hits.append(("OP-SPAWN", "%s %s may run unreviewed lifecycle scripts without --ignore-scripts" % (prog, args[0]),
+                             "Re-run with `--ignore-scripts` or approve the package install explicitly."))
+    return hits
+
+
+def check_to_use_path_candidates(payload, cwd, effects):
+    """Paths an execution/chmod call will consume."""
+    cands = []
+    for e in effects or []:
+        prog = os.path.basename(str(e.get("prog") or "")).lower()
+        args = [str(a) for a in e.get("args") or []]
+        plain = [a for a in args if not a.startswith("-")]
+        if prog in ("bash", "sh", "zsh", "python", "python3", "node", "ruby", "chmod", "source", ".") and plain:
+            cands.append(resolve(plain[-1] if prog == "chmod" else plain[0], e.get("cwd") or cwd))
+    cmd = _payload_command(payload)
+    if cmd:
+        for seg in split_segments(cmd):
+            _, _, _, bare, _ = root_form(tokenize(seg))
+            if bare:
+                prog = os.path.basename(bare[0]).lower()
+                plain = [a for a in bare[1:] if not a.startswith("-")]
+                if prog in ("bash", "sh", "zsh", "python", "python3", "node", "ruby", "chmod", "source", ".") and plain:
+                    cands.append(resolve(plain[-1] if prog == "chmod" else plain[0], cwd))
+    return [c for c in dict.fromkeys(cands) if c and not c.startswith(UNKNOWN_CWD)]
+
+
+def check_to_use_record(path, cwd, receipt_digest):
+    p = resolve(path, cwd)
+    h = file_bytes_sha256(p)
+    if not p or not h:
+        return None
+    sdir = pj(OP_HOME, "state")
+    os.makedirs(sdir, mode=0o700, exist_ok=True)
+    cp = pj(sdir, "checked-hashes.json")
+    try:
+        db = json.load(open(cp, encoding="utf-8"))
+    except Exception:
+        db = {}
+    db[canon(p)] = {"sha256": h, "receipt": receipt_digest, "ts": time.time(), "fused": False}
+    tmp = cp + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(db, f, sort_keys=True)
+    os.replace(tmp, cp)
+    return h
+
+
+def check_to_use_hits(payload, cwd, effects):
+    """Stop if a checked file's bytes changed between check receipt and use (#688)."""
+    cp = pj(OP_HOME, "state", "checked-hashes.json")
+    try:
+        db = json.load(open(cp, encoding="utf-8"))
+    except Exception:
+        return []
+    hits = []
+    for cpath in check_to_use_path_candidates(payload, cwd, effects):
+        entry = db.get(canon(cpath))
+        if not entry or entry.get("fused"):
+            continue
+        now_h = file_bytes_sha256(cpath)
+        if now_h and now_h != entry.get("sha256"):
+            hits.append(("OP-TOCTOU", "bytes of %s moved since check receipt op-receipt-%s (expected %s, got %s)"
+                         % (os.path.basename(cpath), str(entry.get("receipt") or "")[:16],
+                            entry.get("sha256", "")[:12], now_h[:12]),
+                         "Re-check the modified bytes before running or ask the owner to fuse check and use."))
+    return hits
+
+
+def snapshot_prestate(call_id, cwd, targets=None):
+    """Snapshot tracked files + modes before an allowed shell call (#689)."""
+    if not call_id or not cwd or not os.path.isdir(cwd):
+        return None
+    sdir = pj(OP_HOME, "state", "prestate")
+    os.makedirs(sdir, mode=0o700, exist_ok=True)
+    snap = {"cwd": canon(cwd), "targets": [canon(t) for t in (targets or [])], "tracked": {}, "modes": {}}
+    root = git_top(cwd)
+    if root:
+        listed = git_out(root, ["ls-files"]) or ""
+        for rel in listed.splitlines()[:500]:
+            fp = pj(root, rel)
+            snap["tracked"][rel] = os.path.exists(fp)
+            if os.path.exists(fp):
+                try:
+                    snap["modes"][rel] = os.stat(fp).st_mode & 0o777
+                except OSError:
+                    pass
+    sp = pj(sdir, digest_of(str(call_id))[:24] + ".json")
+    with open(sp, "w", encoding="utf-8") as f:
+        json.dump(snap, f, sort_keys=True)
+    return sp
+
+
+def verify_poststate(payload, cwd, call_id):
+    """Deterministic filesystem assertion after allowed shell execution (#689)."""
+    sdir = pj(OP_HOME, "state", "prestate")
+    sp = pj(sdir, digest_of(str(call_id or ""))[:24] + ".json")
+    if not os.path.exists(sp):
+        return []
+    try:
+        snap = json.load(open(sp, encoding="utf-8"))
+        os.remove(sp)
+    except Exception:
+        return []
+    root = git_top(snap.get("cwd") or cwd)
+    allowed_t = set(snap.get("targets") or [])
+    failures = []
+    if root:
+        for rel, existed in (snap.get("tracked") or {}).items():
+            fp = pj(root, rel)
+            if existed and not os.path.exists(fp) and canon(fp) not in allowed_t:
+                failures.append("unrelated tracked file deleted: %s" % rel)
+            elif os.path.exists(fp):
+                try:
+                    mode_now = os.stat(fp).st_mode & 0o777
+                    old_mode = (snap.get("modes") or {}).get(rel, mode_now)
+                    if (mode_now & 0o002) and not (old_mode & 0o002):
+                        failures.append("permission widened to world-writable on %s" % rel)
+                except OSError:
+                    pass
+    return failures
+
+
+def save_quarantined_memory(content, session, source_label, origin_receipt=None):
+    """Store memory distilled from untrusted-bytes as quarantined (#690)."""
+    qdir = quarantine_dir()
+    os.makedirs(qdir, mode=0o700, exist_ok=True)
+    quarantined = source_label in ("untrusted-bytes", "secret")
+    hid = digest_of({"content": content, "session": session, "source": source_label, "ts": time.time()})[:16]
+    handle = "op-qmem-" + hid
+    rec = {"handle": handle, "content": content, "session": session, "source_label": source_label,
+           "quarantined": quarantined, "origin_receipt": origin_receipt, "ts": time.time()}
+    with open(pj(qdir, handle + ".json"), "w", encoding="utf-8") as f:
+        json.dump(rec, f, sort_keys=True)
+    return rec
+
+
+def recall_quarantined_memory(handle):
+    p = pj(quarantine_dir(), handle + ".json")
+    if not os.path.exists(p):
+        return None
+    try:
+        return json.load(open(p, encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def post_hook_main(argv, payload=None):
+    """PostToolUse entrypoint for #677 label, #681 handle rewrite, #688 hash record, #689 FS assertion."""
+    source = "claude"
+    if "--source" in argv:
+        try:
+            source = argv[argv.index("--source") + 1]
+        except IndexError:
+            pass
+    if payload is None:
+        raw = read_stdin()
+        try:
+            payload = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            return 0
+    if not isinstance(payload, dict):
+        return 0
+    tool = str(payload.get("tool_name") or payload.get("toolName") or "")
+    cwd = canon(payload.get("cwd") or os.getcwd())
+    sid = session_of(payload)
+    cid = call_of(payload)
+    label = classify_result_label(payload, cwd)
+    resp = payload.get("tool_response") or payload.get("toolResponse") or payload.get("result") or ""
+    resp_bytes = resp if isinstance(resp, str) else json.dumps(resp, sort_keys=True)
+    rec = {"source": source, "session": sid, "call": cid, "cwd": cwd, "tool": tool,
+           "decision": "POST_TOOL", "result_label": label,
+           "raw_bytes_sha256": hashlib.sha256(resp_bytes.encode("utf-8", errors="replace")).hexdigest()}
+    if label == "public" and payload.get("_force_label_fail"):
+        rec.pop("result_label", None)
+        rec["label_uncommitted"] = True
+    fs_fails = verify_poststate(payload, cwd, cid)
+    if fs_fails:
+        rec["post_state_failed"] = True
+        rec["post_state_failures"] = fs_fails
+    rd = write_receipt(rec)
+    if rd is None:
+        # Fallback fail-closed marker so pre-hook sees uncommitted label (#677/#678)
+        sdir = pj(OP_HOME, "state")
+        os.makedirs(sdir, mode=0o700, exist_ok=True)
+        with open(pj(sdir, "uncommitted.json"), "w", encoding="utf-8") as f:
+            json.dump({"session": sid, "call": cid, "reason": "receipt_write_failed"}, f)
+        return 0
+    # Record byte hash for Read / check calls (#688)
+    ti = tool_input_of(payload)
+    target = str(ti.get("file_path") or ti.get("path") or ti.get("target_file") or "")
+    if tool.lower() in ("read", "read_file", "view_file", "view") and target:
+        check_to_use_record(target, cwd, rd)
+    if label in ("secret", "untrusted-bytes") and resp_bytes:
+        vault_store_raw(rd, tool, resp, label)
+        handle = proof_handle(rd)
+        transport = str(payload.get("transport") or "local").lower()
+        tl = tool.lower()
+        is_mcp = tl.startswith("mcp__") or tl in ("callmcptool", "calldynamictool")
+        sub_status = "substituted"
+        if transport in ("http", "cloud-http", "sse"):
+            sub_status = "rewrite_ignored"
+        elif source == "cursor" and not is_mcp:
+            sub_status = "rewrite_ignored"
+        write_receipt({"source": source, "session": sid, "call": cid, "decision": "RESULT_HANDLE",
+                       "target_receipt": rd, "handle": handle, "rewrite_status": sub_status})
+        if sub_status == "substituted":
+            msg = "Result replaced by %s (%s). Raw bytes kept for owner inspection." % (handle, label)
+            if source == "claude":
+                sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": msg}}) + "\n")
+            elif source == "cursor" and is_mcp:
+                sys.stdout.write(json.dumps({"updated_mcp_tool_output": msg}) + "\n")
+            elif source == "codex":
+                sys.stdout.write(json.dumps({"decision": "block", "reason": msg}) + "\n")
+    return 0
+
+
+def subagent_hook_main(argv, stage, payload=None):
+    """SubagentStart / SubagentStop fail-closed privilege ceiling (#682)."""
+    source = "claude"
+    if "--source" in argv:
+        try:
+            source = argv[argv.index("--source") + 1]
+        except IndexError:
+            pass
+    if payload is None:
+        raw = read_stdin()
+        try:
+            payload = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            payload = {}
+    sid = session_of(payload) or "subagent"
+    parent = str(payload.get("parent_session") or sid)
+    if stage == "start":
+        cmd = _payload_command(payload)
+        flags = " ".join(str(x) for x in (payload.get("flags") or [])) + " " + cmd
+        if (payload.get("permissions_stripped") or payload.get("bypass_permissions")
+                or "--dangerously-skip-permissions" in flags or payload.get("gate_disabled")):
+            rd = write_receipt({"source": source, "session": sid, "decision": "STOP",
+                                "commitment": "OP-054", "rule": "no-agent-bypass-spawn",
+                                "action_preview": redact(flags[:200])})
+            stop(["OPERATOR: STOPPED (OP-054 subagent-privilege-ceiling)",
+                  "Why: child agent spawned with approvals or gate stripped.",
+                  "No child agent was created."] + proof_lines(rd, "OP-054"))
+        parent_state = session_lattice_state(parent)
+        write_receipt({"source": source, "session": sid, "parent_session": parent,
+                       "decision": "SUBAGENT_START", "result_label": parent_state["label"]})
+        return 0
+    # SubagentStop: returned child output is strictly untrusted-bytes until parent gate joins it
+    rd = write_receipt({"source": source, "session": parent, "subagent_session": sid,
+                        "decision": "SUBAGENT_STOP", "result_label": "untrusted-bytes",
+                        "action_preview": redact(str(payload.get("last_assistant_message") or "")[:200])})
+    return 0
+
+
+def cmd_promote(argv):
+    """Owner command: promote a quarantined untrusted-bytes memory (#690)."""
+    if agent_session() or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("Refusing: only the owner in an interactive terminal may promote quarantined memory.")
+        return 3
+    if not argv or not argv[0].startswith("op-qmem-"):
+        print("usage: %s promote op-qmem-<16hex>" % self_cmd())
+        return 2
+    rec = recall_quarantined_memory(argv[0])
+    if not rec:
+        print("No quarantined memory %s." % argv[0])
+        return 4
+    rec["quarantined"] = False
+    rec["promoted_ts"] = time.time()
+    p = pj(quarantine_dir(), argv[0] + ".json")
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(rec, f, sort_keys=True)
+    rd = write_receipt({"decision": "MEMORY_PROMOTED", "handle": argv[0], "source": "owner-tty"})
+    print("Promoted %s (receipt %s)." % (argv[0], (rd or "")[:16]))
+    return 0
+
+
+def cmd_trust_reset(argv):
+    if agent_session() or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("Refusing: owner terminal required.")
+        return 3
+    if not argv:
+        print("usage: %s trust-reset <session>" % self_cmd())
+        return 2
+    write_receipt({"decision": "TRUST_RESET", "session": argv[0], "source": "owner-tty"})
+    print("Reset session lattice for %s." % argv[0])
+    return 0
+
+
+def cmd_fuse(argv):
+    """Owner command: fuse check and use into one capability for a checked path (#688)."""
+    if agent_session() or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("Refusing: owner terminal required.")
+        return 3
+    if not argv:
+        print("usage: %s fuse <path>" % self_cmd())
+        return 2
+    cp = pj(OP_HOME, "state", "checked-hashes.json")
+    target = canon(resolve(argv[0], os.getcwd()))
+    try:
+        db = json.load(open(cp, encoding="utf-8"))
+    except Exception:
+        db = {}
+    h = file_bytes_sha256(target)
+    if not h:
+        print("Cannot hash %s." % target)
+        return 4
+    db[target] = {"sha256": h, "receipt": "owner-fused", "ts": time.time(), "fused": True}
+    with open(cp, "w", encoding="utf-8") as f:
+        json.dump(db, f, sort_keys=True)
+    write_receipt({"decision": "CAPABILITY_FUSED", "path": target, "sha256": h, "source": "owner-tty"})
+    print("Fused check+use for %s." % short_home(target))
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -11177,6 +11729,13 @@ def hook_main(argv):
             if cannot:
                 strict_stop(source, raw, cannot)
         payload = json.loads(raw) if raw.strip() else {}
+        evt = str(payload.get("hook_event_name") or "") if isinstance(payload, dict) else ""
+        if evt in ("PostToolUse", "AfterTool", "postToolUse"):
+            return post_hook_main(["--source", source] if "--source" not in argv else argv, payload=payload)
+        if evt in ("SubagentStart", "subagentStart"):
+            return subagent_hook_main(argv, "start", payload=payload)
+        if evt in ("SubagentStop", "subagentStop"):
+            return subagent_hook_main(argv, "stop", payload=payload)
         if source == "claude" and isinstance(payload, dict) and payload.get("cursor_version"):
             # Cursor also runs ~/.claude/settings.json: this is a Cursor call, recorded as one
             source = "cursor"
@@ -11206,6 +11765,13 @@ def hook_main(argv):
         hits += guarded(brake_hit, [], payload, tool, fx_effects)
         hits += guarded(turnover_hit, [], payload, tool, fx_effects)
         hits += guarded(test_claim_hit, [], payload, tool, cwd)
+        # Wave 13 Proof Kernel gates (#678, #683, #686, #688)
+        if load_automaton() is None and global_mode() == "enforce":
+            hits.append(("OP-024", "pinned session automaton failed integrity check (%s); fail-closed" % _AUTOMATON.get("status"),
+                         "Restore the pinned session_automaton.json image from the verified install."))
+        hits += guarded(lattice_join_hits, [], payload, cwd, fx_effects)
+        hits += guarded(spawn_lifecycle_hits, [], fx_effects, payload.get("tool_input") or {}, tool, cwd)
+        hits += guarded(check_to_use_hits, [], payload, cwd, fx_effects)
         BRAKE_TRIPPED["sid"] = ""
         CHAIN_PENDING["sid"] = session_of(payload)
         CHAIN_PENDING["marks"] = guarded(chain_marks, [], payload, cwd, fx_effects)
@@ -11280,12 +11846,20 @@ def hook_main(argv):
                 if rewind_must_hold(kept) and global_mode() == "enforce":
                     rewind_hold(source, payload, cwd, tool, preview, meta, kept)   # stops unless the owner allowed it
                     return 0
-                write_receipt(dict({"source": source, "cwd": cwd, "tool": tool, "decision": "PASS", "commitments": [],
-                                    "session": session_of(payload), "call": call_of(payload),
-                                    "action_preview": redact(preview)}, **({"rewind": kept} if kept else {}),
-                                   **({"tests": True} if ran_tests else {}),
-                                   **({"protected": list(PROTECTED_EVIDENCE)} if PROTECTED_EVIDENCE else {})))
+                rd_pass = write_receipt(dict({"source": source, "cwd": cwd, "tool": tool, "decision": "PASS", "commitments": [],
+                                              "session": session_of(payload), "call": call_of(payload),
+                                              "action_preview": redact(preview),
+                                              "automaton_hash": (AUTOMATON_SHA256[:16] if _AUTOMATON.get("doc") else None)},
+                                             **({"rewind": kept} if kept else {}),
+                                             **({"tests": True} if ran_tests else {}),
+                                             **({"protected": list(PROTECTED_EVIDENCE)} if PROTECTED_EVIDENCE else {})))
                 rewind_note(kept)
+                if rd_pass and call_of(payload) and tool.lower() in SHELL_TOOLS:
+                    snapshot_prestate(call_of(payload), cwd, [t for e in fx_effects for t in (e.get("targets") or [])])
+                ti_pass = tool_input_of(payload)
+                read_t = str(ti_pass.get("file_path") or ti_pass.get("path") or ti_pass.get("target_file") or "")
+                if rd_pass and read_t and tool.lower() in ("read", "read_file", "view_file", "view"):
+                    check_to_use_record(read_t, cwd, rd_pass)
             return finish_allow(source, payload, meta)
 
         gmode = global_mode()
@@ -13175,16 +13749,17 @@ def _payload_command(payload):
 
 
 def _command_launches(cmd, artifact):
-    try:
-        tokens = shlex.split(cmd)
-    except ValueError:
-        tokens = cmd.split()
+    tokens = tokenize(cmd)
     if not tokens or not artifact:
         return False
     prog = os.path.basename(tokens[0])
-    if os.path.abspath(tokens[0]) == os.path.abspath(artifact) or tokens[0] == artifact:
+    art_c = canon(os.path.abspath(artifact))
+    art_raw = canon(artifact)
+    if canon(os.path.abspath(tokens[0])) == art_c or canon(tokens[0]) == art_raw:
         return True
-    if prog in ("node", "python", "python3", "deno", "bun") and artifact in tokens[1:]:
+    if prog in ("node", "python", "python3", "deno", "bun") and any(
+        canon(t) == art_raw or canon(os.path.abspath(t)) == art_c for t in tokens[1:]
+    ):
         return True
     return False
 
@@ -13297,6 +13872,12 @@ def main():
     argv = sys.argv[1:]
     if not argv or argv[0] == "hook":
         sys.exit(hook_main(argv[1:]))
+    if argv[0] == "post-hook":
+        sys.exit(post_hook_main(argv[1:]))
+    if argv[0] == "subagent-start":
+        sys.exit(subagent_hook_main(argv[1:], "start"))
+    if argv[0] == "subagent-stop":
+        sys.exit(subagent_hook_main(argv[1:], "stop"))
     cmd = {"approve": cmd_approve, "verify": cmd_verify, "status": cmd_status, "corpus": cmd_corpus,
            "test": cmd_corpus, "install": cmd_install, "uninstall": cmd_uninstall,
            "commitments": cmd_commitments,
@@ -13305,7 +13886,8 @@ def main():
            "check": cmd_check, "laws": cmd_laws, "upgrade": cmd_upgrade, "coverage": cmd_coverage,
            "rewind": cmd_rewind, "append": cmd_append, "protect": cmd_protect, "protected": cmd_protected,
            "brake": cmd_brake, "turnover": cmd_turnover, "briefing": cmd_briefing,
-           "mcp-pin": cmd_mcp_pin}.get(argv[0])
+           "mcp-pin": cmd_mcp_pin, "promote": cmd_promote, "trust-reset": cmd_trust_reset,
+           "fuse": cmd_fuse}.get(argv[0])
     if not cmd:
         print("usage: operator-gate hook|check|approve|verify|status|corpus|install|uninstall|upgrade|"
               "commitments|laws|briefing|coverage|rewind|append|protect|protected|brake|turnover|mcp-pin|board|letter|almost-forgot|onboard|replay|mode|strict")

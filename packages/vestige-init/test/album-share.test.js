@@ -73,13 +73,21 @@ test('clipboard commands are built as argument lists, never shell strings', () =
 });
 
 // Security review 2026-10-18, finding 3: an export never writes through a planted link.
-test('a planted symlink at the export name is replaced, never written through', () => {
+test('a planted symlink at the export name is replaced, never written through', (t) => {
   const dir = path.join(OUT, 'symlink');
   fs.mkdirSync(dir, { recursive: true });
   const victim = path.join(dir, 'victim.txt');
   fs.writeFileSync(victim, 'keep me');
   const name = 'vestige-rem-0123abcd.png';
-  fs.symlinkSync(victim, path.join(dir, name));
+  try {
+    fs.symlinkSync(victim, path.join(dir, name));
+  } catch (err) {
+    if (process.platform === 'win32' && err && err.code === 'EPERM') {
+      t.skip('Windows symlink privilege unavailable');
+      return;
+    }
+    throw err;
+  }
   const file = share.saveArtifact(Buffer.from('PNGDATA'), name, { VESTIGE_REM_OUT: dir });
   assert.equal(fs.readFileSync(victim, 'utf8'), 'keep me', 'the link target is untouched');
   assert.equal(fs.lstatSync(file).isSymbolicLink(), false, 'the export is a regular file now');

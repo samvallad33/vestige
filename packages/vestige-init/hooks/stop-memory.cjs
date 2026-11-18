@@ -24,11 +24,13 @@ function finish(error) {
 }
 try {
   const input = fs.readFileSync(0);
+  const timeoutMs = Number(process.env.VESTIGE_STOP_MEMORY_TIMEOUT_MS) || 155;
+  const childBudget = process.env.OPERATOR_STOP_MEMORY_BUDGET || (process.platform === 'win32' ? '0.11' : '0.09');
   child = spawn(value('--python'), ['-I', value('--script'), '--mcp', value('--mcp')], {
     detached: process.platform !== 'win32', windowsHide:true,
-    env: {...process.env, OPERATOR_STOP_MEMORY_BUDGET:'0.09'}, stdio:['pipe','pipe','ignore'],
+    env: {...process.env, OPERATOR_STOP_MEMORY_BUDGET: childBudget}, stdio:['pipe','pipe','ignore'],
   });
-  timer = setTimeout(() => finish('deadline exceeded; receipts retained for retry'), 155);
+  timer = setTimeout(() => finish('deadline exceeded; receipts retained for retry'), timeoutMs);
   child.on('error', () => finish('reflex unavailable; receipts retained for retry'));
   child.stdout.on('data', chunk => { output += chunk; if (output.length > 65536) finish('output limit exceeded'); });
   child.on('close', code => finish(code === 0 ? null : 'reflex failed; receipts retained for retry'));
