@@ -77,6 +77,7 @@ strata-mesh = { path = "../strata-mesh", optional = true }
 strata = { path = "../strata" }
 strata-kernel = { path = "../strata-kernel" }
 # Gate policy type for projection admission. No SQLite.
+strata-crypto = { path = "../strata-crypto" }
 strata-gate = { path = "../strata-gate" }
 strata-import = { path = "../strata-import" }
 strata-passport = { path = "../strata-passport" }
@@ -155,6 +156,7 @@ serde_json = "1"
 strata-store = { path = "../strata-store" }
 # Test-only: plant a superseded node under a permissive gate so memory_graph
 # can prove retired records stay out of the recorded subgraph.
+strata-crypto = { path = "../strata-crypto" }
 strata-gate = { path = "../strata-gate" }
 
 # Integration tests drive the Storage-backed server/tools; the e2e binary
