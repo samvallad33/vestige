@@ -72,6 +72,7 @@ mod lockfile;
 mod log;
 mod mesh_head;
 mod replica;
+pub mod segment_lock;
 mod sync;
 
 #[cfg(test)]
@@ -90,5 +91,8 @@ pub use log::{
 };
 pub use mesh_head::{head_message, sign_head, verify_head, SignedHead, MESH_HEAD_DOMAIN};
 pub use replica::{read_replica_frames, ReplicaLog, ReplicaStep};
+pub use segment_lock::{
+    seal_segment, unseal_segment_owner, verify_segment_seal, SealLevel, SealReceipt,
+};
 #[cfg(feature = "failpoints")]
 pub use sync::failpoints;

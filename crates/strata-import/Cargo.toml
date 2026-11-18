@@ -1,0 +1,16 @@
+[package]
+name = "strata-import"
+version = "6.2.3"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Wave 14N Universal Importer: converts vector stores, databases, search engines, and agent memory layers into anchored Strata causal graphs"
+publish = false
+
+[workspace]
+
+[dependencies]
+blake3 = "1"
+borsh = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+strata-gate = { path = "../strata-gate" }

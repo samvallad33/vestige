@@ -78,6 +78,7 @@ strata = { path = "../strata" }
 strata-kernel = { path = "../strata-kernel" }
 # Gate policy type for projection admission. No SQLite.
 strata-gate = { path = "../strata-gate" }
+strata-import = { path = "../strata-import" }
 blake3 = "1"
 
 # ============================================================================

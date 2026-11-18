@@ -15,6 +15,7 @@ exclude = [
     # re-parent deliberately at integration time.
     "crates/strata",
     "crates/strata-gate",
+    "crates/strata-import",
     "crates/strata-kernel",
     "crates/strata-migrate",
     "crates/strata-store",
