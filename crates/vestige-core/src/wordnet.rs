@@ -417,12 +417,10 @@ fn parse(data: &str) -> Tables {
             //    `"parts of <A> and <B>"`, `"made of/from/with <NP>"`, `"consisting of <NP>"`,
             //    or leading participial modifier (`"<verb>-ed/-en <noun>"` at start of definition).
             for idx in 0..words.len() {
-                let comp_start = if (words[idx] == "parts" || words[idx] == "consisting" || words[idx] == "composed")
-                    && words.get(idx + 1) == Some(&"of")
-                {
-                    Some(idx + 2)
-                } else if words[idx] == "made"
-                    && words.get(idx + 1).is_some_and(|w| matches!(*w, "of" | "from" | "with"))
+                let comp_start = if ((words[idx] == "parts" || words[idx] == "consisting" || words[idx] == "composed")
+                    && words.get(idx + 1) == Some(&"of"))
+                    || (words[idx] == "made"
+                        && words.get(idx + 1).is_some_and(|w| matches!(*w, "of" | "from" | "with")))
                 {
                     Some(idx + 2)
                 } else {
@@ -633,8 +631,10 @@ pub fn upward_hypernyms(word: &str, max_hops: usize) -> Vec<&'static str> {
 
 /// Walk `@`/`@i` hypernyms PLUS `#p`/`#m` part/member holonyms up to `max_hops`,
 /// unlocking geographical & part-whole containment (e.g., `Frankfurt -> Germany`, `Dresden -> Germany`).
+type HopCache = std::sync::Mutex<HashMap<(String, usize), Vec<&'static str>>>;
+
 pub fn holonyms_and_upward(word: &str, max_hops: usize) -> Vec<&'static str> {
-    static CACHE: OnceLock<std::sync::Mutex<HashMap<(String, usize), Vec<&'static str>>>> =
+    static CACHE: OnceLock<HopCache> =
         OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     let key = (word.to_string(), max_hops);

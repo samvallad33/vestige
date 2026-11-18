@@ -106,7 +106,7 @@ fn graph() -> &'static TopoGraph {
         let mut ambiguous_admin: HashMap<&'static str, bool> = HashMap::new();
         for (node, mut countries) in p17_countries {
             if countries.len() >= 2 {
-                countries.sort_by(|a, b| b.1.cmp(&a.1));
+                countries.sort_by_key(|a| std::cmp::Reverse(a.1));
                 let top_w = countries[0].1;
                 let second_w = countries[1].1;
                 // Only block multi-hop traversal when no single country dominates (>= 3x sitelinks);
