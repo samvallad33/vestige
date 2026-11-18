@@ -798,14 +798,45 @@ pub(super) fn rule_condition_matches(r: &StandingRule, plan: &QueryPlan, q_toks:
         return true;
     }
     let q_content: Vec<&str> = q_toks.iter().map(String::as_str).filter(|w| is_content(w)).collect();
+    // Derivational/inflectional suffix equivalence ("implement" ~ "implementation").
+    fn derives(a: &str, b: &str) -> bool {
+        let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+        if short.len() < 5 {
+            return false;
+        }
+        long.strip_prefix(short).is_some_and(|rest| {
+            // hardcode-scan: closed-class (English inflectional/derivational suffixes)
+            matches!(
+                rest,
+                "" | "s" | "es" | "ed" | "ing" | "er" | "ers" | "al" | "ally" | "ly" | "ment" | "ments"
+                    | "tion" | "tions" | "ation" | "ations" | "ion" | "ions" | "ism" | "ist" | "ists"
+            )
+        })
+    }
+    // One WordNet hop, or up to two hypernym hops from the query word; multiword
+    // lemmas ("philosophical_doctrine") count when one of their parts is the condition word.
+    // Same lexeme family: derivational suffix, or a long shared root
+    // ("philosophy" ~ "philosophical": >=7 shared leading chars, <=3 chars short of the shorter word).
+    let morph_eq = |a: &str, b: &str| {
+        if a == b || derives(a, b) {
+            return true;
+        }
+        let shared = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
+        shared >= 7 && shared + 3 >= a.len().min(b.len())
+    };
+    let lemma_hits = |lemmas: &[&str], w: &str| {
+        lemmas.iter().any(|l| morph_eq(l, w) || (l.contains('_') && l.split('_').any(|p| morph_eq(p, w))))
+    };
     r.condition_words.iter().any(|cw| {
         let cst = stem(cw);
         let c_lemmas = crate::wordnet::expansion_lemmas(cw);
         q_content.iter().any(|&qw| {
             qw == cw
                 || (cst.len() >= 4 && stem(qw) == cst)
-                || c_lemmas.contains(&qw)
-                || crate::wordnet::expansion_lemmas(qw).contains(&cw.as_str())
+                || morph_eq(qw, cw)
+                || lemma_hits(&c_lemmas, qw)
+                || lemma_hits(&crate::wordnet::expansion_lemmas(qw), cw)
+                || lemma_hits(&crate::wordnet::upward_hypernyms(qw, 2), cw)
         })
     })
 }

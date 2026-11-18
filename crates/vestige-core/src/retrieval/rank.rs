@@ -819,10 +819,13 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // Rule-condition gate: a compact rule register only marks the query as a
     // task-under-rules consultation when some live rule's own condition clause
     // ("when I ask about X") matches the query.
-    let rule_condition_live = has_compact_rule_register
-        && ix.standing_rules.iter().any(|r| {
-            super::scoring::rule_condition_matches(r, &plan, &q_toks_eff)
-        });
+    let cond_rule_turns: Vec<usize> = ix
+        .standing_rules
+        .iter()
+        .filter(|r| super::scoring::rule_condition_matches(r, &plan, &q_toks_eff))
+        .map(|r| r.turn)
+        .collect();
+    let rule_condition_live = has_compact_rule_register && !cond_rule_turns.is_empty();
     let task_live_eff = !is_monologue_corpus
         && !has_named_speakers_eff
         && ix.turns.len() >= 64
@@ -1006,11 +1009,19 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // v1 moved this seat outside that block and excluded multi-hop. Temporal queries
     // then received a global policy seat and displaced gold. v2 does not do that.
     let (s_policy_floored, t_policy_floored) = if eff_it.task_under_rules && !policy_blocked {
+        // Rule-condition gate: only rules whose own condition matches the query, or that
+        // share a query term, are floored. Others stay on the standing_rules channel.
+        let rule_live = |ti: usize| {
+            ix.turns[ti].is_standing_policy && (t_mask[ti] != 0 || cond_rule_turns.contains(&ti))
+        };
         let mut s_floored = raise_floor(&mut s_score, lexical_smax, 0.68, |si| {
-            ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_standing_policy)
+            ix.session_turns[si].iter().any(|&ti| rule_live(ti))
         });
-        let mut t_floored = raise_floor(&mut t_scene, lexical_tmax, 0.68, |ti| ix.turns[ti].is_standing_policy);
-        if let Some(top) = standing_rules.first() {
+        let mut t_floored = raise_floor(&mut t_scene, lexical_tmax, 0.68, rule_live);
+        if let Some(top) = standing_rules
+            .first()
+            .filter(|top| ix.turns.iter().position(|t| t.id == top.id).is_some_and(rule_live))
+        {
             let s_win_floor = policy_spec_winner_floor(lexical_smax);
             let t_win_floor = policy_spec_winner_floor(lexical_tmax);
             if let Some(top_rule_sess) = ix.session_ids.iter().position(|id| id == &top.session_id) {
@@ -1049,8 +1060,14 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     }
     // Mirror standing/pref floors onto the session-path t_scene (bridge_boost reads this).
     if eff_it.task_under_rules && !policy_blocked {
-        let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.68, |ti| ix.turns[ti].is_standing_policy);
-        if let Some(top) = standing_rules.first() {
+        let rule_live = |ti: usize| {
+            ix.turns[ti].is_standing_policy && (t_mask[ti] != 0 || cond_rule_turns.contains(&ti))
+        };
+        let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.68, rule_live);
+        if let Some(top) = standing_rules
+            .first()
+            .filter(|top| ix.turns.iter().position(|t| t.id == top.id).is_some_and(rule_live))
+        {
             let t_win_floor = policy_spec_winner_floor(lexical_tmax_sess);
             if let Some(top_rule_turn) = ix.turns.iter().position(|t| t.id == top.id) {
                 if t_scene_sess[top_rule_turn] < t_win_floor {
@@ -2388,13 +2405,17 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
             }
             let has_scope_overlap = t_mask[r_ti] != 0
                 || super::seating::c2_policy_inflects_query(ix, r_ti, &plan);
-            if !has_scope_overlap && !allow_chat_task_rule {
+            // Rule-condition gate: a rule whose own condition does not match the
+            // query and that shares no query term stays on the standing_rules
+            // channel only; it never takes an episodic slot.
+            let cond_ok = cond_rule_turns.contains(&r_ti);
+            if !cond_ok {
                 continue;
             }
             if let Some(pos) = final_turn_indices.iter().position(|&x| x == r_ti) {
                 final_turn_indices.remove(pos);
             }
-            let ins_at = if (allow_chat_task_rule && !head_already_rule)
+            let ins_at = if (allow_chat_task_rule && !head_already_rule && cond_ok)
                 || (has_scope_overlap
                     && t_exact_mask[r_ti].count_ones()
                         >= t_exact_mask[final_turn_indices[0]].count_ones()
@@ -3438,6 +3459,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         &final_turn_indices,
         &mut final_session_indices,
         &standing_rules,
+        &cond_rule_turns,
         &t_scene,
         &t_own,
         &s_score,
@@ -3543,6 +3565,7 @@ fn apply_session_late_sync_and_margin_swap(
     final_turn_indices: &[usize],
     final_session_indices: &mut Vec<usize>,
     standing_rules: &[RankedItem],
+    cond_rule_turns: &[usize],
     t_scene: &[f32],
     t_own: &[f32],
     s_score: &[f32],
@@ -3734,7 +3757,9 @@ fn apply_session_late_sync_and_margin_swap(
                 && let Some(sr_si) = ix.session_ids.iter().position(|id| id == &sr.session_id)
                 && !reg_sessions.iter().any(|&(s, _)| s == sr_si)
             {
-                reg_sessions.push((sr_si, sr.score >= 2.5));
+                // High-spec slot-1 seating needs the rule's own condition to match the query.
+                let sr_cond_ok = cond_rule_turns.iter().any(|&rt| ix.turns[rt].id == sr.id);
+                reg_sessions.push((sr_si, sr.score >= 2.5 && sr_cond_ok));
             }
         }
         if eff_it.preference && (1..=8).contains(&ix.preference_directive_turns.len()) {

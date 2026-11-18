@@ -7449,8 +7449,15 @@ pub(super) fn apply_vault_closers(
     if is_summary && list.len() >= 2 {
         let head0 = list[0];
         let h0_t = &ix.turns[head0];
-        if h0_t.field == 0 && (h0_t.is_question || h0_t.content.len() < 24) {
+        // Summaries are answered by the assistant's synthesis turns: any user-side head
+        // (question, short ask, standing rule or narrative statement) yields to a
+        // comparably scored assistant answer.
+        if h0_t.field == 0 {
             let head_sc = t_scene.get(head0).copied().unwrap_or(0.0);
+            // A short ask head yields at 0.72; a long user narrative head (even one closing on
+            // a question) yields at 0.60: its own wording inflates its lexical score against a
+            // synthesis question.
+            let yield_frac = if h0_t.content.len() < 24 { 0.72 } else { 0.60 };
             let mut best_asst: Option<(usize, f32)> = None;
             for slot in 1..list.len().min(10) {
                 let cand = list[slot];
@@ -7460,7 +7467,7 @@ pub(super) fn apply_vault_closers(
                     && !ct.is_question
                     && !ct.is_backchannel
                     && ct.content.len() >= 10
-                    && sc >= 0.72 * head_sc
+                    && sc >= yield_frac * head_sc
                     && best_asst.is_none_or(|(_, bs)| sc > bs)
                 {
                     best_asst = Some((slot, sc));
