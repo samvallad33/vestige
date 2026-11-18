@@ -225,10 +225,14 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         if is_cap_proper {
             return false;
         }
+        const PORPHYRY_RARE_DF_FLOOR: u32 = 4;
+        const PORPHYRY_RARE_DF_DIV: usize = 20;
+        let rare_anchor_cap = ((n_docs / PORPHYRY_RARE_DF_DIV) as u32).max(PORPHYRY_RARE_DF_FLOOR);
         let cand_df = ix.vocab.get(cand).map(|id| corpus_df(id)).unwrap_or(0);
-        // Only exempt `cand_df in 1..=3` when the token is a non-WordNet rare technical/proper handle;
-        // ordinary lowercase common nouns ("character", "fields", "traits", "attributes") are discounted!
-        if (1..=3).contains(&cand_df) && crate::wordnet::senses(cand).is_empty() {
+        // Never discount a rare corpus-attested specific noun (`1 <= df <= rare_anchor_cap`, e.g. "workshop",
+        // "test", "degree"); Porphyry only discounts unattested OOV hypernyms (`df == 0`, e.g. "fields",
+        // "traits") or high-DF generic category nouns (`df > rare_anchor_cap`, e.g. "events", "activities").
+        if (1..=rare_anchor_cap).contains(&cand_df) {
             return false;
         }
         true
@@ -260,7 +264,9 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
                 && is_discountable_genus_word(w2)
                 && (wi + 2) < 64
             {
-                porphyry_genus_mask |= (1u64 << (wi + 1)) | (1u64 << (wi + 2));
+                // Discount ONLY the syntactic head noun (`wi + 2`, genus), never the restrictive
+                // pre-nominal modifier (`wi + 1`, differentia, e.g. "music" in "What music events").
+                porphyry_genus_mask |= 1u64 << (wi + 2);
             } else if is_closed_post_head(w2)
                 || (has_later_cap_entity && !crate::wordnet::senses(h1).is_empty())
             {
