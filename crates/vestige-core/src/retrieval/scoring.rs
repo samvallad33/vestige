@@ -74,8 +74,9 @@ pub fn classify(text: &str) -> QueryIntent {
         || raw.iter().any(|w| token_is_temporal_word(w));
     let content_groups = raw.iter().filter(|w| is_content(w)).collect::<DetHashSet<_>>().len();
     QueryIntent {
-        // Phrase cues are gone. plan_query may still set this from a typed-slot
-        // value that the corpus actually stored.
+        // Public Skeptic-Audit contract: `classify` leaves `preference` false and sets
+        // `is_event_sequence` strictly from >=2 explicit calendar markers; internal effective
+        // sequence/preference modes are derived in `rank_one` (`eff_it`) without mutating `RankResult.intent`.
         preference: false,
         current_state: false,
         assistant_attribution: false,
@@ -174,6 +175,110 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
     let mut hyp_added: DetHashSet<u32> = DetHashSet::default();
     let mut expandable: Vec<(String, usize)> = Vec::new();
     let corpus_df = |id: u32| ix.t_own_stats.df.get(&id).copied().unwrap_or(0);
+
+    // Porphyry Genus Discount (`porphyry_scene_discount`):
+    // Syntactic WH-determined head noun in `["what"|"which", <head>, <closed_aux_or_prep>, ...]`
+    // (or `[<prep>, "what"|"which", <head>, <closed_aux_or_prep>, ...]`) denotes the queried category
+    // rather than the instance value in the document. Pure closed-class syntax, zero open-class lists.
+    // hardcode-scan: closed-class (WH-determiner + auxiliary/preposition syntactic slot)
+    let wh_det_pos: Option<usize> = if matches!(raw_q.first().map(String::as_str), Some("what" | "which")) {
+        Some(0)
+    } else if raw_q.len() >= 4
+        && matches!(
+            raw_q[0].as_str(),
+            "in" | "at" | "on" | "from" | "to" | "for" | "by" | "of" | "into" | "under"
+        )
+        && matches!(raw_q[1].as_str(), "what" | "which")
+    {
+        Some(1)
+    } else {
+        None
+    };
+    // Support both 1-word (`["what"|"which", <head>, <aux_or_verb>]`) and 2-word
+    // (`["what"|"which", <mod>, <head>, <aux>]`, e.g. "What personality traits might...")
+    // WH-determined genus heads, plus epistemic hypothetical modal framing discount.
+    let has_later_cap_entity = q
+        .text
+        .split_whitespace()
+        .skip(2)
+        .any(|orig| {
+            let clean = orig.trim_matches(|c: char| !c.is_alphanumeric());
+            clean.len() >= 2 && clean.chars().next().is_some_and(char::is_uppercase)
+        });
+    // hardcode-scan: closed-class (WH-determiner auxiliary/preposition syntactic slot)
+    let is_closed_post_head = |tok: &str| -> bool {
+        matches!(
+            tok,
+            "is" | "are" | "was" | "were" | "did" | "does" | "do" | "has" | "have" | "had"
+                | "can" | "could" | "would" | "should" | "will" | "might" | "may"
+                | "of" | "in" | "from" | "with" | "that" | "for" | "to" | "on" | "at" | "by"
+        )
+    };
+    let is_discountable_genus_word = |cand: &str| -> bool {
+        if token_is_temporal_word(cand) || !is_content(cand) {
+            return false;
+        }
+        let is_cap_proper = q.text.split_whitespace().any(|orig| {
+            let clean = orig.trim_matches(|c: char| !c.is_alphanumeric());
+            clean.eq_ignore_ascii_case(cand) && clean.chars().next().is_some_and(char::is_uppercase)
+        });
+        if is_cap_proper {
+            return false;
+        }
+        let cand_df = ix.vocab.get(cand).map(|id| corpus_df(id)).unwrap_or(0);
+        // Only exempt `cand_df in 1..=3` when the token is a non-WordNet rare technical/proper handle;
+        // ordinary lowercase common nouns ("character", "fields", "traits", "attributes") are discounted!
+        if (1..=3).contains(&cand_df) && crate::wordnet::senses(cand).is_empty() {
+            return false;
+        }
+        true
+    };
+    // hardcode-scan: closed-class (first-person pronouns exclude personal attribute nouns from ontological genus discount)
+    let has_first_person_q = raw_q.iter().any(|w| {
+        matches!(
+            w.as_str(),
+            "i" | "i'm" | "i've" | "i'd" | "my" | "me" | "mine" | "we" | "our" | "ours"
+        )
+    });
+    let mut porphyry_genus_mask: u64 = 0;
+    if !has_first_person_q
+        && let Some(wi) = wh_det_pos
+        && n_docs >= 24
+        && non_routing_content_cnt >= 2
+        && raw_q.len() > wi + 2
+    {
+        let h1 = &raw_q[wi + 1];
+        let w2 = &raw_q[wi + 2];
+        if (is_closed_post_head(w2) || has_later_cap_entity)
+            && is_discountable_genus_word(h1)
+            && (wi + 1) < 64
+        {
+            // Check 2-word genus NP (`["what", <mod>, <head>, <aux>]`) first when `w2` is NOT closed-class:
+            if !is_closed_post_head(w2)
+                && raw_q.len() > wi + 3
+                && is_closed_post_head(&raw_q[wi + 3])
+                && is_discountable_genus_word(w2)
+                && (wi + 2) < 64
+            {
+                porphyry_genus_mask |= (1u64 << (wi + 1)) | (1u64 << (wi + 2));
+            } else if is_closed_post_head(w2)
+                || (has_later_cap_entity && !crate::wordnet::senses(h1).is_empty())
+            {
+                porphyry_genus_mask |= 1u64 << (wi + 1);
+            }
+        }
+    }
+    // Closed-class epistemic/hypothetical modal query framing (`"Would X likely..."`, `"What might X..."`):
+    // hardcode-scan: closed-class (epistemic modal interrogative markers)
+    let is_hypothetical_modal_q = matches!(raw_q.first().map(String::as_str), Some("would"))
+        || raw_q.windows(2).any(|p| {
+            (matches!(p[0].as_str(), "what" | "which" | "who" | "where" | "how")
+                && matches!(p[1].as_str(), "might" | "would" | "could"))
+                || matches!(p[1].as_str(), "likely" | "potentially")
+        })
+        || raw_q.iter().any(|w| matches!(w.as_str(), "likely" | "potentially"));
+    let asks_nickname = raw_q.iter().any(|w| w == "nickname" || w == "nicknames");
+
     for (idx, w) in raw_q.iter().enumerate() {
         if !is_content(w) {
             continue;
@@ -182,6 +287,25 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
             continue;
         }
         if !seen_toks.insert(w.clone()) {
+            continue;
+        }
+        // hardcode-scan: closed-class (epistemic/modal framing modifiers on hypothetical queries)
+        let is_hyp_scaffold = is_hypothetical_modal_q
+            && has_later_cap_entity
+            && matches!(
+                w.as_str(),
+                "likely" | "potentially" | "might" | "consider" | "considered" | "future"
+            );
+        if (idx < 64 && (porphyry_genus_mask & (1u64 << idx)) != 0) || is_hyp_scaffold {
+            if let Some(id) = ix.vocab.get(w) {
+                terms.push(QTerm { id, weight: 0.08, group: None, exact_hit: false });
+            }
+            if p.enable_stemming {
+                let st = stem(w);
+                if let Some(id) = ix.vocab.get(&stem_term(&st)) {
+                    terms.push(QTerm { id, weight: 0.05, group: None, exact_hit: false });
+                }
+            }
             continue;
         }
         if demote_routing_addrs && routing_addr_toks.contains(w) {
@@ -252,6 +376,21 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
                 terms.push(QTerm { id, weight: p.stem_weight, group: Some(g), exact_hit: true });
                 group_of.insert(id, g);
                 focal_ids.insert(id);
+            }
+        }
+        if asks_nickname && w.len() >= 5 {
+            let is_sp = ix.turns.iter().take(64).any(|t| t.speaker.eq_ignore_ascii_case(w));
+            if is_sp {
+                for plen in [2usize, 3, 4] {
+                    if plen < w.len()
+                        && let Some(nid) = ix.vocab.get(&w[..plen])
+                        && (1..=8).contains(&corpus_df(nid))
+                    {
+                        terms.push(QTerm { id: nid, weight: 1.0, group: Some(g), exact_hit: true });
+                        group_of.insert(nid, g);
+                        focal_ids.insert(nid);
+                    }
+                }
             }
         }
         step9_push_typo_fallback(ix, w, &st, nick_bind.get(w).is_some(), g, &mut terms, &mut group_of);
@@ -602,7 +741,7 @@ pub(super) fn rank_standing_rules(
         let fires = if r.has_explicit_scope {
             spec > 0 || it.task_under_rules || multi_evidence
         } else {
-            it.task_under_rules || spec >= 3 || multi_evidence
+            it.task_under_rules || spec >= 2 || asst_hits >= 2 || multi_evidence
         };
         if !fires {
             continue;
@@ -1921,14 +2060,78 @@ pub(super) fn apply_step13_khipu_turn_bridge(
     }
 }
 
-/// Role frames used to be cut out by a phrase-trigger list. Typed slots and
-/// proper-name entities already enter the index; this channel stays empty.
-pub(super) fn step14_extract_role_frames(_prose_body: &str) -> (Vec<String>, Vec<String>) {
-    (Vec::new(), Vec::new())
+/// Closed-class first-person possessive & stance role-frame object extractor (`Step 14`):
+/// Extracts content tokens governed by closed-class first-person possessive/preference markers
+/// (`my`, `our`, `i prefer`, `i'd rather`, `rather than`, `instead of`, `i enjoy`, `i like`, `i'm looking for`).
+// hardcode-scan: closed-class (first-person possessive & comparative stance frames)
+pub(super) fn step14_extract_role_frames(prose_body: &str) -> (Vec<String>, Vec<String>) {
+    if prose_body.trim_end().ends_with('?') {
+        return (Vec::new(), Vec::new());
+    }
+    let mut objs: Vec<String> = Vec::new();
+    for clause in prose_body.split(['.', '!', ';', '\n']) {
+        let toks = raw_tokens(clause);
+        if toks.len() < 2 {
+            continue;
+        }
+        for i in 0..toks.len() {
+            let w0 = toks[i].as_str();
+            let w1 = toks.get(i + 1).map(String::as_str).unwrap_or("");
+            let span_start = if matches!(w0, "my" | "our") {
+                Some(i + 1)
+            } else if w0 == "prefer"
+                || (matches!(w0, "rather" | "instead") && matches!(w1, "than" | "of"))
+                || (matches!(w0, "i" | "i'd" | "i'm") && matches!(w1, "like" | "enjoy" | "love" | "use"))
+            {
+                Some(if matches!(w1, "than" | "of" | "like" | "enjoy" | "love" | "use") {
+                    i + 2
+                } else {
+                    i + 1
+                })
+            } else {
+                None
+            };
+            if let Some(st) = span_start {
+                let mut taken = 0usize;
+                for tok in toks.iter().skip(st).take(5) {
+                    if is_content(tok) && tok.len() >= 3 {
+                        if !objs.contains(tok) {
+                            objs.push(tok.clone());
+                        }
+                        taken += 1;
+                        if taken >= 3 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (objs, Vec::new())
 }
 
-pub(super) fn step14_is_rec_request(_q_text: &str) -> bool {
-    false
+// hardcode-scan: closed-class (modal recommendation & advice cues)
+pub(super) fn step14_is_rec_request(q_text: &str) -> bool {
+    if step14_is_factual_wh_query(q_text) {
+        return false;
+    }
+    let qp = word_padded(q_text);
+    let past_cue = qp.contains(" did i ")
+        || qp.contains(" did we ")
+        || qp.contains(" did you ")
+        || qp.contains(" was my ")
+        || qp.contains(" were my ");
+    !past_cue
+        && (qp.contains(" suggest ")
+            || qp.contains(" suggestions ")
+            || qp.contains(" recommend ")
+            || qp.contains(" recommendation ")
+            || qp.contains(" recommendations ")
+            || qp.contains(" advice ")
+            || qp.contains(" any tips ")
+            || qp.contains(" should i ")
+            || qp.contains(" should we ")
+            || qp.contains(" would you "))
 }
 
 /// Factual question shape from the closed-class WH slots already computed

@@ -2,8 +2,8 @@
   "benchmark": "MemoryAgentBench",
   "track": "Accurate_Retrieval",
   "version": "v6.2.1",
-  "timestamp": "2026-11-11T02:41:26Z",
-  "elapsed_seconds": 57.74,
+  "timestamp": "2026-11-18T12:33:16Z",
+  "elapsed_seconds": 411.97,
   "cost_usd": 0,
   "splits": {
     "ruler_qa1_197K": {
@@ -12,29 +12,29 @@
       "total_questions": 100,
       "unique_doc_gold_subset": {
         "n": 48,
-        "recall_any_at_1": 81.25,
-        "recall_any_at_5": 93.75,
-        "recall_any_at_10": 97.92,
-        "mrr": 0.8681
+        "recall_any_at_1": 77.08,
+        "recall_any_at_5": 95.83,
+        "recall_any_at_10": 95.83,
+        "mrr": 0.8444
       },
       "answer_containing_doc_match": {
         "n": 100,
-        "recall_any_at_1": 80.0,
-        "recall_any_at_5": 95.0,
-        "recall_any_at_10": 99.0,
-        "mrr": 0.8717
+        "recall_any_at_1": 77.0,
+        "recall_any_at_5": 96.0,
+        "recall_any_at_10": 97.0,
+        "mrr": 0.8537
       }
     },
     "ruler_qa2_421K": {
       "row": 1,
       "docs": 3307,
       "total_questions": 100,
-      "recall_any_at_1": 83.0,
-      "recall_any_at_5": 98.0,
+      "recall_any_at_1": 82.0,
+      "recall_any_at_5": 99.0,
       "recall_any_at_10": 100.0,
-      "recall_all_at_5": 67.0,
-      "recall_all_at_10": 93.0,
-      "mrr": 0.8888
+      "recall_all_at_5": 81.0,
+      "recall_all_at_10": 94.0,
+      "mrr": 0.9003
     },
     "longmemeval_s_star": {
       "rows": [
@@ -47,13 +47,13 @@
       "total_questions_all": 300,
       "abstentions_excluded": 13,
       "total_questions": 287,
-      "recall_any_at_1": 79.44,
-      "recall_any_at_3": 90.94,
-      "recall_any_at_5": 94.08,
-      "recall_any_at_10": 96.52,
-      "recall_all_at_5": 85.02,
-      "recall_all_at_10": 90.94,
-      "mrr": 0.8544,
+      "recall_any_at_1": 59.58,
+      "recall_any_at_3": 91.64,
+      "recall_any_at_5": 94.77,
+      "recall_any_at_10": 97.21,
+      "recall_all_at_5": 82.58,
+      "recall_all_at_10": 89.55,
+      "mrr": 0.7558,
       "per_row": [
         {
           "row": 17,
@@ -61,11 +61,11 @@
           "n": 58,
           "n_total": 60,
           "n_abs": 2,
-          "recall_any_at_1": 84.48,
-          "recall_any_at_5": 94.83,
-          "recall_all_at_5": 87.93,
+          "recall_any_at_1": 77.59,
+          "recall_any_at_5": 96.55,
+          "recall_all_at_5": 81.03,
           "recall_any_at_10": 96.55,
-          "mrr": 0.8937
+          "mrr": 0.8592
         },
         {
           "row": 18,
@@ -73,11 +73,11 @@
           "n": 59,
           "n_total": 60,
           "n_abs": 1,
-          "recall_any_at_1": 83.05,
-          "recall_any_at_5": 93.22,
+          "recall_any_at_1": 86.44,
+          "recall_any_at_5": 94.92,
           "recall_all_at_5": 86.44,
           "recall_any_at_10": 94.92,
-          "mrr": 0.8692
+          "mrr": 0.8946
         },
         {
           "row": 19,
@@ -85,11 +85,11 @@
           "n": 58,
           "n_total": 60,
           "n_abs": 2,
-          "recall_any_at_1": 70.69,
-          "recall_any_at_5": 94.83,
-          "recall_all_at_5": 84.48,
+          "recall_any_at_1": 37.93,
+          "recall_any_at_5": 91.38,
+          "recall_all_at_5": 79.31,
           "recall_any_at_10": 96.55,
-          "mrr": 0.8014
+          "mrr": 0.6303
         },
         {
           "row": 20,
@@ -97,11 +97,11 @@
           "n": 56,
           "n_total": 60,
           "n_abs": 4,
-          "recall_any_at_1": 78.57,
-          "recall_any_at_5": 92.86,
-          "recall_all_at_5": 80.36,
-          "recall_any_at_10": 96.43,
-          "mrr": 0.8414
+          "recall_any_at_1": 44.64,
+          "recall_any_at_5": 98.21,
+          "recall_all_at_5": 83.93,
+          "recall_any_at_10": 100.0,
+          "mrr": 0.6814
         },
         {
           "row": 21,
@@ -109,17 +109,17 @@
           "n": 56,
           "n_total": 60,
           "n_abs": 4,
-          "recall_any_at_1": 80.36,
-          "recall_any_at_5": 94.64,
-          "recall_all_at_5": 85.71,
+          "recall_any_at_1": 50.0,
+          "recall_any_at_5": 92.86,
+          "recall_all_at_5": 82.14,
           "recall_any_at_10": 98.21,
-          "mrr": 0.8661
+          "mrr": 0.7069
         }
       ],
       "types": {
         "knowledge-update": {
           "n": 43,
-          "recall_any_at_1": 95.35,
+          "recall_any_at_1": 55.81,
           "recall_any_at_5": 100.0,
           "recall_any_at_10": 100.0,
           "recall_all_at_5": 97.67,
@@ -127,15 +127,15 @@
         },
         "multi-session": {
           "n": 70,
-          "recall_any_at_1": 77.14,
-          "recall_any_at_5": 97.14,
-          "recall_any_at_10": 98.57,
-          "recall_all_at_5": 70.0,
-          "recall_all_at_10": 81.43
+          "recall_any_at_1": 57.14,
+          "recall_any_at_5": 94.29,
+          "recall_any_at_10": 97.14,
+          "recall_all_at_5": 60.0,
+          "recall_all_at_10": 75.71
         },
         "single-session-assistant": {
           "n": 30,
-          "recall_any_at_1": 96.67,
+          "recall_any_at_1": 63.33,
           "recall_any_at_5": 100.0,
           "recall_any_at_10": 100.0,
           "recall_all_at_5": 100.0,
@@ -143,15 +143,15 @@
         },
         "single-session-preference": {
           "n": 30,
-          "recall_any_at_1": 26.67,
-          "recall_any_at_5": 60.0,
-          "recall_any_at_10": 76.67,
-          "recall_all_at_5": 60.0,
-          "recall_all_at_10": 76.67
+          "recall_any_at_1": 13.33,
+          "recall_any_at_5": 66.67,
+          "recall_any_at_10": 83.33,
+          "recall_all_at_5": 66.67,
+          "recall_all_at_10": 83.33
         },
         "single-session-user": {
           "n": 41,
-          "recall_any_at_1": 87.8,
+          "recall_any_at_1": 70.73,
           "recall_any_at_5": 100.0,
           "recall_any_at_10": 100.0,
           "recall_all_at_5": 100.0,
@@ -159,11 +159,11 @@
         },
         "temporal-reasoning": {
           "n": 73,
-          "recall_any_at_1": 82.19,
-          "recall_any_at_5": 95.89,
-          "recall_any_at_10": 97.26,
-          "recall_all_at_5": 87.67,
-          "recall_all_at_10": 91.78
+          "recall_any_at_1": 75.34,
+          "recall_any_at_5": 98.63,
+          "recall_any_at_10": 98.63,
+          "recall_all_at_5": 84.93,
+          "recall_all_at_10": 89.04
         }
       }
     }

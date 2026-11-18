@@ -93,6 +93,7 @@ pub(super) fn turn_carriers(
             }
         }
     }
+    let mut rare_added = 0usize;
     for &w in &t.content {
         if plan.group_of.contains_key(&w) || is_technical_handle(&ix.vocab, w) {
             continue;
@@ -100,6 +101,10 @@ pub(super) fn turn_carriers(
         if let Some(&df) = ix.t_stats.df.get(&w) {
             if df >= 2 && df <= rare_content_max_df && !out.contains(&w) {
                 out.push(w);
+                rare_added += 1;
+                if rare_added >= 24 {
+                    break;
+                }
             }
         }
     }
@@ -246,14 +251,21 @@ pub(super) fn decode_viterbi_chain(
     }
 
     // Directed transition matrix in Q16.16 with #807 contradiction invalidation
+    let node_carriers: Vec<Vec<u32>> = nodes
+        .iter()
+        .map(|&ti| turn_carriers(ix, plan, ti, max_df))
+        .collect();
     let mut edges = vec![vec![0u64; n]; n];
     for (ui, &u_ti) in nodes.iter().enumerate() {
         let tu = &ix.turns[u_ti];
-        if (tu.entities.is_empty() && tu.role_objs.is_empty()) || tu.is_backchannel {
+        if (tu.entities.is_empty() && tu.role_objs.is_empty())
+            || tu.is_backchannel
+            || node_carriers[ui].is_empty()
+        {
             continue;
         }
         for (vi, &v_ti) in nodes.iter().enumerate() {
-            if ui == vi {
+            if ui == vi || node_carriers[vi].is_empty() {
                 continue;
             }
             let tv = &ix.turns[v_ti];
@@ -263,7 +275,15 @@ pub(super) fn decode_viterbi_chain(
             {
                 continue;
             }
-            edges[ui][vi] = viterbi_edge_q16(ix, plan, tu, tv, u_ti, v_ti, t_mask, max_df);
+            edges[ui][vi] = viterbi_edge_q16(
+                ix,
+                &node_carriers[ui],
+                &node_carriers[vi],
+                u_ti,
+                v_ti,
+                t_mask,
+                max_df,
+            );
         }
     }
 
@@ -572,18 +592,17 @@ pub(super) fn find_coupled_session_bridge_turns(
 
 fn viterbi_edge_q16(
     ix: &Index,
-    plan: &QueryPlan,
-    tu: &super::TurnIx,
-    tv: &super::TurnIx,
+    u_carriers: &[u32],
+    v_carriers: &[u32],
     u_ti: usize,
     v_ti: usize,
     t_mask: &[u64],
     max_df: u32,
 ) -> u64 {
+    let tu = &ix.turns[u_ti];
+    let tv = &ix.turns[v_ti];
     let mut best_trans: u64 = 0;
-    let u_carriers = turn_carriers(ix, plan, u_ti, max_df);
-    let v_carriers = turn_carriers(ix, plan, v_ti, max_df);
-    for &c in &u_carriers {
+    for &c in u_carriers {
         if !v_carriers.contains(&c) {
             continue;
         }
@@ -594,7 +613,7 @@ fn viterbi_edge_q16(
         let cond_q16 = Q16 / (df_c as u64);
         let post_c = ix.t_postings.get(c as usize).map(|v| v.as_slice()).unwrap_or(&[]);
         let mut max_div_q16 = Q16 / 2;
-        for &e_div in &v_carriers {
+        for &e_div in v_carriers {
             if e_div == c || u_carriers.contains(&e_div) {
                 continue;
             }
@@ -602,6 +621,9 @@ fn viterbi_edge_q16(
             let d = ochiai_divergence_q16(post_c, post_div);
             if d > max_div_q16 {
                 max_div_q16 = d;
+                if max_div_q16 >= Q16 {
+                    break;
+                }
             }
         }
         let mut edge = (cond_q16.saturating_mul(max_div_q16)) >> 16;

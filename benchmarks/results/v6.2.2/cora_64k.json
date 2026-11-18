@@ -1,0 +1,9 @@
+{
+  "context_k": 64,
+  "total": 30,
+  "evidence_recall_at_5": 76.67,
+  "evidence_recall_at_10": 88.33,
+  "all_facts_at_5": 60.0,
+  "all_facts_at_10": 76.67,
+  "avg_latency_ms": 3331.8
+}

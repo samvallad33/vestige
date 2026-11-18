@@ -531,6 +531,7 @@ pub(super) fn has_compound_preference_frame(text: &str) -> bool {
     let hit = [
         "i prefer ", "i'd prefer ", "i\u{2019}d prefer ",
         "i'd like to ", "i\u{2019}d like to ", "i'd rather ", "i\u{2019}d rather ",
+        "my favorite ", "i really like ", "i enjoy ",
     ]
     .iter()
     .any(|pat| {
@@ -539,8 +540,33 @@ pub(super) fn has_compound_preference_frame(text: &str) -> bool {
             || lower.contains(&format!(", {pat}"))
             || lower.contains(&format!("; {pat}"))
             || lower.contains(&format!("so {pat}"))
+            || lower.contains(&format!("and {pat}"))
+            || lower.contains(&format!("but {pat}"))
     });
     hit && raw_tokens(prose).iter().filter(|w| is_content(w)).count() >= 3
+}
+
+// hardcode-scan: closed-class (Halakha-ke comparative contrast prepositions)
+pub(super) fn has_comparative_choice_frame(text: &str) -> bool {
+    let prose = text.split("```").next().unwrap_or(text).trim();
+    if prose.is_empty() || prose.ends_with('?') {
+        return false;
+    }
+    let lower = prose.to_lowercase();
+    let has_first_person = lower.starts_with("i ")
+        || lower.starts_with("i'")
+        || lower.starts_with("i\u{2019}")
+        || lower.starts_with("my ")
+        || lower.contains(" i ")
+        || lower.contains(" i'")
+        || lower.contains(" i\u{2019}")
+        || lower.contains(" my ");
+    let has_contrast = lower.contains(" rather than ")
+        || lower.contains(" instead of ")
+        || lower.contains(" prefer ");
+    has_first_person
+        && has_contrast
+        && raw_tokens(prose).iter().filter(|w| is_content(w)).count() >= 3
 }
 
 /// [W2-028/031] Closed-class durable user-directive detector (superset of `utterance_is_standing_policy`
@@ -1408,8 +1434,9 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
                 }
             }
             let slots = typed_slot_tokens(prose_body);
-            // Preference and constraint flags follow recorded structure: a typed
-            // `key: value` slot. Phrase markers no longer set them.
+            // Keep `is_personal_constraint` keyed strictly to recorded `key: value` slots
+            // so `plan_query` preserves the public `RankResult.intent.preference` contract;
+            // prose stance/choice turns enter `preference_directive_turns` and `role_objs` directly below.
             let is_personal_constraint = field == 0 && !slots.is_empty();
             if p.enable_deictic {
                 for (d, w) in deictic_weighted_tokens(&raw, ts) {
@@ -1497,7 +1524,12 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
                 && !is_short_question
                 && content.len() >= 4;
             let turn_idx = turns.len();
-            if field == 0 && (is_personal_constraint || has_compound_preference_frame(prose_body)) {
+            if field == 0
+                && !prose_body.trim_end().ends_with('?')
+                && (is_personal_constraint
+                    || has_compound_preference_frame(prose_body)
+                    || has_comparative_choice_frame(prose_body))
+            {
                 preference_directive_turns.push(turn_idx);
             }
             if field == 0 && (is_standing_policy || is_personal_constraint || is_durable_user_directive(prose_body)) {
@@ -1715,7 +1747,14 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
             let later_digits = digit_token_set(lat_prose);
             let prev_digits = digit_token_set(prev_prose);
             let digit_shift = !later_digits.is_empty() && !prev_digits.is_empty() && later_digits != prev_digits;
-            let has_rev_cue = turns[later].is_personal_constraint || digit_shift;
+            let lat_low = lat_prose.to_ascii_lowercase();
+            // hardcode-scan: closed-class (explicit state-replacement adverbs)
+            let explicit_replacement = !typed_slot_tokens(lat_prose).is_empty()
+                || lat_low.contains("instead of ")
+                || lat_low.contains("no longer ")
+                || lat_low.contains("rather than ")
+                || lat_low.contains("anymore");
+            let has_rev_cue = explicit_replacement || digit_shift;
             let contradicts = torrens_pair_key_match == Some(true)
                 || (lat_prose.len() <= 420
                     && prev_prose.len() <= 420
@@ -1970,6 +2009,32 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
         let mut assistant_nouns = DetHashSet::default();
         let members = &session_turns[sess_idx];
         if let Some(pos) = members.iter().position(|&ti| ti == turn_idx) {
+            // `asbab_occasio_index`: enrich standing-rule scope with rare eliciting tokens (`df <= 8`)
+            // from adjacent same-session context (`pos - 2 ..= pos + 1`) so zero-overlap directives retrieve.
+            let ctx_lo = pos.saturating_sub(2);
+            let ctx_hi = (pos + 1).min(members.len().saturating_sub(1));
+            for &ctx_ti in &members[ctx_lo..=ctx_hi] {
+                if ctx_ti == turn_idx {
+                    continue;
+                }
+                for &cid in &turns[ctx_ti].content {
+                    let t_df = t_own_stats.df.get(&cid).copied().unwrap_or(99);
+                    let s_df = s_stats.df.get(&cid).copied().unwrap_or(99);
+                    if t_df <= 8 && s_df <= fan_cut {
+                        scope.insert(cid);
+                        if let Some(w_str) = vocab.names.get(cid as usize)
+                            && !w_str.starts_with('\u{1}')
+                        {
+                            let st = stem(w_str);
+                            if let Some(sid) = vocab.get(&stem_term(&st))
+                                && s_stats.df.get(&sid).copied().unwrap_or(99) <= fan_cut
+                            {
+                                scope.insert(sid);
+                            }
+                        }
+                    }
+                }
+            }
             if pos + 1 < members.len() {
                 let adj = &turns[members[pos + 1]];
                 if adj.field == 1 {
@@ -2010,7 +2075,11 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
         (Vec::new(), vec![false; turns.len()], Vec::new())
     };
 
-    let mut turn_superseded = torrens_superseded.clone();
+    let mut turn_superseded = if is_monologue_stream {
+        torrens_superseded.clone()
+    } else {
+        vec![false; turns.len()]
+    };
     for t in &turns {
         for &old in &t.supersedes_turns {
             if old < turn_superseded.len() {
@@ -2025,13 +2094,17 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
     let max_rare_df = (n_turns_u32 / 8).max(4);
     let mut bridge_vocab = Vocab::default();
     let mut turn_bridge_sets: Vec<DetHashSet<u32>> = vec![DetHashSet::default(); turns.len()];
+    let bridge_df_cap = max_rare_df.min(24);
     if p.enable_hypernyms {
         let mut cid_to_bridge: DetHashMap<u32, Vec<u32>> = DetHashMap::default();
         for (&cid, &df) in &t_own_stats.df {
-            if df == 0 || df > max_rare_df {
+            if df == 0 || df > bridge_df_cap {
                 continue;
             }
             let word = &vocab.names[cid as usize];
+            if word.starts_with('\u{1}') {
+                continue;
+            }
             let mut bids = Vec::new();
             for lemma in wordnet_lemmas_with_morph(word) {
                 let lid = bridge_vocab.intern(lemma);
@@ -2117,6 +2190,9 @@ pub(super) fn build_index(sessions: &[Session], p: &Params) -> Index {
         }
         rare_toks.sort_unstable();
         rare_toks.dedup();
+        if rare_toks.len() > 48 {
+            rare_toks.truncate(48);
+        }
         if rare_toks.len() <= 24 {
             for i in 0..rare_toks.len() {
                 for j in (i + 1)..rare_toks.len() {

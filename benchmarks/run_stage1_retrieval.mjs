@@ -20,9 +20,21 @@
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import os from 'node:os';
+
+function resetAutopsyLedger(benchName) {
+  const dir = join(resolve('.'), 'benchmarks', 'results');
+  mkdirSync(dir, { recursive: true });
+  const p = join(dir, `misses_${benchName}.jsonl`);
+  writeFileSync(p, '', 'utf8');
+  return p;
+}
+
+function recordAutopsyMiss(ledgerPath, record) {
+  appendFileSync(ledgerPath, JSON.stringify(record) + '\n', 'utf8');
+}
 
 const rootDir = resolve('.');
 const binCandidates = [
@@ -213,6 +225,7 @@ async function runLongMemEval(params, quiet = false) {
   const all = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, cappedAll5: 0, all10: 0, ndcg10: 0 };
   const nonAbs = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, cappedAll5: 0, all10: 0, ndcg10: 0 };
   const lat = [];
+  const lmeLedger = !quiet ? resetAutopsyLedger('longmemeval_s') : null;
   let sessionsSeen = 0, turnsSeen = 0;
   for (const item of data) {
     const { sessions, query } = ingestLongMemEval(item);
@@ -235,6 +248,20 @@ async function runLongMemEval(params, quiet = false) {
       all10: gold.size > 0 && [...gold].every(g => ids.slice(0, 10).includes(g)),
       ndcg10: ndcg(ids, gold, 10),
     };
+    if (lmeLedger && !isAbs && (!m.r1 || !m.r5)) {
+      const sMap = new Map(sessions.map(s => [s.id, String(s.turns?.[0]?.content || '').slice(0, 180)]));
+      const firstGoldIdx = ids.findIndex(id => gold.has(id));
+      const pred0 = res.results[0].sessions[0];
+      recordAutopsyMiss(lmeLedger, {
+        query: query.text,
+        category: type,
+        gold_turns: [...gold].slice(0, 5).map(gid => ({ id: gid, preview: sMap.get(gid) || '' })),
+        predicted_rank1: pred0 ? { id: pred0.id, preview: sMap.get(pred0.id) || '' } : null,
+        gold_rank: firstGoldIdx >= 0 ? firstGoldIdx + 1 : 'NOT_IN_TOP10',
+        miss_type: firstGoldIdx >= 1 && firstGoldIdx < 5 ? 'NEAR_MISS_RANKS_2_5' : 'NOT_IN_TOP10',
+        winning_tokens: pred0?.matched || [],
+      });
+    }
     for (const acc of [all, isAbs ? null : nonAbs, (buckets[type] ??= { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, cappedAll5: 0, all10: 0, ndcg10: 0 })]) {
       if (!acc) continue;
       acc.n++; acc.r1 += m.r1; acc.r5 += m.r5; acc.r10 += m.r10; acc.all5 += m.all5; acc.cappedAll5 += m.cappedAll5; acc.all10 += m.all10; acc.ndcg10 += m.ndcg10;
@@ -291,10 +318,15 @@ async function runLoCoMo(params, quiet = false, convList = null) {
   const names = { 1: 'Multi-Hop', 2: 'Temporal', 3: 'Open-Domain', 4: 'Single-Hop', 5: 'Adversarial' };
   const blank = () => ({ n: 0, noEvidence: 0, sR1: 0, sR5: 0, tR1: 0, tR5: 0, tR10: 0, softR1: 0, softR5: 0, fracR5: 0 });
   const cats = {}; const core = blank(); const total = blank();
+  const locomoLedger = !quiet ? resetAutopsyLedger('locomo10') : null;
   const lat = [];
   let qCount = 0;
   for (const conv of convs) {
     const { sessions, queries } = ingestLoCoMo(conv);
+    const turnPreviewMap = new Map();
+    for (const sess of sessions) {
+      for (const tr of sess.turns) turnPreviewMap.set(tr.id, `${tr.role}: ${String(tr.content || '').slice(0, 160)}`);
+    }
     const t0 = performance.now();
     const res = await rank({ sessions, queries, top_k: 10, params });
     lat.push((performance.now() - t0) / Math.max(1, queries.length));
@@ -337,6 +369,19 @@ async function runLoCoMo(params, quiet = false, convList = null) {
       for (const a of accs) {
         a.n++;
         for (const k of ['sR1', 'sR5', 'tR1', 'tR5', 'tR10', 'softR1', 'softR5', 'fracR5']) a[k] += m[k];
+      }
+      if (locomoLedger && cat !== 5 && (!m.tR1 || !m.tR5)) {
+        const firstIdx = t.findIndex(id => goldTurns.has(id));
+        const pred0 = r.turns[0];
+        recordAutopsyMiss(locomoLedger, {
+          query: qa.question,
+          category: names[cat] || String(cat),
+          gold_turns: [...goldTurns].slice(0, 5).map(gid => ({ id: gid, preview: turnPreviewMap.get(gid) || '' })),
+          predicted_rank1: pred0 ? { id: pred0.id, preview: turnPreviewMap.get(pred0.id) || '' } : null,
+          gold_rank: firstIdx >= 0 ? firstIdx + 1 : 'NOT_IN_TOP10',
+          miss_type: firstIdx >= 1 && firstIdx < 5 ? 'NEAR_MISS_RANKS_2_5' : 'NOT_IN_TOP10',
+          winning_tokens: pred0?.matched || [],
+        });
       }
     });
   }

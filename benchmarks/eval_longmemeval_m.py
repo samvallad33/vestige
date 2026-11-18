@@ -78,6 +78,10 @@ def main():
     non_ndcg10 = all_ndcg10 = non_mrr = all_mrr = 0.0
     sess_sum = turns_sum = 0
     types = {}
+    os.makedirs(os.path.join('benchmarks', 'results'), exist_ok=True)
+    lme_m_ledger = os.path.join('benchmarks', 'results', 'misses_longmemeval_m.jsonl')
+    with open(lme_m_ledger, 'w', encoding='utf-8') as _:
+        pass
     t0 = time.time()
 
     try:
@@ -152,6 +156,20 @@ def main():
                     b['all5'] += int(all5)
                     b['all10'] += int(all10)
                     b['ndcg10'] += ndcg10
+                    if not r1 or not r5:
+                        s_map = {s['id']: (s['turns'][0]['content'][:180] if s['turns'] else '') for s in sessions}
+                        pred0 = resp['results'][0]['sessions'][0] if resp['results'][0]['sessions'] else {}
+                        first_idx = next((ri for ri, sid in enumerate(ids) if sid in gold), -1)
+                        with open(lme_m_ledger, 'a', encoding='utf-8') as lf:
+                            lf.write(json.dumps({
+                                'query': query['text'],
+                                'category': qt,
+                                'gold_turns': [{'id': g, 'preview': s_map.get(g, '')} for g in list(gold)[:5]],
+                                'predicted_rank1': {'id': pred0.get('id', ''), 'preview': s_map.get(pred0.get('id', ''), '')},
+                                'gold_rank': first_idx + 1 if first_idx >= 0 else 'NOT_IN_TOP10',
+                                'miss_type': 'NEAR_MISS_RANKS_2_5' if 1 <= first_idx < 5 else 'NOT_IN_TOP10',
+                                'winning_tokens': pred0.get('matched', []),
+                            }) + '\n')
 
                 if n_all % 10 == 0:
                     print(

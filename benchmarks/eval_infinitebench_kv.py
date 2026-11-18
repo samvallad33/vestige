@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -112,14 +113,18 @@ def run_eval(limit=50):
             item = json.loads(line)
             total += 1
 
-            target_key = item["input"].strip()
+            raw_input = item["input"].strip()
+            m_key = re.search(r'Key:\s*"([^"]+)"', raw_input)
+            target_key = m_key.group(1) if m_key else raw_input
             gold_answers = [str(a).strip().lower() for a in item["answer"]]
 
-            # Format context chunks (divide 100K+ context into 20 chunks of ~5K tokens / ~125 KV pairs)
+            # Format context chunks cleanly on KV-pair boundaries (no mid-UUID splits)
             context = item["context"]
-            # Split into chunks of 100 KV pairs to represent indexing chunks
-            chunk_size = 4000
-            chunks = [context[i:i + chunk_size] for i in range(0, len(context), chunk_size)]
+            if context.startswith("JSON data:\n"):
+                context = context[len("JSON data:\n"):]
+            pairs = context.strip().strip("{}").split(", ")
+            pairs_per_chunk = 50
+            chunks = [", ".join(pairs[i:i + pairs_per_chunk]) for i in range(0, len(pairs), pairs_per_chunk)]
             
             sessions = []
             for i, chunk in enumerate(chunks):
@@ -128,8 +133,9 @@ def run_eval(limit=50):
                     "date": "2026-01-01",
                     "turns": [
                         {
+                            "id": f"turn_{i}_0",
                             "role": "user",
-                            "text": f"KV Dictionary Block {i}: {chunk}"
+                            "content": f"KV Dictionary Block {i}: {chunk}"
                         }
                     ]
                 })
@@ -138,7 +144,6 @@ def run_eval(limit=50):
                 "sessions": sessions,
                 "queries": [
                     {
-                        "id": f"q_{total}",
                         "date": "2026-01-01",
                         "text": f"What is the value associated with key {target_key}?"
                     }
@@ -155,8 +160,11 @@ def run_eval(limit=50):
             durations.append(dt)
 
             resp = json.loads(resp_line)
+            if "error" in resp:
+                raise RuntimeError(f"retrieval_bench error: {resp['error']}")
             # Find if top ranked chunk contains the gold answer
-            ranked_session_ids = [s["session_id"] for s in resp.get("results", [])]
+            res0 = resp.get("results", [{}])[0]
+            ranked_session_ids = [s["session_id"] for s in res0.get("sessions", [])]
             
             top1_hit = False
             top5_hit = False

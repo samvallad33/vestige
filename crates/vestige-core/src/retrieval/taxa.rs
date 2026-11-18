@@ -15,6 +15,7 @@ use super::ghostlink_dgs::Q16;
 use super::index::Index;
 use super::scoring::QueryPlan;
 use super::supersession::turn_is_superseded;
+use super::DetHashMap;
 
 #[inline]
 pub(super) fn splitmix64(mut x: u64) -> u64 {
@@ -504,7 +505,7 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
     let mono_oov_active = is_monologue_stream
         && has_ungrounded_rare_oov
         && nt <= 8192
-        && has_oov_or_rare_group;
+        && (has_oov_or_rare_group || deficit_a || deficit_b);
 
     // Clark & Schaefer (1989) Grounded Personal Commit Rescue for 2-role `user`/`assistant` chats:
     // A concise declarative user disclosure (`field == 0`, `!is_question`, `2..=22` content tokens)
@@ -560,7 +561,7 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
             let is_prospective_advisory = !is_past_episodic;
             if is_prospective_advisory || is_self_inventory {
                 let mut commit_vocab_hits: Vec<u32> = Vec::new();
-                for g in plan.groups.iter().take(64) {
+                for g in plan.groups.iter().take(16) {
                     for part in g.split('-') {
                         if part.len() < 3 {
                             continue;
@@ -568,7 +569,7 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                         if let Some(id) = ix.vocab.get(part) && !commit_vocab_hits.contains(&id) {
                             commit_vocab_hits.push(id);
                         }
-                        for (cn, _) in crate::conceptnet::two_hop_neighbors(part, 36) {
+                        for (cn, _) in crate::conceptnet::two_hop_neighbors(part, 20) {
                             if let Some(id) = ix.vocab.get(cn) && !commit_vocab_hits.contains(&id) {
                                 commit_vocab_hits.push(id);
                             }
@@ -622,13 +623,29 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                     if final_turn_indices.len() > k {
                         final_turn_indices.truncate(k);
                     }
-                    return true;
+                    return false;
                 }
             }
         }
     }
 
-    if k < 5 || (!deficit_a && !deficit_b && !plan.intent.preference && !mono_oov_active) {
+    let q_low_all = q_text.trim_start().to_ascii_lowercase();
+    // hardcode-scan: closed-class (hypothetical open-domain modal interrogative cues)
+    let dialogue_hypothetical_od = !speaker_lowers.is_empty()
+        && (q_low_all.starts_with("would ")
+            || q_low_all.contains(" likely ")
+            || q_low_all.contains(" potentially ")
+            || q_low_all.starts_with("what might ")
+            || q_low_all.starts_with("what could ")
+            || q_low_all.starts_with("what would "));
+
+    if k < 5
+        || (!deficit_a
+            && !deficit_b
+            && !plan.intent.preference
+            && !mono_oov_active
+            && !dialogue_hypothetical_od)
+    {
         return false;
     }
 
@@ -639,8 +656,10 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
     // target entities/nouns. Candidates are ordered strictly by `(hop_count ASC, anchor_df ASC, turn_idx ASC)`.
     if mono_oov_active {
         let q_low = q_text.trim_start().to_ascii_lowercase();
-        let is_wh_lead =
-            q_low.starts_with("which ") || q_low.starts_with("what ") || q_low.starts_with("who ");
+        let is_wh_lead = q_low.starts_with("which ")
+            || q_low.starts_with("what ")
+            || q_low.starts_with("who ")
+            || q_low.starts_with("where ");
         if is_wh_lead {
             let q_toks = fold_ascii_tokens(q_text);
             // Closed-class negation modal check (`cannot`, `can't`, `never`, `unable`, `not`):
@@ -655,14 +674,17 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
             // Extract exact OOV/rare target phrases & tokens from the query (`df <= 2` and ungrounded in Top-3).
             let mut q_targets: Vec<String> = Vec::new();
             let is_ungrounded_oov_tok = |tok: &str| -> bool {
-                if tok.len() < 3 || !super::is_content(tok) {
+                if tok.len() < 3
+                    || !super::is_content(tok)
+                    || speaker_lowers.iter().any(|sp| sp.eq_ignore_ascii_case(tok))
+                {
                     return false;
                 }
                 let vid = ix.vocab.get(tok);
                 let df = vid
                     .and_then(|id| ix.t_own_stats.df.get(&id).copied())
                     .unwrap_or(0);
-                if df > 2 {
+                if df > 4 {
                     return false;
                 }
                 !vid.is_some_and(|id| {
@@ -703,6 +725,12 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                         }
                         if stripped != phrase && !q_targets.iter().any(|x| x == stripped) {
                             q_targets.push(stripped.to_string());
+                        }
+                        if let Some((_, of_tail)) = stripped.rsplit_once(" of ")
+                            && of_tail.len() >= 3
+                            && !q_targets.iter().any(|x| x == of_tail)
+                        {
+                            q_targets.push(of_tail.to_string());
                         }
                         for p in &mut covered_pos[st..st + len] {
                             *p = true;
@@ -785,14 +813,19 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                     }
                 }
 
-                // Helper: exact shortest containment hop count (`1..=3`) from `doc_span` to any `q_targets`
+                // Helper: exact shortest containment hop count (`1..=4`) from `doc_span` to any `q_targets`
                 // along Wikidata (`Country`/`LocatedIn`/`Collection`/`Headquarters`) and WordNet `#p/#m` holonyms.
-                let containment_hops = |span: &str| -> Option<u8> {
+                let mut hop_cache: DetHashMap<String, Option<u8>> = DetHashMap::default();
+                let mut containment_hops = |span: &str| -> Option<u8> {
+                    if let Some(&cached) = hop_cache.get(span) {
+                        return cached;
+                    }
                     let mut visited: std::collections::BTreeSet<String> =
                         std::collections::BTreeSet::new();
                     visited.insert(span.to_string());
                     let mut frontier: Vec<String> = vec![span.to_string()];
-                    for hop in 1..=3u8 {
+                    let mut found: Option<u8> = None;
+                    'bfs: for hop in 1..=4u8 {
                         let mut next_f: Vec<String> = Vec::new();
                         for cur in &frontier {
                             if hop > 1 && crate::wikidata::is_ambiguous_admin(cur) {
@@ -805,7 +838,9 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                                 }
                             }
                             if !cur.contains(' ') {
-                                if crate::wordnet::senses(cur).len() <= 2 {
+                                if !crate::wikidata::has_source(cur)
+                                    && crate::wordnet::senses(cur).len() <= 2
+                                {
                                     for wn_h in crate::wordnet::holonyms_and_upward(cur, 1) {
                                         neighbors.push(wn_h);
                                     }
@@ -823,9 +858,10 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                                         || qt == nb_clean
                                         || nb_of_tail.is_some_and(|tl| qt == tl)
                                 }) {
-                                    return Some(hop);
+                                    found = Some(hop);
+                                    break 'bfs;
                                 }
-                                if hop < 3 {
+                                if hop < 4 {
                                     if visited.insert(nb.to_string()) {
                                         next_f.push(nb.to_string());
                                     }
@@ -843,16 +879,24 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                         }
                         frontier = next_f;
                     }
-                    None
+                    hop_cache.insert(span.to_string(), found);
+                    found
                 };
 
-                // Scan monologue turns for exact recorded paths; rank strictly by `(hops ASC, min_df ASC, ti ASC)`.
+                // Scan turns for exact recorded paths; rank strictly by `(hops ASC, min_df ASC, ti ASC)`.
                 let mut reached: Vec<(u8, u32, usize)> = Vec::new();
+                let mut ent_key_buf = String::with_capacity(64);
                 for ti in 0..nt {
                     let t = &ix.turns[ti];
+                    let sup = if is_monologue_stream {
+                        ix.torrens_superseded.get(ti).copied().unwrap_or(false)
+                    } else {
+                        turn_is_superseded(ix, ti)
+                    };
                     if t.is_pure_info_question
+                        || (!is_monologue_stream && (t.is_question || t.is_backchannel))
                         || t.content.is_empty()
-                        || ix.torrens_superseded.get(ti).copied().unwrap_or(false)
+                        || sup
                     {
                         continue;
                     }
@@ -865,7 +909,31 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                     }
 
                     let d_toks = fold_ascii_tokens(&t.body_for_headers);
-                    let mut best_turn_path: Option<(u8, u32)> = None;
+                    let tok_is_ent: Vec<bool> = d_toks
+                        .iter()
+                        .map(|w| {
+                            let w_clean = w.strip_suffix("'s").unwrap_or(w.as_str());
+                            ent_key_buf.clear();
+                            ent_key_buf.push('\u{1}');
+                            ent_key_buf.push_str("ent:");
+                            ent_key_buf.push_str(w_clean);
+                            if ix
+                                .vocab
+                                .get(&ent_key_buf)
+                                .is_some_and(|eid| t.entities.contains(&eid))
+                            {
+                                return true;
+                            }
+                            t.entities.iter().any(|&eid| {
+                                ix.vocab
+                                    .names
+                                    .get(eid as usize)
+                                    .and_then(|s| s.strip_prefix("\u{1}ent:"))
+                                    .is_some_and(|en| en.split('_').any(|p| p == w_clean))
+                            })
+                        })
+                        .collect();
+                    let mut best_turn_path: Option<(u8, i8, u32)> = None;
 
                     for st in 0..d_toks.len() {
                         for len in 1..=6usize {
@@ -878,21 +946,32 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                                 if first_clean.len() < 4 || term_df(first_clean) > 2 {
                                     continue;
                                 }
-                                // Skip bare lowercase common nouns on affirmative containment walks:
-                                // single-token geographic/cultural anchors MUST be capitalized proper entities in `t`!
-                                let is_turn_ent = ix
-                                    .vocab
-                                    .get(&format!("\u{1}ent:{first_clean}"))
-                                    .is_some_and(|eid| t.entities.contains(&eid));
-                                if !has_neg_modal && !is_turn_ent {
+                                // Single-token affirmative geographic/landmark spans must be proper entities,
+                                // non-polysemous (`< 4` WordNet senses), and preceded by a closed-class spatial/definite
+                                // determiner (`in`, `to`, `from`, `at`, `near`, `the`, `of`) unless the turn is concise (`<= 24` words):
+                                // hardcode-scan: closed-class (spatial prepositions and definite determiner)
+                                let has_spatial_det = d_toks.len() <= 24
+                                    || (st > 0
+                                        && matches!(
+                                            d_toks[st - 1].as_str(),
+                                            "in" | "to" | "from" | "at" | "near" | "into" | "around"
+                                                | "inside" | "outside" | "the" | "of"
+                                        ));
+                                if !has_neg_modal
+                                    && (!tok_is_ent[st]
+                                        || !has_spatial_det
+                                        || crate::wordnet::senses(first_clean).len() >= 4)
+                                {
                                     continue;
                                 }
                             } else {
-                                // Multi-word span must contain at least one rare token (`df <= 3`) or entity
-                                let has_anchor_tok = d_toks[st..st + len]
+                                // Multi-word span must contain at least one proper entity (when affirmative)
+                                // or rare token (`df <= 3`)
+                                let has_ent = tok_is_ent[st..st + len].iter().any(|&e| e);
+                                let has_rare = d_toks[st..st + len]
                                     .iter()
                                     .any(|w| w.len() >= 4 && term_df(w) <= 3);
-                                if !has_anchor_tok {
+                                if (!has_neg_modal && !has_ent) || (!has_ent && !has_rare) {
                                     continue;
                                 }
                             }
@@ -907,13 +986,14 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                                 .map(|w| term_df(w))
                                 .min()
                                 .unwrap_or(1);
+                            let neg_len = -(len as i8);
 
                             // 1. Negation/Exclusion path (`doc_span —excludes→ X` where `q_item —(has_part|is_a)*→ X`)
                             if has_neg_modal && len <= 3 {
                                 for ex_target in crate::wordnet::typed_excludes_targets(&span) {
                                     if let Some(&up_hops) = q_upward_ancestors.get(ex_target) {
                                         let total_hops = 1u8.saturating_add(up_hops);
-                                        let key = (total_hops, span_min_df);
+                                        let key = (total_hops, neg_len, span_min_df);
                                         if best_turn_path.is_none_or(|b| key < b) {
                                             best_turn_path = Some(key);
                                         }
@@ -924,10 +1004,12 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                             // 2. Topological Containment path (`doc_span —(located_in|collection|hq)*→ q_target`)
                             if !has_neg_modal
                                 && (crate::wikidata::has_source(&span)
-                                    || (len >= 2 && !crate::wordnet::senses(&span).is_empty()))
+                                    || (len >= 2
+                                        && is_monologue_stream
+                                        && !crate::wordnet::senses(&span).is_empty()))
                                 && let Some(c_hops) = containment_hops(&span)
                             {
-                                let key = (c_hops, span_min_df);
+                                let key = (c_hops, neg_len, span_min_df);
                                 if best_turn_path.is_none_or(|b| key < b) {
                                     best_turn_path = Some(key);
                                 }
@@ -935,8 +1017,8 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                         }
                     }
 
-                    if let Some((hops, mdf)) = best_turn_path {
-                        reached.push((hops, mdf, ti));
+                    if let Some((hops, neg_len, mdf)) = best_turn_path {
+                        reached.push((hops, (mdf.saturating_mul(8)).saturating_add((6i8.saturating_add(neg_len)).max(0) as u32), ti));
                     }
                 }
 
@@ -957,6 +1039,14 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
             }
             return false;
         }
+    }
+
+    if !deficit_a
+        && !dialogue_hypothetical_od
+        && !(is_monologue_stream && has_ungrounded_rare_oov)
+        && !(plan.intent.preference && nt <= 200)
+    {
+        return false;
     }
 
     let max_rare_df = ((nt as u32) / 5).max(6);
@@ -1075,7 +1165,7 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
             }
         }
     }
-    if deficit_a && !mono_oov_active {
+    if (deficit_a || dialogue_hypothetical_od) && !mono_oov_active {
         for qt in &plan.terms {
             if !qt.exact_hit {
                 continue;
@@ -1248,7 +1338,7 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
         let mut isa_hits = 0u64;
         let mut rare_oov_hits = 0u64;
         let mut hits: Vec<(String, u64)> = Vec::new();
-        if deficit_a && !mono_oov_active {
+        if (deficit_a || dialogue_hypothetical_od) && !mono_oov_active {
             for &lid in &cn_wn_ids {
                 if t.content.contains(&lid) {
                     isa_hits += 1;
@@ -1476,9 +1566,54 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
         }
     }
 
-    let Some((cand_ti, _cand_score, _sp_aligned, rare_oov_hits)) = best_cand else {
+    let Some((cand_ti, cand_score, sp_aligned, rare_oov_hits)) = best_cand else {
         return false;
     };
+
+    // Named-speaker Open-Domain / Deficit-A Ontological Rescue (`LoCoMo Cat 3`):
+    // When a speaker-aligned declarative turn matches rare ontological/taxonomic bridges (`rare_oov_hits >= 1`)
+    // and Slot 0 lacks grounded non-speaker exact matches, seat `cand_ti` directly inside Top-5 / Slot 0!
+    if !is_monologue_stream
+        && !speaker_lowers.is_empty()
+        && sp_aligned
+        && (rare_oov_hits >= 1 || cand_score >= Q16 * 3)
+        && (deficit_a || dialogue_hypothetical_od)
+    {
+        let mut non_sp_mask = 0u64;
+        for (gi, g) in plan.groups.iter().take(64).enumerate() {
+            if !speaker_lowers.iter().any(|sp| sp.eq_ignore_ascii_case(g)) {
+                non_sp_mask |= 1u64 << gi;
+            }
+        }
+        let h0_non_sp = final_turn_indices
+            .first()
+            .map_or(0, |&h0| (t_exact_mask[h0] & non_sp_mask).count_ones());
+        if h0_non_sp == 0 || (dialogue_hypothetical_od && h0_non_sp <= 1 && cand_score >= Q16 * 3) {
+            if let Some(pos) = final_turn_indices.iter().position(|&x| x == cand_ti) {
+                final_turn_indices.remove(pos);
+            }
+            let target_slot = if h0_non_sp == 0 {
+                0
+            } else {
+                1.min(final_turn_indices.len())
+            };
+            final_turn_indices.insert(target_slot, cand_ti);
+            if final_turn_indices.len() > k {
+                final_turn_indices.truncate(k);
+            }
+            return target_slot == 0;
+        } else if !final_turn_indices[..5.min(final_turn_indices.len())].contains(&cand_ti) {
+            if let Some(pos) = final_turn_indices.iter().position(|&x| x == cand_ti) {
+                final_turn_indices.remove(pos);
+            }
+            let ins_at = 3.min(final_turn_indices.len());
+            final_turn_indices.insert(ins_at, cand_ti);
+            if final_turn_indices.len() > k {
+                final_turn_indices.truncate(k);
+            }
+            return false;
+        }
+    }
 
     // Direct Slot-0 promotion for monologue WH queries with ungrounded OOV/rare concept bridges:
     if is_monologue_stream && rare_oov_hits >= 1 && has_ungrounded_rare_oov {

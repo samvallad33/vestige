@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 const DATA_TSV: &str = include_str!("../data/wikidata-cc0-4rel.tsv");
 
 pub const DATA_SHA256: &str =
-    "84842d7ec73837f90d14a6739d8d0d1ed5c611a245a4a91d22c53d9d7ff581bc";
+    "806a5ada7944c2f92fe355b577c1211c9e5b50580dd62b7ceb047e053eba0694";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum EdgeRel {
@@ -49,7 +49,7 @@ fn graph() -> &'static TopoGraph {
         let mut fwd: HashMap<&'static str, Vec<(&'static str, EdgeRel, u16)>> = HashMap::new();
         let mut rev: HashMap<&'static str, Vec<(&'static str, EdgeRel, u16)>> = HashMap::new();
         let mut token_owners: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
-        let mut p17_countries: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
+        let mut p17_countries: HashMap<&'static str, Vec<(&'static str, u16)>> = HashMap::new();
         for line in DATA_TSV.lines() {
             let mut it = line.split('\t');
             let (Some(src), Some(rel_str), Some(dst), Some(w_str)) =
@@ -61,8 +61,12 @@ fn graph() -> &'static TopoGraph {
             let w: u16 = w_str.parse().unwrap_or(15);
             if rel == EdgeRel::Country {
                 let cs = p17_countries.entry(src).or_default();
-                if !cs.contains(&dst) {
-                    cs.push(dst);
+                if let Some(existing) = cs.iter_mut().find(|(c, _)| *c == dst) {
+                    if w > existing.1 {
+                        existing.1 = w;
+                    }
+                } else {
+                    cs.push((dst, w));
                 }
             }
             fwd.entry(src).or_default().push((dst, rel, w));
@@ -100,9 +104,16 @@ fn graph() -> &'static TopoGraph {
             list.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
         }
         let mut ambiguous_admin: HashMap<&'static str, bool> = HashMap::new();
-        for (node, countries) in p17_countries {
+        for (node, mut countries) in p17_countries {
             if countries.len() >= 2 {
-                ambiguous_admin.insert(node, true);
+                countries.sort_by(|a, b| b.1.cmp(&a.1));
+                let top_w = countries[0].1;
+                let second_w = countries[1].1;
+                // Only block multi-hop traversal when no single country dominates (>= 3x sitelinks);
+                // e.g. "paris" (france:367 vs us:33) is canonical, whereas "central district" is ambiguous.
+                if top_w < second_w.saturating_mul(3) {
+                    ambiguous_admin.insert(node, true);
+                }
             }
         }
         TopoGraph {

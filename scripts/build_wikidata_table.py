@@ -225,6 +225,35 @@ LIMIT 30000
         28,
     ),
     (
+        "communes_direct_p17_sl_ge_22",
+        "P17",
+        """
+SELECT ?srcLabel ?dstLabel ?sl WHERE {
+  ?src wdt:P31 wd:Q484170 ; wikibase:sitelinks ?sl ; wdt:P17 ?dst .
+  FILTER(?sl >= 22)
+  ?src rdfs:label ?srcLabel . FILTER(LANG(?srcLabel) = "en")
+  ?dst rdfs:label ?dstLabel . FILTER(LANG(?dstLabel) = "en")
+}
+LIMIT 25000
+""",
+        22,
+    ),
+    (
+        "human_settlements_direct_p17_sl_ge_24",
+        "P17",
+        """
+SELECT ?srcLabel ?dstLabel ?sl WHERE {
+  VALUES ?cls { wd:Q486972 wd:Q515 wd:Q1549591 }
+  ?src wdt:P31 ?cls ; wikibase:sitelinks ?sl ; wdt:P17 ?dst .
+  FILTER(?sl >= 24 && ?sl <= 48)
+  ?src rdfs:label ?srcLabel . FILTER(LANG(?srcLabel) = "en")
+  ?dst rdfs:label ?dstLabel . FILTER(LANG(?dstLabel) = "en")
+}
+LIMIT 35000
+""",
+        24,
+    ),
+    (
         "municipal_subdivisions_p131",
         "P131",
         """
@@ -438,7 +467,7 @@ def main() -> None:
 
     lines: list[str] = []
     total_bytes = 0
-    max_bytes = 4200 * 1024
+    max_bytes = 6400 * 1024
     for w, src, rel, dst in selected:
         line = f"{src}\t{rel}\t{dst}\t{w}\n"
         b = len(line.encode("utf-8"))

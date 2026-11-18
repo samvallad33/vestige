@@ -180,6 +180,9 @@ pub(super) fn synthesize_multihop_rwr_turns(
                     let d = ochiai_divergence_q16(post_c, post_d);
                     if d > div_best {
                         div_best = d;
+                        if div_best >= Q16 {
+                            break;
+                        }
                     }
                 }
                 let mut w = (base_cond.saturating_mul(div_best)) >> 16;

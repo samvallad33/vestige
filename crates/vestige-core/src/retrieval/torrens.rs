@@ -49,6 +49,7 @@ pub(super) enum SpatialEvent {
         agent: String,
         obj: String,
         explicit_release: bool,
+        explicit_acquire: bool,
     },
     Compass {
         turn: usize,
@@ -463,7 +464,7 @@ fn extract_spatial_events(raw_prose: &str, turn: usize, out: &mut Vec<SpatialEve
             continue;
         }
         let cased = cased_word_tokens(sent);
-        if !(4..=9).contains(&cased.len()) {
+        if !(4..=16).contains(&cased.len()) {
             continue;
         }
         let lowers: Vec<String> = cased.iter().map(|t| norm_lower(t)).collect();
@@ -532,6 +533,78 @@ fn extract_spatial_events(raw_prose: &str, turn: usize, out: &mut Vec<SpatialEve
             continue;
         }
 
+        // Pattern 1A: `<Agent> [1..3 words] "to" "the" <Place> "carrying" "the" <Obj>`
+        if n >= 8
+            && lowers[n - 3] == "carrying"
+            && lowers[n - 2] == "the"
+            && lowers[n - 6] == "to"
+            && lowers[n - 5] == "the"
+            && (2..=4).contains(&(n - 6))
+        {
+            out.push(SpatialEvent::Move {
+                turn,
+                agent: low0.clone(),
+                place: lowers[n - 4].clone(),
+            });
+            out.push(SpatialEvent::Interact {
+                turn,
+                agent: low0,
+                obj: lowers[n - 1].clone(),
+                explicit_release: false,
+                explicit_acquire: true,
+            });
+            continue;
+        }
+
+        // Pattern 1B: `<Agent> [1..2 words] "the" <Obj> ("in"|"at"|"on"|"from") "the" <Place> ["before" ("leaving"|"going") ("to"|"for") "the" <NextPlace>]`
+        if let Some(the_pos) = (2..=3usize).find(|&p| p + 4 < n && lowers[p] == "the") {
+            let prep = lowers[the_pos + 2].as_str();
+            if matches!(prep, "in" | "at" | "on" | "from")
+                && lowers[the_pos + 3] == "the"
+                && !matches!(lowers[the_pos - 1].as_str(), "to" | "in" | "at" | "on" | "of")
+            {
+                let place_pos = the_pos + 4;
+                let next_place = if place_pos + 1 == n {
+                    Some(None)
+                } else if place_pos + 6 == n
+                    && lowers[place_pos + 1] == "before"
+                    && matches!(lowers[place_pos + 2].as_str(), "leaving" | "going")
+                    && matches!(lowers[place_pos + 3].as_str(), "to" | "for")
+                    && lowers[place_pos + 4] == "the"
+                {
+                    Some(Some(lowers[place_pos + 5].clone()))
+                } else {
+                    None
+                };
+                if let Some(opt_next) = next_place {
+                    let has_up = lowers[1..the_pos].iter().any(|w| w == "up");
+                    let has_down = lowers[1..the_pos].iter().any(|w| w == "down");
+                    let explicit_acquire = prep == "from" || has_up;
+                    let explicit_release = !explicit_acquire && (has_down || opt_next.is_some());
+                    out.push(SpatialEvent::Move {
+                        turn,
+                        agent: low0.clone(),
+                        place: lowers[place_pos].clone(),
+                    });
+                    out.push(SpatialEvent::Interact {
+                        turn,
+                        agent: low0.clone(),
+                        obj: lowers[the_pos + 1].clone(),
+                        explicit_release,
+                        explicit_acquire,
+                    });
+                    if let Some(nxt_pl) = opt_next {
+                        out.push(SpatialEvent::Move {
+                            turn,
+                            agent: low0,
+                            place: nxt_pl,
+                        });
+                    }
+                    continue;
+                }
+            }
+        }
+
         // Pattern 2: `<Agent> [1..2 words] "the" <Obj> ["there"]` (no `"to"` before `"the"`)
         let (the_pos, obj_pos) = if n >= 4 && lowers[n - 2] == "the" {
             (n - 2, n - 1)
@@ -544,11 +617,13 @@ fn extract_spatial_events(raw_prose: &str, turn: usize, out: &mut Vec<SpatialEve
             continue;
         }
         let explicit_release = lowers[1..the_pos].iter().any(|w| w == "down");
+        let explicit_acquire = lowers[1..the_pos].iter().any(|w| w == "up");
         out.push(SpatialEvent::Interact {
             turn,
             agent: low0,
             obj: lowers[obj_pos].clone(),
             explicit_release,
+            explicit_acquire,
         });
     }
 }
@@ -924,7 +999,7 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
             ) || w.ends_with("'s")
         })
         .count();
-    let max_hops = (prep_hops + 2).clamp(3, 5);
+    let max_hops = (prep_hops + 2).clamp(4, 5);
 
     #[derive(Clone)]
     struct BeamState {
@@ -957,15 +1032,30 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
         let mut next_beam: Vec<BeamState> = Vec::new();
         for st in &beam {
             let mut candidates: Vec<(&TorrensRecord, &str, bool)> = Vec::new();
-            let fwd_degree = by_subj.get(st.cur_subj.as_str()).map_or(0, Vec::len);
+            let stripped_subj = st
+                .cur_subj
+                .strip_prefix("the ")
+                .unwrap_or(st.cur_subj.as_str())
+                .rsplit_once(" of ")
+                .map(|(_, tail)| tail);
+            let mut fwd_degree = by_subj.get(st.cur_subj.as_str()).map_or(0, Vec::len);
             if let Some(edges) = by_subj.get(st.cur_subj.as_str()) {
                 for &rec in edges {
                     candidates.push((rec, rec.val_phrase.as_str(), false));
                 }
             }
+            if let Some(tail_s) = stripped_subj
+                && tail_s != st.cur_subj
+                && let Some(edges) = by_subj.get(tail_s)
+            {
+                fwd_degree += edges.len();
+                for &rec in edges {
+                    candidates.push((rec, rec.val_phrase.as_str(), false));
+                }
+            }
             let inv_edges = by_val.get(st.cur_subj.as_str());
-            let allow_inv = hop == 0
-                || (!st.turns.is_empty() && inv_edges.is_some_and(|v| v.len() <= 3));
+            let allow_inv = (hop == 0 && fwd_degree == 0)
+                || (!st.turns.is_empty() && fwd_degree == 0 && inv_edges.is_some_and(|v| v.len() <= 2));
             if allow_inv && let Some(inv_list) = inv_edges {
                 for &rec in inv_list {
                     candidates.push((rec, rec.subj_phrase.as_str(), true));
@@ -1011,6 +1101,7 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
                 next_turns.push(rec.turn);
                 let next_score = st.score_q16.saturating_add(edge_gain);
                 let cues = next_mask.count_ones();
+                let prev_cues = st.used_mask.count_ones();
                 let next_first_matched = if hop == 0 {
                     raw_hop_sc >= Q16
                 } else {
@@ -1019,12 +1110,15 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
 
                 // A multi-hop candidate (`len >= 2`) is admissible as a terminal answer ONLY when
                 // its final hop matched an explicit query/ontology target (`hop_sc >= (Q16 >> 1)`)
-                // and multi-cue alignment holds (`cues >= 2` or strong `hop_sc >= Q16` or unique 2-hop target).
+                // and consumed a new query cue (`cues > prev_cues`, preventing overshoot past an already-solved target)
+                // or is the unique 2-hop idiomatic target (`hop == 1 && fwd_degree == 1`).
+                let solved_new_cue = cues > prev_cues || (hop == 1 && next_first_matched && fwd_degree == 1);
                 if next_turns.len() >= 2
                     && hop_sc >= (Q16 >> 1)
+                    && solved_new_cue
                     && (cues >= 2 || hop_sc >= Q16 || (hop == 1 && next_first_matched && fwd_degree == 1))
                 {
-                    let term_total = next_score.saturating_add(Q16 >> 1);
+                    let term_total = next_score.saturating_add((cues as u64) * Q16);
                     if best_chain
                         .as_ref()
                         .map_or(true, |(_, bs, _)| term_total > *bs)
@@ -1033,7 +1127,15 @@ pub(super) fn resolve_torrens_chain_q16(ix: &Index, q_text: &str) -> (Vec<usize>
                     }
                 }
 
-                if by_subj.contains_key(next_ent) || by_val.contains_key(next_ent) {
+                let next_stripped = next_ent
+                    .strip_prefix("the ")
+                    .unwrap_or(next_ent)
+                    .rsplit_once(" of ")
+                    .map(|(_, tl)| tl);
+                if by_subj.contains_key(next_ent)
+                    || by_val.contains_key(next_ent)
+                    || next_stripped.is_some_and(|tl| by_subj.contains_key(tl))
+                {
                     let mut next_vis = st.visited.clone();
                     next_vis.push(next_ent.to_string());
                     next_beam.push(BeamState {
@@ -1239,6 +1341,7 @@ pub(super) fn resolve_spatial_possession(
 
     let mut agent_loc: BTreeMap<&str, (&str, usize)> = BTreeMap::new();
     let mut held_by: Option<&str> = None;
+    let mut last_actor: Option<&str> = None;
     // History of distinct `(place, loc_turn_idx, event_turn_idx)` transitions for `target_obj`
     let mut obj_history: Vec<(&str, usize, usize)> = Vec::new();
 
@@ -1264,11 +1367,13 @@ pub(super) fn resolve_spatial_possession(
                 agent,
                 obj,
                 explicit_release,
+                explicit_acquire,
             } => {
                 if obj != target_obj {
                     continue;
                 }
-                if *explicit_release || held_by == Some(agent.as_str()) {
+                last_actor = Some(agent.as_str());
+                if !*explicit_acquire && (*explicit_release || held_by == Some(agent.as_str())) {
                     // Agent drops/leaves `target_obj` at their current location (`loc_turn` carries room name)
                     if let Some(&(pl, loc_turn)) = agent_loc.get(agent.as_str()) {
                         if let Some((last_p, last_loc_t, last_ev_t)) = obj_history.last_mut() {
@@ -1304,25 +1409,55 @@ pub(super) fn resolve_spatial_possession(
         }
     }
 
+    let push_uniq = |out: &mut Vec<usize>, cap: usize, ti: usize| {
+        if out.len() < cap && !out.contains(&ti) {
+            out.push(ti);
+        }
+    };
+
     if let Some(b_loc) = before_loc {
-        // Search backward for the latest occurrence of `b_loc` with a preceding distinct location
+        // 1. Search backward for the latest occurrence of `b_loc` in `obj_history` with a preceding distinct location
         for idx in (1..obj_history.len()).rev() {
             if obj_history[idx].0 == b_loc && obj_history[idx - 1].0 != b_loc {
+                let mut out = Vec::with_capacity(4);
                 let (_, loc_t, ev_t) = obj_history[idx - 1];
-                return if loc_t != ev_t {
-                    vec![loc_t, ev_t]
-                } else {
-                    vec![loc_t]
-                };
+                push_uniq(&mut out, 4, loc_t);
+                push_uniq(&mut out, 4, ev_t);
+                for k in (0..idx - 1).rev() {
+                    push_uniq(&mut out, 4, obj_history[k].1);
+                    push_uniq(&mut out, 4, obj_history[k].2);
+                }
+                return out;
             }
         }
-        Vec::new()
-    } else if let Some(&(_, loc_t, ev_t)) = obj_history.last() {
-        if loc_t != ev_t {
-            vec![loc_t, ev_t]
-        } else {
-            vec![loc_t]
+        // 2. `agent_loc` fallback for `"dropped the <obj> in the <place> before leaving for the <b_loc>"`:
+        if let Some(last_idx) = obj_history.len().checked_sub(1)
+            && obj_history[last_idx].0 != b_loc
+            && last_actor
+                .and_then(|a| agent_loc.get(a))
+                .is_some_and(|&(pl, _)| pl == b_loc)
+        {
+            let mut out = Vec::with_capacity(4);
+            let (_, loc_t, ev_t) = obj_history[last_idx];
+            push_uniq(&mut out, 4, loc_t);
+            push_uniq(&mut out, 4, ev_t);
+            for k in (0..last_idx).rev() {
+                push_uniq(&mut out, 4, obj_history[k].1);
+                push_uniq(&mut out, 4, obj_history[k].2);
+            }
+            return out;
         }
+        Vec::new()
+    } else if let Some(last_idx) = obj_history.len().checked_sub(1) {
+        let mut out = Vec::with_capacity(4);
+        let (_, loc_t, ev_t) = obj_history[last_idx];
+        push_uniq(&mut out, 4, loc_t);
+        push_uniq(&mut out, 4, ev_t);
+        for k in (0..last_idx).rev() {
+            push_uniq(&mut out, 4, obj_history[k].1);
+            push_uniq(&mut out, 4, obj_history[k].2);
+        }
+        out
     } else {
         Vec::new()
     }

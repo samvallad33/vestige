@@ -110,6 +110,10 @@ def main():
         return resp
 
     t_start = time.time()
+    os.makedirs(os.path.join('benchmarks', 'results'), exist_ok=True)
+    mab_ledger = os.path.join('benchmarks', 'results', 'misses_memoryagentbench.jsonl')
+    with open(mab_ledger, 'w', encoding='utf-8') as _:
+        pass
 
     try:
         # 1. Row 0: ruler_qa1_197K (1,204 docs, 100 Qs)
@@ -291,6 +295,20 @@ def main():
                 tb['any10'] += int(a10)
                 tb['all5'] += int(l5)
                 tb['all10'] += int(l10)
+                if not a1 or not a5:
+                    s_map = {s['id']: (s['turns'][0]['content'][:180] if s['turns'] else '') for s in sessions}
+                    pred0 = resp['results'][qi]['sessions'][0] if resp['results'][qi]['sessions'] else {}
+                    first_idx = next((ri for ri, s in enumerate(ret) if s in g_ids), -1)
+                    with open(mab_ledger, 'a', encoding='utf-8') as lf:
+                        lf.write(json.dumps({
+                            'query': queries[qi]['text'],
+                            'category': f'row{row_idx}_{qtype}',
+                            'gold_turns': [{'id': g, 'preview': s_map.get(g, '')} for g in list(g_ids)[:5]],
+                            'predicted_rank1': {'id': pred0.get('id', ''), 'preview': s_map.get(pred0.get('id', ''), '')},
+                            'gold_rank': first_idx + 1 if first_idx >= 0 else 'NOT_IN_TOP10',
+                            'miss_type': 'NEAR_MISS_RANKS_2_5' if 1 <= first_idx < 5 else 'NOT_IN_TOP10',
+                            'winning_tokens': pred0.get('matched', []),
+                        }) + '\n')
 
             n_r = row_stat['n']
             print(f"Row {row_idx} (longmemeval_s*, {len(sessions)} sess, {n_r}/{row_stat['n_total']} non-abs, {row_stat['n_abs']} abs, {dt:.2f}s): Any@1={row_stat['any1']/n_r*100:.2f}% Any@5={row_stat['any5']/n_r*100:.2f}% Any@10={row_stat['any10']/n_r*100:.2f}% All@5={row_stat['all5']/n_r*100:.2f}% All@10={row_stat['all10']/n_r*100:.2f}% MRR={row_stat['mrr']/n_r:.4f}")

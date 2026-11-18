@@ -20,8 +20,20 @@
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+
+function resetAutopsyLedger(benchName) {
+  const dir = join(resolve('.'), 'benchmarks', 'results');
+  mkdirSync(dir, { recursive: true });
+  const p = join(dir, `misses_${benchName}.jsonl`);
+  writeFileSync(p, '', 'utf8');
+  return p;
+}
+
+function recordAutopsyMiss(ledgerPath, record) {
+  appendFileSync(ledgerPath, JSON.stringify(record) + '\n', 'utf8');
+}
 
 const rootDir = resolve('.');
 const binCandidates = [
@@ -166,6 +178,7 @@ async function runBeam(args) {
   let pktTurnAny5 = 0, pktTurnAll5 = 0;
 
   const categoryStats = {};
+  const beamLedger = resetAutopsyLedger(`beam_${splitDir.toLowerCase()}`);
   const t0 = Date.now();
   const convsToRun = args.limit ? convDirs.slice(0, args.limit) : convDirs;
 
@@ -179,6 +192,7 @@ async function runBeam(args) {
     // sub's opening user turn. Targets are chat turn ids only — qData is not read here.
     const sessions = [];
     const turnIdToSessionId = new Map();
+    const turnTextMap = new Map();
     for (let bi = 0; bi < chatData.length; bi++) {
       const batch = chatData[bi];
       const batchAnchor = batch.time_anchor || batch.turns?.[0]?.[0]?.time_anchor || '';
@@ -196,6 +210,7 @@ async function runBeam(args) {
             content: t.content || '',
           });
           turnIdToSessionId.set(tid, sId);
+          turnTextMap.set(tid, String(t.content || '').slice(0, 180));
           totalTurns++;
         }
         sessions.push({
@@ -278,6 +293,19 @@ async function runBeam(args) {
       if (pTAll5) { pktTurnAll5++; st.pktTurnAll5++; }
       const tRank = retTurnIds.findIndex(id => goldTurnIds.includes(id));
       if (tRank >= 0) turnMrrSum += 1.0 / (tRank + 1);
+      if (!tAny(1) || !tAny(5)) {
+        const pred0 = res?.turns?.[0];
+        const rank1Pos = tRank >= 0 ? tRank + 1 : 'NOT_IN_TOP10';
+        recordAutopsyMiss(beamLedger, {
+          query: queryEntries[qi].question,
+          category: cat,
+          gold_turns: goldTurnIds.slice(0, 5).map(gid => ({ id: gid, preview: turnTextMap.get(gid) || '' })),
+          predicted_rank1: pred0 ? { id: pred0.id, preview: turnTextMap.get(pred0.id) || '' } : null,
+          gold_rank: rank1Pos,
+          miss_type: tRank >= 1 && tRank < 5 ? 'NEAR_MISS_RANKS_2_5' : 'NOT_IN_TOP10',
+          winning_tokens: pred0?.matched || [],
+        });
+      }
     }
 
     if ((ci + 1) % 5 === 0 || ci === convsToRun.length - 1) {
@@ -384,6 +412,7 @@ async function runHotpotQA(args) {
   let docHitsAt5 = 0;
   let sentHitsAt5 = 0;
   let sentHitsAt10 = 0;
+  const hotpotLedger = resetAutopsyLedger('hotpotqa');
   const t0 = Date.now();
 
   for (let i = 0; i < itemsToRun.length; i++) {
@@ -392,11 +421,14 @@ async function runHotpotQA(args) {
 
     // Format context into Vestige Sessions (each document is a session, sentences are turns)
     const sessions = [];
+    const sentMap = new Map();
     for (const [title, sentences] of item.context) {
       const turns = [];
       for (let si = 0; si < sentences.length; si++) {
+        const sid = `${title}_sent${si}`;
+        sentMap.set(sid, String(sentences[si] || '').slice(0, 180));
         turns.push({
-          id: `${title}_sent${si}`,
+          id: sid,
           role: 'user',
           content: sentences[si],
         });
@@ -434,6 +466,22 @@ async function runHotpotQA(args) {
     const allSentsHit10 = goldSentIds.every(gs => retSentIds.slice(0, 10).includes(gs));
     if (allSentsHit5) sentHitsAt5++;
     if (allSentsHit10) sentHitsAt10++;
+    if (!allDocsHit2 || !allDocsHit5) {
+      const pred0 = res?.turns?.[0];
+      const worstRank = Math.max(...goldDocTitles.map(gt => {
+        const idx = retDocIds.indexOf(gt);
+        return idx >= 0 ? idx + 1 : 999;
+      }));
+      recordAutopsyMiss(hotpotLedger, {
+        query: item.question,
+        category: item.type || 'hotpotqa',
+        gold_turns: goldSentIds.slice(0, 5).map(gs => ({ id: gs, preview: sentMap.get(gs) || '' })),
+        predicted_rank1: pred0 ? { id: pred0.id, preview: sentMap.get(pred0.id) || '' } : null,
+        gold_rank: worstRank <= 10 ? worstRank : 'NOT_IN_TOP10',
+        miss_type: worstRank >= 2 && worstRank <= 5 ? 'NEAR_MISS_RANKS_2_5' : 'NOT_IN_TOP10',
+        winning_tokens: pred0?.matched || [],
+      });
+    }
 
     if ((i + 1) % 200 === 0 || i === itemsToRun.length - 1) {
       const docR2 = (docHitsAt2 / scoredQuestions * 100).toFixed(2);
@@ -528,6 +576,20 @@ async function runLongMemEvalM(args) {
 }
 
 // =========================================================================
+// 5. EXTENDED FRONTIER BENCHMARKS (RULER, CoRA-Bench, InfiniteBench En.KV, LOONG Spotlight)
+// =========================================================================
+async function runExtendedBench(scriptName, label, args) {
+  console.log(`\n======================================================`);
+  console.log(`=== RUNNING ${label} (Vestige 6.2.2) ===`);
+  console.log(`======================================================`);
+  const scriptPath = join(rootDir, 'benchmarks', scriptName);
+  const scriptArgs = [];
+  if (args.limit) scriptArgs.push('--limit', String(args.limit));
+  if (args.out && scriptName !== 'eval_infinitebench_kv.py') scriptArgs.push('--json', args.out);
+  await runPythonScript(scriptPath, scriptArgs);
+}
+
+// =========================================================================
 // MAIN ROUTER
 // =========================================================================
 async function main() {
@@ -542,13 +604,26 @@ async function main() {
       await runMemoryAgentBench(args);
     } else if (args.bench === 'longmemeval_m') {
       await runLongMemEvalM(args);
+    } else if (args.bench === 'ruler') {
+      await runExtendedBench('eval_ruler_multikey_multivalue.py', 'NVIDIA RULER MULTI-NEEDLE & MULTI-VALUE KV', args);
+    } else if (args.bench === 'cora') {
+      await runExtendedBench('eval_cora_bench.py', 'CORA-BENCH SUPPORTING-FACT EVIDENCE RECALL', args);
+    } else if (args.bench === 'infinitebench_kv') {
+      await runExtendedBench('eval_infinitebench_kv.py', 'INFINITEBENCH EN.KV', args);
+    } else if (args.bench === 'loong_spotlight') {
+      await runExtendedBench('eval_loong_spotlight.py', 'LOONG SPOTLIGHT FINANCIAL & REGULATORY', args);
+    } else if (args.bench === 'extended') {
+      await runExtendedBench('eval_ruler_multikey_multivalue.py', 'NVIDIA RULER MULTI-NEEDLE & MULTI-VALUE KV', args);
+      await runExtendedBench('eval_cora_bench.py', 'CORA-BENCH SUPPORTING-FACT EVIDENCE RECALL', args);
+      await runExtendedBench('eval_infinitebench_kv.py', 'INFINITEBENCH EN.KV', args);
+      await runExtendedBench('eval_loong_spotlight.py', 'LOONG SPOTLIGHT FINANCIAL & REGULATORY', args);
     } else if (args.bench === 'all') {
       console.log('=== RUNNING ALL CORE RECALL BENCHMARKS (BEAM, MemoryAgentBench, LongMemEval_M) ===');
       await runBeam(args);
       await runMemoryAgentBench(args);
       await runLongMemEvalM(args);
     } else {
-      console.error(`Unknown benchmark: ${args.bench}. Available: beam, memoryagentbench, longmemeval_m, hotpotqa, all`);
+      console.error(`Unknown benchmark: ${args.bench}. Available: beam, memoryagentbench, longmemeval_m, hotpotqa, ruler, cora, infinitebench_kv, loong_spotlight, extended, all`);
       exitCode = 1;
     }
   } catch (err) {

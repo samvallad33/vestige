@@ -308,12 +308,23 @@ pub(super) fn proper_entity_tokens(text: &str) -> Vec<String> {
 
     for line in text.lines() {
         at_clause_start = true;
+        let mut in_mid_quote = false;
         for raw_word in line.split_whitespace() {
-            let ends_clause = raw_word.ends_with(['.', '?', '!', ',', ';', ':']);
+            let ends_hard_punct = raw_word.ends_with(['.', '?', '!', ';', ':']);
+            let ends_comma = raw_word.ends_with(',');
             let starts_quote = raw_word.starts_with(['"', '\'', '“', '‘', '(', '[']);
+            let closes_quote = raw_word.len() >= 2
+                && raw_word
+                    .trim_end_matches([',', '.', ';', ':', '!', '?'])
+                    .ends_with(['"', '\'', '”', '’', ')', ']']);
+            if starts_quote && !at_clause_start {
+                in_mid_quote = true;
+            }
+            let ends_clause = ends_hard_punct || (ends_comma && !in_mid_quote);
             let w = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’' && c != '-');
             if w.is_empty() {
                 flush_run(&mut run, run_started_clause, &mut out);
+                in_mid_quote = false;
                 at_clause_start = true;
                 continue;
             }
@@ -326,7 +337,7 @@ pub(super) fn proper_entity_tokens(text: &str) -> Vec<String> {
             let norm: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
             if first_upper && !norm.is_empty() && !STARTER_STOP.contains(&norm.as_str()) {
                 if run.is_empty() {
-                    run_started_clause = (at_clause_start || starts_quote) && !all_upper_acronym;
+                    run_started_clause = at_clause_start && !all_upper_acronym;
                 }
                 run.push(norm);
             } else if !run.is_empty() && TITLE_CONNECTORS.contains(&norm.as_str()) {
@@ -340,9 +351,12 @@ pub(super) fn proper_entity_tokens(text: &str) -> Vec<String> {
             } else {
                 flush_run(&mut run, run_started_clause, &mut out);
             }
-            if ends_clause {
+            if closes_quote {
+                in_mid_quote = false;
+            }
+            if ends_clause || closes_quote {
                 flush_run(&mut run, run_started_clause, &mut out);
-                at_clause_start = raw_word.ends_with(['.', '?', '!', ';', ':']);
+                at_clause_start = ends_hard_punct;
             } else {
                 at_clause_start = false;
             }
