@@ -18,6 +18,7 @@ exclude = [
     "crates/strata-import",
     "crates/strata-kernel",
     "crates/strata-migrate",
+    "crates/strata-passport",
     "crates/strata-store",
     "crates/strata-verify",
 
