@@ -510,6 +510,23 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             &s_score,
             &mut bridge_boost,
         );
+        let tlm_lifts =
+            crate::retrieval::lexical::translation_lm::compute_translation_lm_lifts_q16(
+                ix,
+                plan,
+                multi_or_partial,
+                s_exact_mask,
+                top0,
+                smax_q16,
+            );
+        apply_rule8_capped_q16_lifts(
+            &tlm_lifts,
+            top0,
+            top0_ceiling_q16,
+            invariant_crisp_lock,
+            &s_score,
+            &mut bridge_boost,
+        );
     }
 
     ctx.s_score = s_score;

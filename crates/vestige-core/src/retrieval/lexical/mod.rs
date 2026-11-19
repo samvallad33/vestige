@@ -8,6 +8,7 @@ pub(in crate::retrieval) mod rbp;
 pub(in crate::retrieval) mod rocchio;
 pub(in crate::retrieval) mod rungs;
 pub(in crate::retrieval) mod steps;
+pub(in crate::retrieval) mod translation_lm;
 pub(in crate::retrieval) mod wand;
 
 pub(in crate::retrieval) use self::bm25f::*;
