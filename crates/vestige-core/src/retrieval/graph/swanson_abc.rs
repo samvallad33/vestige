@@ -56,6 +56,15 @@ pub(in crate::retrieval) fn score_swanson_anc_q16(
     out
 }
 
+/// Swanson's C-side must still name an exact query term; bridges alone never qualify a target.
+pub(in crate::retrieval) fn session_has_query_term(ix: &Index, plan: &QueryPlan, si: usize) -> bool {
+    plan.terms.iter().any(|qt| {
+        qt.exact_hit
+            && qt.group.is_some()
+            && ix.s_postings.get(qt.id as usize).is_some_and(|ps| ps.contains(&(si as u32)))
+    })
+}
+
 pub(in crate::retrieval) fn compute_swanson_abc_lifts_q16(
     ix: &Index,
     plan: &QueryPlan,
@@ -161,7 +170,7 @@ pub(in crate::retrieval) fn compute_swanson_abc_lifts_q16(
         SWANSON_COEFF_BASE_Q16
     };
     for (si, &sc) in anc.iter().enumerate() {
-        if si != top0 && sc > 0 {
+        if si != top0 && sc > 0 && session_has_query_term(ix, plan, si) {
             let norm_q16 = (sc.saturating_mul(Q16_ONE)) / max_anc;
             out[si] = (((smax_q16.saturating_mul(coeff)) >> Q16_SHIFT).saturating_mul(norm_q16))
                 >> Q16_SHIFT;
@@ -186,5 +195,22 @@ mod tests {
         assert!(sc[1] > 0); // Runner-up session 1 bridged from top0 now receives credit!
         assert_eq!(sc[3], 0);
         assert_eq!(sc[0], 0);
+    }
+}
+
+#[cfg(test)]
+mod query_anchor_tests {
+    use super::*;
+    use crate::retrieval::{tests::{ix_of, s, turn}, *};
+    #[test]
+    fn swanson_target_requires_exact_query_term() {
+        let ix = ix_of(&[
+            s("a", vec![turn("user", "Telescope lenses need careful cleaning.")]),
+            s("b", vec![turn("user", "Orchid soil stays damp.")]),
+        ]);
+        let plan = crate::retrieval::query::plan::plan_query(
+            &ix, &Query { text: "telescope".into(), date: String::new() }, &Params::default());
+        assert!(session_has_query_term(&ix, &plan, 0));
+        assert!(!session_has_query_term(&ix, &plan, 1));
     }
 }
