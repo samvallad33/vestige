@@ -55,6 +55,12 @@ struct Tables {
     /// Typed meronym & definition-composition edges (`cappuccino` -> `["espresso", "milk"]`,
     /// `omelette` -> `["egg"]`, `egg` -> `["animal"]`).
     has_part_edges: HashMap<String, Vec<String>>,
+    /// Resnik IC subsumer descendant count across the WordNet 3.1 noun DAG.
+    desc_count: HashMap<u32, u32>,
+    /// Multi-word instance-hypernym (`@i`) surnames/tails (`seuss` -> `[Dr._Seuss]`, `vivaldi` -> `[Antonio_Vivaldi]`).
+    instance_surnames: HashMap<String, Vec<u32>>,
+    /// Rare gloss word -> synsets whose WordNet definition contains that word (`married` -> `[husband, wife, ...]`).
+    gloss_to_synsets: HashMap<String, Vec<u32>>,
 }
 
 fn push_unique<T: PartialEq>(v: &mut Vec<T>, x: T) {
@@ -90,6 +96,7 @@ fn parse(data: &str) -> Tables {
         let Some(p_cnt) = f.get(p_at).and_then(|s| s.parse::<usize>().ok()) else {
             continue;
         };
+        let mut is_instance_syn = false;
         for k in 0..p_cnt {
             let b = p_at + 1 + 4 * k;
             let (Some(sym), Some(off), Some(pos)) = (f.get(b), f.get(b + 1), f.get(b + 2)) else {
@@ -102,6 +109,9 @@ fn parse(data: &str) -> Tables {
                 continue;
             };
             if *sym == "@" || *sym == "@i" {
+                if *sym == "@i" {
+                    is_instance_syn = true;
+                }
                 push_unique(out.parents.entry(own).or_default(), o);
                 push_unique(out.children.entry(o).or_default(), own);
             } else if *sym == "#p" || *sym == "#m" {
@@ -116,7 +126,7 @@ fn parse(data: &str) -> Tables {
             if lemma.contains('_') {
                 let all_parts: Vec<String> = lemma
                     .split('_')
-                    .map(|p| p.to_lowercase())
+                    .map(|p| p.trim_matches('.').to_lowercase())
                     .filter(|p| !p.is_empty())
                     .collect();
                 if (2..=5).contains(&all_parts.len())
@@ -131,6 +141,16 @@ fn parse(data: &str) -> Tables {
                         && stripped.len() >= 3
                     {
                         push_unique(out.phrase_senses.entry(stripped.to_string()).or_default(), own);
+                    }
+                    if is_instance_syn
+                        && let Some(tail) = all_parts.last()
+                        && tail.len() >= 4
+                        && tail.bytes().all(|b| b.is_ascii_alphabetic())
+                    {
+                        let entry = out.instance_surnames.entry(tail.clone()).or_default();
+                        if entry.len() < 4 {
+                            push_unique(entry, own);
+                        }
                     }
                 }
                 let parts: Vec<String> = all_parts
@@ -200,7 +220,7 @@ fn parse(data: &str) -> Tables {
             push_unique(&mut partners, p.clone());
         }
         for p in &parts {
-            if out.senses.get(p).is_some_and(|s| s.len() <= 4) {
+            if out.senses.get(p).is_none_or(|s| s.len() <= 4) {
                 let entry = out.compound_links.entry(p.clone()).or_default();
                 for partner in &partners {
                     if partner != p && entry.len() < 16 {
@@ -288,6 +308,15 @@ fn parse(data: &str) -> Tables {
                         if mt != gtok && entry.len() < 256 {
                             push_unique(entry, mt.clone());
                         }
+                    }
+                }
+            }
+            for gtok in &kept {
+                let gdf = gloss_df.get(gtok).copied().unwrap_or(0);
+                if gdf <= 140 {
+                    let entry = out.gloss_to_synsets.entry(gtok.clone()).or_default();
+                    if entry.len() < 48 {
+                        push_unique(entry, syn);
                     }
                 }
             }
@@ -516,7 +545,129 @@ fn parse(data: &str) -> Tables {
         }
     }
 
+    // Pass 4: Exact WordNet 3.1 DAG descendant counts for Resnik Information Content (`IC(LCS)`).
+    let mut all_syns: Vec<u32> = out
+        .lemmas
+        .keys()
+        .chain(out.phrases.keys())
+        .copied()
+        .collect();
+    all_syns.sort_unstable();
+    all_syns.dedup();
+    let mut vis_buf: Vec<u32> = Vec::with_capacity(32);
+    for syn in all_syns {
+        vis_buf.clear();
+        vis_buf.push(syn);
+        let mut cursor = 0usize;
+        while cursor < vis_buf.len() && vis_buf.len() < 64 {
+            let cur = vis_buf[cursor];
+            cursor += 1;
+            *out.desc_count.entry(cur).or_insert(0) += 1;
+            if let Some(ps) = out.parents.get(&cur) {
+                for &p in ps {
+                    if !vis_buf.contains(&p) {
+                        vis_buf.push(p);
+                    }
+                }
+            }
+        }
+    }
+
     out
+}
+
+/// Resnik IC specific ancestor synsets for `word`: walks `@`/`@i`/`#p`/`#m` upward up to `max_hops`
+/// from `senses(word)` (plus `@i` instance surnames when `word` is an instance proper noun), returning
+/// `(synset_id, desc_count)` strictly filtered to specific informative synsets (`desc_count <= max_desc`).
+pub fn specific_ancestor_synsets(word: &str, max_hops: usize, max_desc: u32) -> Vec<(u32, u32)> {
+    let t = table();
+    let mut seeds: Vec<u32> = senses(word).to_vec();
+    if seeds.len() <= 2
+        && let Some(inst) = t.instance_surnames.get(word)
+    {
+        for &s in inst {
+            push_unique(&mut seeds, s);
+        }
+    }
+    if seeds.is_empty()
+        && let Some(sing) = word.strip_suffix("es").or_else(|| word.strip_suffix('s'))
+        && sing.len() >= 3
+    {
+        seeds.extend_from_slice(senses(sing));
+    }
+    if seeds.is_empty() {
+        return Vec::new();
+    }
+    let mut visited: Vec<u32> = Vec::new();
+    let mut frontier: Vec<u32> = seeds;
+    for &s in &frontier {
+        push_unique(&mut visited, s);
+    }
+    for _ in 0..max_hops {
+        let mut next = Vec::new();
+        for s in frontier {
+            for &p in t
+                .parents
+                .get(&s)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+                .iter()
+                .chain(t.holonyms.get(&s).map(Vec::as_slice).unwrap_or(&[]))
+            {
+                if !visited.contains(&p) {
+                    visited.push(p);
+                    next.push(p);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    let mut out: Vec<(u32, u32)> = visited
+        .into_iter()
+        .filter_map(|s| {
+            let dc = t.desc_count.get(&s).copied().unwrap_or(1);
+            (dc <= max_desc).then_some((s, dc))
+        })
+        .collect();
+    out.sort_unstable_by_key(|&(s, dc)| (dc, s));
+    out
+}
+
+/// Rare WordNet gloss lemmas attached to `word`'s own noun/instance synsets
+/// (e.g. `seuss` -> `["writer", "illustrator", "children", "book"]`, `vivaldi` -> `["baroque", "composer", "violinist"]`).
+pub fn gloss_tokens_of(word: &str) -> Vec<&'static str> {
+    let t = table();
+    let mut seeds: Vec<u32> = senses(word).to_vec();
+    if seeds.len() <= 2
+        && let Some(inst) = t.instance_surnames.get(word)
+    {
+        for &s in inst {
+            push_unique(&mut seeds, s);
+        }
+    }
+    let mut out: Vec<&'static str> = Vec::new();
+    for s in seeds {
+        if let Some(gl) = t.gloss_lemmas.get(&s) {
+            for g in gl {
+                if g != word && !out.contains(&g.as_str()) {
+                    out.push(g.as_str());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Synsets whose WordNet 3.1 definition contains the rare word `word`.
+pub fn synsets_with_gloss(word: &str) -> &'static [u32] {
+    table()
+        .gloss_to_synsets
+        .get(word)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
 }
 
 fn table() -> &'static Tables {

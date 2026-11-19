@@ -72,10 +72,30 @@ pub fn classify(text: &str) -> QueryIntent {
         || !dates.is_empty()
         || year_count > 0
         || raw.iter().any(|w| token_is_temporal_word(w));
+    let distinct_years = dates
+        .iter()
+        .filter(|d| d.starts_with("__YEAR__"))
+        .collect::<DetHashSet<_>>()
+        .len();
+    let distinct_months = dates
+        .iter()
+        .filter(|d| d.starts_with("__MONTH__"))
+        .collect::<DetHashSet<_>>()
+        .len();
+    let distinct_dates = dates
+        .iter()
+        .filter(|d| d.starts_with("__DATE__"))
+        .collect::<DetHashSet<_>>()
+        .len();
+    let distinct_seasons = dates
+        .iter()
+        .filter(|d| d.starts_with("__SEASON__"))
+        .collect::<DetHashSet<_>>()
+        .len();
     let content_groups = raw.iter().filter(|w| is_content(w)).collect::<DetHashSet<_>>().len();
     QueryIntent {
         // Public Skeptic-Audit contract: `classify` leaves `preference` false and sets
-        // `is_event_sequence` strictly from >=2 explicit calendar markers; internal effective
+        // `is_event_sequence` strictly from >=2 distinct explicit calendar markers; internal effective
         // sequence/preference modes are derived in `rank_one` (`eff_it`) without mutating `RankResult.intent`.
         preference: false,
         current_state: false,
@@ -88,7 +108,11 @@ pub fn classify(text: &str) -> QueryIntent {
         sniper_how_many: (slots & WH_QTY) != 0,
         sniper_where: (slots & WH_PLACE) != 0,
         sniper_why: (slots & WH_CAUSE) != 0,
-        is_event_sequence: year_count >= 2 || dates.len() >= 2,
+        is_event_sequence: year_count >= 2
+            || distinct_years >= 2
+            || distinct_months >= 2
+            || distinct_dates >= 2
+            || distinct_seasons >= 2,
         task_under_rules: false,
     }
 }
@@ -379,7 +403,16 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         let st = stem(w);
         if p.enable_stemming {
             if let Some(id) = ix.vocab.get(&stem_term(&st)) {
-                terms.push(QTerm { id, weight: p.stem_weight, group: Some(g), exact_hit: true });
+                // Boost stem weight when the exact surface form is absent from corpus vocabulary.
+                const OOV_STEM_BOOST_Q16: u64 = 81_920; // 1.25x in Q16.16 for OOV inflected query stems.
+                const OOV_STEM_CAP_Q16: u64 = 60_293; // 0.92 cap in Q16.16 so stems stay below exact 1.0.
+                let sw = if ix.vocab.get(w).is_none() {
+                    let boosted = p.stem_weight * (OOV_STEM_BOOST_Q16 as f32 / 65_536.0);
+                    boosted.min(OOV_STEM_CAP_Q16 as f32 / 65_536.0)
+                } else {
+                    p.stem_weight
+                };
+                terms.push(QTerm { id, weight: sw, group: Some(g), exact_hit: true });
                 group_of.insert(id, g);
                 focal_ids.insert(id);
             }
@@ -387,13 +420,28 @@ pub(super) fn plan_query(ix: &Index, q: &Query, p: &Params) -> QueryPlan {
         if asks_nickname && w.len() >= 5 {
             let is_sp = ix.turns.iter().take(64).any(|t| t.speaker.eq_ignore_ascii_case(w));
             if is_sp {
+                const NICK_PREFIX_DF_MAX: u32 = 12; // Upper corpus DF bound for short nickname prefix matches.
+                const NICK_PREFIX_WEIGHT_Q16: u64 = 104_858; // 1.60 in Q16.16 so dedicated nickname group drives rank.
+                let mut nick_ids: Vec<u32> = Vec::new();
                 for plen in [2usize, 3, 4] {
                     if plen < w.len()
                         && let Some(nid) = ix.vocab.get(&w[..plen])
-                        && (1..=8).contains(&corpus_df(nid))
+                        && (1..=NICK_PREFIX_DF_MAX).contains(&corpus_df(nid))
                     {
-                        terms.push(QTerm { id: nid, weight: 1.0, group: Some(g), exact_hit: true });
-                        group_of.insert(nid, g);
+                        nick_ids.push(nid);
+                    }
+                }
+                if !nick_ids.is_empty() {
+                    let ng = groups.len();
+                    groups.push(format!("{w}_nick"));
+                    for nid in nick_ids {
+                        terms.push(QTerm {
+                            id: nid,
+                            weight: NICK_PREFIX_WEIGHT_Q16 as f32 / 65_536.0,
+                            group: Some(ng),
+                            exact_hit: true,
+                        });
+                        group_of.insert(nid, ng);
                         focal_ids.insert(nid);
                     }
                 }
@@ -1747,15 +1795,17 @@ pub(crate) fn damerau_lev_1(a: &[u8], b: &[u8]) -> bool {
     true
 }
 
-/// Step 9A: the unique lowercase vocab word within Damerau-Levenshtein 1 of a zero-DF query
-/// word (len >= 6, same first byte). Ambiguous (2+ candidates) returns None.
+/// Step 9A: lowercase vocab word within Damerau-Levenshtein 1 of a zero-DF query
+/// word (len >= 6, same first byte). Supports adjacent transpositions universally plus
+/// bounded insert/delete/sub edits when the OOV token is not itself a standard WordNet noun.
 pub(crate) fn find_unique_typo_fallback(vocab_names: &[String], w: &str) -> Option<u32> {
     let wb = w.as_bytes();
     if wb.len() < 6 || !wb.iter().all(|b| b.is_ascii_lowercase()) {
         return None;
     }
     let first = wb[0];
-    let mut found: Option<u32> = None;
+    let allow_edit1 = crate::wordnet::senses(w).is_empty();
+    let mut found: Option<(u32, String)> = None;
     for (id, cand) in vocab_names.iter().enumerate() {
         let cb = cand.as_bytes();
         if cb.is_empty() || cb[0] != first || cb.starts_with(b"\x01") {
@@ -1764,16 +1814,22 @@ pub(crate) fn find_unique_typo_fallback(vocab_names: &[String], w: &str) -> Opti
         if !cb.iter().all(|b| b.is_ascii_lowercase()) {
             continue;
         }
-        // v2: only the Damerau adjacent-swap edit. Single substitutions/insertions between
-        // real words collide constantly ("brought"/"bought", "likely"/"lively").
-        if cb.len() == wb.len() && damerau_lev_1(wb, cb) && wb.iter().zip(cb).filter(|(x, y)| x != y).count() == 2 {
-            if found.is_some() {
-                return None;
+        let is_adj_swap = cb.len() == wb.len()
+            && damerau_lev_1(wb, cb)
+            && wb.iter().zip(cb).filter(|(x, y)| x != y).count() == 2;
+        let is_bounded_typo = allow_edit1 && damerau_lev_1(wb, cb);
+        if is_adj_swap || is_bounded_typo {
+            let cst = stem(cand);
+            if let Some((_, ref prev_st)) = found {
+                if *prev_st != cst {
+                    return None;
+                }
+            } else {
+                found = Some((id as u32, cst));
             }
-            found = Some(id as u32);
         }
     }
-    found
+    found.map(|(id, _)| id)
 }
 
 /// Step 9B ingest: number of lines that open with a list marker (`1.` `2)` `- ` `* ` `•`).

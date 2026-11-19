@@ -313,8 +313,12 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                 !sp.is_empty() && sp != "user" && sp != "assistant"
             });
             if has_named_dialogue {
+                // 0.22 in Q16.16: radius-2 named-dialogue exchange carry weight into `t_scene`.
+                const NAMED_PREV2_CARRY_Q16: u32 = 14_418;
+                const Q16_SCALE_F32: f32 = 65_536.0;
                 for (pos, &ti) in members.iter().enumerate() {
                     let prev_own = if pos > 0 { t_own[members[pos - 1]] } else { 0.0 };
+                    let prev2_own = if pos >= 2 { t_own[members[pos - 2]] } else { 0.0 };
                     let next_own = if pos + 1 < members.len() { t_own[members[pos + 1]] } else { 0.0 };
                     let prev_w = if ix.turns[ti].is_backchannel {
                         0.22
@@ -323,12 +327,20 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                     } else {
                         0.48
                     };
+                    let prev2_w = if !ix.turns[ti].is_question
+                        && !ix.turns[ti].is_backchannel
+                        && (ix.turns[ti].answers_question || ix.turns[ti].anaphoric || prev_own > 0.0)
+                    {
+                        (NAMED_PREV2_CARRY_Q16 as f32) / Q16_SCALE_F32
+                    } else {
+                        0.0
+                    };
                     let self_score = if ix.turns[ti].answers_question || ix.turns[ti].is_short_reply || ix.turns[ti].anaphoric {
                         t_raw[ti]
                     } else {
                         t_own[ti] + 0.18 * (t_raw[ti] - t_own[ti]).max(0.0)
                     };
-                    t_scene[ti] = self_score + prev_w * prev_own + 0.42 * next_own;
+                    t_scene[ti] = self_score + prev_w * prev_own + prev2_w * prev2_own + 0.42 * next_own;
                     if pos > 0 && !ix.turns[ti].is_backchannel {
                         t_mask[ti] |= t_mask[members[pos - 1]];
                     }
@@ -341,6 +353,7 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                     let ti = members[pos];
                     if !ix.turns[prev].is_question
                         && !ix.turns[prev].is_backchannel
+                        && !ix.turns[ti].answers_question
                         && t_own[prev] > 0.0
                         && (t_exact_mask[ti] & !t_exact_mask[prev]) == 0
                         && t_own[ti] <= t_own[prev] * 1.05
@@ -587,6 +600,15 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                         && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
                     {
                         t_scene[ti] *= 0.62;
+                    } else if has_named_dialogue
+                        && has_declarative_peer
+                        && t.is_question
+                        && !it.sniper_when
+                    {
+                        // 0.78 in Q16.16: question-turn demotion multiplier when a declarative peer exists.
+                        const NAMED_QUESTION_DEMOTE_Q16: u32 = 51_118;
+                        const Q16_SCALE_F32: f32 = 65_536.0;
+                        t_scene[ti] *= (NAMED_QUESTION_DEMOTE_Q16 as f32) / Q16_SCALE_F32;
                     } else if !has_named_dialogue
                         && !it.assistant_attribution
                         && has_declarative_user_peer
@@ -947,6 +969,33 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
     // Isolated 2-hop Meet-in-the-Middle WordNet + Haystack PPMI channel (`t_bridge`).
     // Borrow-checker clean; never mutates `t_own`, `t_raw`, `t_scene`, or `s_score`.
     let (t_bridge, t_bridge_hits) = score_bridge(ix, q, p, &plan, nt);
+
+    // Named-Dialogue Speaker-Aligned Session Peak Blend:
+    // Whole-session BM25F (`s_score`) mixes both speakers across all topics before speaker alignment,
+    // sniper boosts, and echo demotion; blend 0.35 (Q16.16) of each session's best declarative `t_scene` peak.
+    if has_named_speakers_eff && !eff_it.is_event_sequence && !pref_on {
+        // 0.35 in Q16.16: speaker-aligned declarative `t_scene` peak blend weight into `s_score`.
+        const NAMED_DECL_PEAK_BLEND_Q16: u32 = 22_938;
+        const Q16_ONE_U32: u32 = 65_536;
+        const Q16_SCALE_F32: f32 = 65_536.0;
+        let peak_w = (NAMED_DECL_PEAK_BLEND_Q16 as f32) / Q16_SCALE_F32;
+        let base_w = ((Q16_ONE_U32 - NAMED_DECL_PEAK_BLEND_Q16) as f32) / Q16_SCALE_F32;
+        let pre_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
+        let pre_smax = s_score.iter().cloned().fold(0.0f32, f32::max);
+        if pre_tmax > 0.0 && pre_smax > 0.0 {
+            for si in 0..ns {
+                let best_decl = ix.session_turns[si]
+                    .iter()
+                    .copied()
+                    .filter(|&ti| !ix.turns[ti].is_question && !ix.turns[ti].is_backchannel)
+                    .map(|ti| t_scene[ti])
+                    .fold(0.0f32, f32::max);
+                let norm_s = s_score[si] / pre_smax;
+                let norm_t = best_decl / pre_tmax;
+                s_score[si] = pre_smax * (base_w * norm_s + peak_w * norm_t);
+            }
+        }
+    }
 
     let k = top_k.max(1);
 
@@ -1505,10 +1554,17 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         .filter(|&&si| smax > 0.0 && !s_policy_floored[si] && !s_pref_floored[si] && (s_score[si] + bridge_boost[si]) >= 0.62 * smax)
         .count();
 
+    let has_named_speakers_top = ix
+        .turns
+        .iter()
+        .take(64)
+        .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
     // Weapon 4: Greedy Submodular Set Cover for Top-K Turn Selection
     let max_per_session_top5 = if eff_it.is_event_sequence {
         1
-    } else if eff_it.multi_hop || (!pref_on && !eff_it.task_under_rules && strong_top_sessions >= 2) {
+    } else if eff_it.multi_hop
+        || (!pref_on && !eff_it.task_under_rules && (strong_top_sessions >= 2 || (has_named_speakers_top && ns >= 5)))
+    {
         2
     } else {
         3
@@ -1564,9 +1620,32 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
                     continue;
                 }
                 // One chat may not fill the top 5. A short reply beside a hit is the same evidence, not a new slot.
-                let bypass_cap = short_reply && !eff_it.is_event_sequence && !eff_it.multi_hop && allow_short_reply_bypass;
+                // On named-speaker dialogues, an adjacent exchange partner (e.g. Q->A or caption->reply)
+                // may take a 2nd seat when the session currently holds only 1 declarative seat.
+                let adj_exchange = has_named_speakers_top
+                    && !eff_it.is_event_sequence
+                    && !ix.turns[ti].is_question
+                    && !ix.turns[ti].is_backchannel
+                    && count < 2
+                    && selected_turns.iter().any(|&prev| {
+                        ix.turns[prev].session == t_sess && (prev as isize - ti as isize).abs() <= 2
+                    });
+                let bypass_cap = (short_reply && !eff_it.is_event_sequence && !eff_it.multi_hop && allow_short_reply_bypass)
+                    || adj_exchange;
+                let count_for_cap = if has_named_speakers_top && !ix.turns[ti].is_question && !ix.turns[ti].is_backchannel {
+                    selected_turns
+                        .iter()
+                        .filter(|&&prev| {
+                            ix.turns[prev].session == t_sess
+                                && !ix.turns[prev].is_question
+                                && !ix.turns[prev].is_backchannel
+                        })
+                        .count()
+                } else {
+                    count
+                };
                 let session_capped = selected_turns.len() < 5
-                    && count >= max_per_session_top5
+                    && count_for_cap >= max_per_session_top5
                     && !bypass_cap;
                 if session_capped {
                     continue;
@@ -3470,6 +3549,87 @@ pub(super) fn rank_one(ix: &Index, q: &Query, p: &Params, top_k: usize) -> RankR
         taxa_promoted && nt >= TAXA_SESSION_LOCK_MIN_TURNS,
         k,
     );
+
+    // Named-Dialogue Multi-Session Top-5 Coverage Guarantee (runs AFTER 5-voter Kemeny session fusion):
+    // Prevent any single session from hoarding 3+ Top-5 slots when strong Top-4 sessions have zero turns,
+    // while preserving a clearly dominant Session #1's 2nd turn (`s0 > 1.30 * s1`) so single-hop pairs stay intact.
+    if has_named_speakers_eff
+        && !eff_it.is_event_sequence
+        && !pref_on
+        && !eff_it.task_under_rules
+        && !taxa_promoted
+        && !torrens_locked_head
+        && final_turn_indices.len() >= 5
+        && smax > 0.0
+    {
+        // 1.30 in Q16.16: Session #1 dominance ratio protecting its 2nd turn in Top-5 coverage.
+        const NAMED_HEAD_DOM_Q16: u32 = 85_197;
+        // 0.45 in Q16.16: minimum Top-4 session score fraction of `smax` for Top-5 coverage seating.
+        const NAMED_COV_FLOOR_Q16: u32 = 29_491;
+        const Q16_SCALE_F32: f32 = 65_536.0;
+        let head_dom_ratio = (NAMED_HEAD_DOM_Q16 as f32) / Q16_SCALE_F32;
+        let cov_floor_ratio = (NAMED_COV_FLOOR_Q16 as f32) / Q16_SCALE_F32;
+        let head_s = final_session_indices.first().copied();
+        let head_dominant = final_session_indices.len() >= 2
+            && (s_score[final_session_indices[0]] + bridge_boost[final_session_indices[0]])
+                > head_dom_ratio
+                    * (s_score[final_session_indices[1]] + bridge_boost[final_session_indices[1]]);
+        for &si in final_session_indices.iter().take(4) {
+            if s_score[si] + bridge_boost[si] < cov_floor_ratio * smax {
+                continue;
+            }
+            if final_turn_indices[..5].iter().any(|&ti| ix.turns[ti].session == si) {
+                continue;
+            }
+            let Some(best_ti) = ix.session_turns[si]
+                .iter()
+                .copied()
+                .filter(|&ti| {
+                    !ix.turns[ti].is_backchannel
+                        && !turn_is_superseded(ix, ti)
+                        && (t_scene[ti] > 0.0 || t_raw[ti] > 0.0)
+                })
+                .max_by(|&a, &b| {
+                    let qa = !ix.turns[a].is_question;
+                    let qb = !ix.turns[b].is_question;
+                    qa.cmp(&qb)
+                        .then_with(|| t_scene[a].partial_cmp(&t_scene[b]).unwrap_or(std::cmp::Ordering::Equal))
+                        .then_with(|| b.cmp(&a))
+                })
+            else {
+                continue;
+            };
+            let mut best_victim: Option<(usize, bool, f32)> = None;
+            for slot in 1..5usize {
+                let vti = final_turn_indices[slot];
+                if t_policy_floored[vti] || t_pref_floored[vti] {
+                    continue;
+                }
+                let vs = ix.turns[vti].session;
+                let cnt = final_turn_indices[..5].iter().filter(|&&t| ix.turns[t].session == vs).count();
+                let min_cnt = if head_dominant && head_s == Some(vs) { 3 } else { 2 };
+                if cnt < min_cnt {
+                    continue;
+                }
+                let is_q = ix.turns[vti].is_question;
+                let vsc = t_scene[vti];
+                if best_victim.is_none_or(|(_, bq, bsc)| (is_q && !bq) || (is_q == bq && vsc < bsc)) {
+                    best_victim = Some((slot, is_q, vsc));
+                }
+            }
+            if let Some((slot, _, _)) = best_victim {
+                if let Some(existing) = final_turn_indices.iter().position(|&t| t == best_ti) {
+                    if existing >= 5 {
+                        final_turn_indices.remove(existing);
+                        final_turn_indices.insert(slot, best_ti);
+                    }
+                } else {
+                    final_turn_indices.insert(slot, best_ti);
+                    final_turn_indices.truncate(k);
+                }
+            }
+        }
+    }
 
     maybe_dump_replay(
         ix,

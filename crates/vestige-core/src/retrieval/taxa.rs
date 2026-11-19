@@ -630,11 +630,16 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
     }
 
     let q_low_all = q_text.trim_start().to_ascii_lowercase();
-    // hardcode-scan: closed-class (hypothetical open-domain modal interrogative cues)
+    // hardcode-scan: closed-class (hypothetical open-domain modal and yes/no auxiliary interrogative cues)
     let dialogue_hypothetical_od = !speaker_lowers.is_empty()
         && (q_low_all.starts_with("would ")
+            || q_low_all.starts_with("could ")
+            || q_low_all.starts_with("might ")
+            || q_low_all.starts_with("does ")
+            || q_low_all.starts_with("is ")
             || q_low_all.contains(" likely ")
             || q_low_all.contains(" potentially ")
+            || q_low_all.contains(" or ")
             || q_low_all.starts_with("what might ")
             || q_low_all.starts_with("what could ")
             || q_low_all.starts_with("what would "));
@@ -1180,7 +1185,8 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
                         && !speaker_lowers.iter().any(|sp| sp.eq_ignore_ascii_case(part))
                         && !raw_q_words.iter().any(|(w, _)| w == part)
                     {
-                        let is_rare = is_monologue_stream && term_df(part) <= oov_df_cap;
+                        let is_rare = (is_monologue_stream || dialogue_hypothetical_od || deficit_a)
+                            && term_df(part) <= oov_df_cap;
                         raw_q_words.push((part.to_string(), is_rare));
                     }
                 }
@@ -1291,7 +1297,49 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
     // `cid -> [(matched query concept, weight)]` for rare monosemous document tokens.
     let mut mono_gloss_cache: std::collections::BTreeMap<u32, Vec<(String, u64)>> =
         std::collections::BTreeMap::new();
-    let mut best_cand: Option<(usize, u64, bool, u64)> = None;
+    let mut doc_syn_cache: std::collections::BTreeMap<u32, Vec<(String, u64)>> =
+        std::collections::BTreeMap::new();
+    let mut best_cands: Vec<(usize, u64, bool, u64)> = Vec::new();
+    let dialogue_taxa_active =
+        !is_monologue_stream && !speaker_lowers.is_empty() && (deficit_a || dialogue_hypothetical_od);
+
+    // Resnik Information-Content Meet-in-the-Middle WordNet 3.1 Synset LCA table (`query_syn -> weight`):
+    // Connects sibling/co-hyponym concepts purely from WordNet 3.1 DAG math.
+    let mut q_syn_ic: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
+    if dialogue_taxa_active {
+        for qc in &q_concepts {
+            if qc.len() < 3 || speaker_lowers.iter().any(|sp| sp.eq_ignore_ascii_case(qc)) {
+                continue;
+            }
+            let is_oov_q = oov_q_exact.iter().any(|x| x == qc) || term_df(qc) <= 2;
+            let boost: u64 = if is_oov_q { 2 } else { 1 };
+            for (syn, dc) in crate::wordnet::specific_ancestor_synsets(qc, 3, 220) {
+                let w = (240u64 / (u64::from(dc) + 10)).clamp(3, 18).saturating_mul(boost);
+                let e = q_syn_ic.entry(syn).or_insert(0);
+                if w > *e {
+                    *e = w;
+                }
+            }
+            if qc.len() >= 4 && is_oov_q {
+                for &gsyn in crate::wordnet::synsets_with_gloss(qc) {
+                    let e = q_syn_ic.entry(gsyn).or_insert(0);
+                    if 12 > *e {
+                        *e = 12;
+                    }
+                }
+                for gtok in crate::wordnet::gloss_tokens_of(qc) {
+                    if let Some(lid) = ix.vocab.get(gtok) {
+                        if !cn_wn_ids.contains(&lid) {
+                            cn_wn_ids.push(lid);
+                        }
+                        if !oov_cn_wn_ids.contains(&lid) {
+                            oov_cn_wn_ids.push(lid);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Two-pass discriminative-concept scoring (pure corpus statistics, no word lists):
     // pass 1 records which query-expansion concepts each turn hits; pass 2 drops every concept
@@ -1340,10 +1388,13 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
         let mut hits: Vec<(String, u64)> = Vec::new();
         if (deficit_a || dialogue_hypothetical_od) && !mono_oov_active {
             for &lid in &cn_wn_ids {
-                if t.content.contains(&lid) {
-                    isa_hits += 1;
+                let in_turn = t.content.contains(&lid) || t.blip_feats.iter().any(|bf| bf.id == lid);
+                if in_turn {
                     let df = ix.t_own_stats.df.get(&lid).copied().unwrap_or(0);
-                    if df > 0 && df <= 2 && oov_cn_wn_ids.contains(&lid) {
+                    if df > 0 && df <= max_rare_df {
+                        isa_hits += 1;
+                    }
+                    if df > 0 && df <= 4 && oov_cn_wn_ids.contains(&lid) {
                         rare_oov_hits += 1;
                     }
                 }
@@ -1353,6 +1404,62 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
             let dh = doc_hyp_mask.count_ones() as u64;
             isa_hits += dh;
             rare_oov_hits += dh;
+            if dialogue_taxa_active && !q_syn_ic.is_empty() {
+                for cid in t.content.iter().copied().chain(t.blip_feats.iter().map(|bf| bf.id)) {
+                    let df = ix.t_own_stats.df.get(&cid).copied().unwrap_or(0);
+                    if df == 0 || df > max_rare_df {
+                        continue;
+                    }
+                    if !doc_syn_cache.contains_key(&cid) {
+                        let matched: Vec<(String, u64)> = ix
+                            .vocab
+                            .names
+                            .get(cid as usize)
+                            .filter(|raw| !raw.starts_with('\u{1}') && raw.len() >= 3)
+                            .map(|raw| {
+                                let mut out: Vec<(String, u64)> = Vec::new();
+                                for (syn, dc) in crate::wordnet::specific_ancestor_synsets(raw.as_str(), 3, 220) {
+                                    if let Some(&qw) = q_syn_ic.get(&syn) {
+                                        let dw = (240u64 / (u64::from(dc) + 10)).clamp(3, 18);
+                                        let w = qw.min(dw.saturating_mul(2)).clamp(4, 24);
+                                        out.push((format!("wn_syn:{syn}"), w));
+                                        if out.len() >= 3 {
+                                            break;
+                                        }
+                                    }
+                                }
+                                out
+                            })
+                            .unwrap_or_default();
+                        doc_syn_cache.insert(cid, matched);
+                    }
+                    if let Some(ms) = doc_syn_cache.get(&cid) {
+                        for (k_syn, w) in ms {
+                            hits.push((k_syn.clone(), *w));
+                        }
+                    }
+                }
+            }
+            if !oov_q_concepts.is_empty() {
+                for cid in t.content.iter().copied().chain(t.blip_feats.iter().map(|bf| bf.id)) {
+                    let df = ix.t_own_stats.df.get(&cid).copied().unwrap_or(0);
+                    if df == 0 || df > 4 {
+                        continue;
+                    }
+                    if let Some(raw) = ix.vocab.names.get(cid as usize)
+                        && !raw.starts_with('\u{1}')
+                        && raw.len() >= 4
+                    {
+                        for d_con in crate::wordnet::gloss_and_compound_concepts(raw.as_str()) {
+                            if oov_q_concepts.iter().any(|qc| qc == d_con) {
+                                hits.push((d_con.to_string(), 9));
+                                rare_oov_hits += 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
         if mono_oov_active && !oov_q_concepts.is_empty() {
             for &lid in &oov_cn_wn_ids {
@@ -1414,7 +1521,10 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
         }
         // Multi-word & topological containment bridge (Wikidata CC0 + WordNet phrase synsets):
         // Check `1..=6`-token spans in turns bearing rare tokens (`df <= 3`) or proper entities.
-        if (deficit_a || deficit_b || mono_oov_active) && !oov_q_concepts.is_empty() && is_monologue_stream {
+        if (deficit_a || deficit_b || mono_oov_active || dialogue_taxa_active)
+            && !oov_q_concepts.is_empty()
+            && (is_monologue_stream || dialogue_taxa_active)
+        {
             let has_rare_anchor = !t.entities.is_empty()
                 || t.content
                     .iter()
@@ -1561,18 +1671,29 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
         };
 
         let rescue_tag = strong_bridge_hits.saturating_add(rare_oov_hits);
-        if score >= Q16 && best_cand.map_or(true, |(_, bs, _, _)| score > bs) {
-            best_cand = Some((ti, score, sp_aligned, rescue_tag));
+        if score >= Q16 {
+            best_cands.push((ti, score, sp_aligned, rescue_tag));
         }
     }
 
-    let Some((cand_ti, cand_score, sp_aligned, rare_oov_hits)) = best_cand else {
+    best_cands.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut dedup_cands: Vec<(usize, u64, bool, u64)> = Vec::new();
+    for cand in best_cands {
+        let cs = ix.turns[cand.0].session;
+        if !dedup_cands.iter().any(|&(ti, _, _, _)| ix.turns[ti].session == cs) {
+            dedup_cands.push(cand);
+            if dedup_cands.len() >= 3 {
+                break;
+            }
+        }
+    }
+    let Some(&(cand_ti, cand_score, sp_aligned, rare_oov_hits)) = dedup_cands.first() else {
         return false;
     };
 
-    // Named-speaker Open-Domain / Deficit-A Ontological Rescue (`LoCoMo Cat 3`):
-    // When a speaker-aligned declarative turn matches rare ontological/taxonomic bridges (`rare_oov_hits >= 1`)
-    // and Slot 0 lacks grounded non-speaker exact matches, seat `cand_ti` directly inside Top-5 / Slot 0!
+    // Named-speaker Open-Domain / Deficit-A Ontological Rescue:
+    // When speaker-aligned declarative turns match rare ontological/taxonomic bridges (`rare_oov_hits >= 1`)
+    // and Top-5 lacks strong multi-group grounding, seat top distinct-session taxonomic candidates directly.
     if !is_monologue_stream
         && !speaker_lowers.is_empty()
         && sp_aligned
@@ -1588,26 +1709,45 @@ pub(super) fn apply_deficit_taxa_and_pref_rescue(
         let h0_non_sp = final_turn_indices
             .first()
             .map_or(0, |&h0| (t_exact_mask[h0] & non_sp_mask).count_ones());
-        if h0_non_sp == 0 || (dialogue_hypothetical_od && h0_non_sp <= 1 && cand_score >= Q16 * 3) {
-            if let Some(pos) = final_turn_indices.iter().position(|&x| x == cand_ti) {
-                final_turn_indices.remove(pos);
+        let top3_max_non_sp = final_turn_indices
+            .iter()
+            .take(3)
+            .map(|&ti| (t_exact_mask[ti] & non_sp_mask).count_ones())
+            .max()
+            .unwrap_or(0);
+        if h0_non_sp == 0 || (dialogue_hypothetical_od && h0_non_sp <= 1 && cand_score >= Q16 * 10) {
+            let start_slot = if h0_non_sp == 0 || cand_score >= Q16 * 14 { 0usize } else { 2usize };
+            let max_ins = if h0_non_sp == 0 { 3usize } else { 2usize };
+            for (offset, &(r_ti, r_sc, r_sp, r_tag)) in dedup_cands.iter().take(max_ins).enumerate() {
+                if offset > 0 && (!r_sp || r_tag == 0 || r_sc * 2 < cand_score) {
+                    break;
+                }
+                if let Some(pos) = final_turn_indices.iter().position(|&x| x == r_ti) {
+                    final_turn_indices.remove(pos);
+                }
+                let at = (start_slot + offset).min(final_turn_indices.len());
+                final_turn_indices.insert(at, r_ti);
             }
-            let target_slot = if h0_non_sp == 0 {
-                0
-            } else {
-                1.min(final_turn_indices.len())
-            };
-            final_turn_indices.insert(target_slot, cand_ti);
             if final_turn_indices.len() > k {
                 final_turn_indices.truncate(k);
             }
-            return target_slot == 0;
-        } else if !final_turn_indices[..5.min(final_turn_indices.len())].contains(&cand_ti) {
-            if let Some(pos) = final_turn_indices.iter().position(|&x| x == cand_ti) {
-                final_turn_indices.remove(pos);
+            return start_slot == 0;
+        } else if (top3_max_non_sp <= 1 || cand_score >= Q16 * 8)
+            && !final_turn_indices[..5.min(final_turn_indices.len())].contains(&cand_ti)
+        {
+            for (offset, &(r_ti, r_sc, r_sp, _)) in dedup_cands.iter().take(2).enumerate() {
+                if offset > 0 && (!r_sp || r_sc * 2 < cand_score) {
+                    break;
+                }
+                if final_turn_indices[..5.min(final_turn_indices.len())].contains(&r_ti) {
+                    continue;
+                }
+                if let Some(pos) = final_turn_indices.iter().position(|&x| x == r_ti) {
+                    final_turn_indices.remove(pos);
+                }
+                let ins_at = (3 + offset).min(final_turn_indices.len());
+                final_turn_indices.insert(ins_at, r_ti);
             }
-            let ins_at = 3.min(final_turn_indices.len());
-            final_turn_indices.insert(ins_at, cand_ti);
             if final_turn_indices.len() > k {
                 final_turn_indices.truncate(k);
             }
