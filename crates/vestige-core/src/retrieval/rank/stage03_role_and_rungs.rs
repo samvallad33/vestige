@@ -476,7 +476,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         let coref_q16 = crate::retrieval::query::coref::coref_class_affinity_q16(ix, &plan);
         let t_max_sc = t_scene.iter().cloned().fold(0.0f32, f32::max);
         let t_max_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(t_max_sc.to_bits());
-        let smax_s03_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(smax.to_bits());
+        // Stage-03 runs before stage-04 rebinds `smax`; read the live session scores from `ctx`.
+        let s_score_s03 = &ctx.s_score;
+        let smax_s03 = s_score_s03.iter().copied().fold(0.0f32, f32::max);
+        let smax_s03_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(smax_s03.to_bits());
         if t_max_q16 > 0 {
             // Pure Q16.16 integer weights: ANA_W=3932 (~0.06), COREF_W=7864 (~0.12), RESCUE_W=15729 (~0.24)
             const ANA_W_Q16: u64 = 3_932;
@@ -504,7 +507,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     // grounded sessions in Q16.16 (t_own and t_raw remain 100% untouched).
                     let tr = &ix.turns[ti];
                     let sess_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
-                        s_score[tr.session].to_bits(),
+                        s_score_s03.get(tr.session).copied().unwrap_or(0.0).to_bits(),
                     );
                     let sess_ok = smax_s03_q16 > 0 && sess_q16.saturating_mul(20) >= smax_s03_q16.saturating_mul(7);
                     if sess_ok
