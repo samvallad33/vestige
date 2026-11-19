@@ -200,7 +200,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     apply_rung4_hub_damped_rm3(ix, &plan, &mut s_score);
     let smax = s_score.iter().cloned().fold(0.0f32, f32::max);
     let mut bridge_boost = vec![0.0f32; ns];
-    let s_ord_base = order(&s_score, &ix.session_ts);
+    let mut s_ord_base = order(&s_score, &ix.session_ts);
     if p.enable_ppr && ns > 5 && smax > 0.0 {
         if let Some(&top0) = s_ord_base.first() {
             let anchors: Vec<usize> = s_ord_base
@@ -438,8 +438,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
     }
 
-    if has_named_speakers_eff
-        && !eff_it.is_event_sequence
+    if !eff_it.is_event_sequence
         && !pref_on
         && !eff_it.task_under_rules
         && ns > 5
@@ -471,11 +470,17 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         } else {
             (1u64 << n_q_groups) - 1
         };
-        let top0_full_cov = q_full_mask != 0
-            && (s_exact_mask.get(top0).copied().unwrap_or(0) & q_full_mask) == q_full_mask;
-        let invariant_crisp_lock =
-            top0_full_cov || top0_lex.saturating_mul(3) >= top1_lex.saturating_mul(4);
-        let multi_or_partial = eff_it.multi_hop || !top0_full_cov;
+        let top0_mask_bits = s_exact_mask.get(top0).copied().unwrap_or(0) & q_full_mask;
+        let top0_full_cov = q_full_mask != 0 && top0_mask_bits == q_full_mask;
+        // True crisp-peak lock for Single-Hop & Adversarial:
+        // Lock Slot 0 only when `top0` holds >= 4:3 (1.33x) raw lexical dominance over #2,
+        // OR covers >= 4 distinct query groups on a non-multi-hop query with >= 10:9 lead.
+        let invariant_crisp_lock = top0_lex.saturating_mul(3) >= top1_lex.saturating_mul(4)
+            || (top0_full_cov
+                && n_q_groups >= 4
+                && !eff_it.multi_hop
+                && top0_lex.saturating_mul(9) >= top1_lex.saturating_mul(10));
+        let multi_or_partial = eff_it.multi_hop || !top0_full_cov || !invariant_crisp_lock;
 
         associative_multihop_bridge_q16::apply_multihop_open_domain_session_lift(
             ix,
@@ -657,14 +662,49 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 top0,
                 smax_q16,
             );
-        apply_rule8_capped_q16_lifts(
-            &hist_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
-        );
+        if has_named_speakers_eff {
+            apply_rule8_capped_q16_lifts(
+                &hist_lifts,
+                top0,
+                top0_ceiling_q16,
+                invariant_crisp_lock,
+                &s_score,
+                &mut bridge_boost,
+            );
+        }
+
+        // Pure Q16.16 post-bridge `s_ord_base` refresh when `!invariant_crisp_lock`:
+        // Require `27:25` (+8%) integer Q16.16 sight margin and non-decreasing / novel exact coverage.
+        if !invariant_crisp_lock {
+            const R1_UNLOCK_MARGIN_NUM: u64 = 27;
+            const R1_UNLOCK_MARGIN_DEN: u64 = 25;
+            let post_sight_q16: Vec<u64> = (0..ns)
+                .map(|si| {
+                    crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                        (s_score[si] + bridge_boost[si]).to_bits(),
+                    )
+                })
+                .collect();
+            let mut post_ord: Vec<usize> = (0..ns).collect();
+            post_ord.sort_by(|&a, &b| {
+                post_sight_q16[b]
+                    .cmp(&post_sight_q16[a])
+                    .then_with(|| ix.session_ts[b].cmp(&ix.session_ts[a]))
+                    .then_with(|| a.cmp(&b))
+            });
+            if let Some(&cand0) = post_ord.first() {
+                let cand_mask = s_exact_mask.get(cand0).copied().unwrap_or(0) & q_full_mask;
+                let cov_ok = cand_mask.count_ones() >= top0_mask_bits.count_ones()
+                    || (cand_mask & !top0_mask_bits) != 0;
+                if cand0 != top0
+                    && cov_ok
+                    && post_sight_q16[cand0].saturating_mul(R1_UNLOCK_MARGIN_DEN)
+                        >= post_sight_q16[top0].saturating_mul(R1_UNLOCK_MARGIN_NUM)
+                {
+                    s_ord_base = post_ord;
+                }
+            }
+        }
     }
 
     ctx.s_score = s_score;
@@ -859,9 +899,12 @@ mod associative_multihop_bridge_q16 {
             .get(1)
             .and_then(|&s1| base_sight_q16.get(s1).copied())
             .unwrap_or(0);
-        let crisp_peak_lock = top0_full_cov
-            || top0_sight_q16.saturating_mul(CRISP_PEAK_DEN)
-                >= top1_sight_q16.saturating_mul(CRISP_PEAK_NUM);
+        let crisp_peak_lock = top0_sight_q16.saturating_mul(CRISP_PEAK_DEN)
+            >= top1_sight_q16.saturating_mul(CRISP_PEAK_NUM)
+            || (top0_full_cov
+                && total_groups >= 4
+                && !eff_it.multi_hop
+                && top0_sight_q16.saturating_mul(9) >= top1_sight_q16.saturating_mul(10));
 
         let max_partner_df = ((ns / 3).max(2)) as u32;
         let mut ppmi_raw = vec![0u64; ns];

@@ -42,7 +42,7 @@ pub(in crate::retrieval) fn select_submodular_sessions(
 if p.enable_submodular && ns > 1 {
         let mut selected: Vec<usize> = Vec::with_capacity(k);
         if let Some(&top0) = s_ord_base.first() {
-            if s_score[top0] > 0.0 {
+            if s_score[top0] > 0.0 || bridge_boost[top0] > 0.0 {
                 selected.push(top0);
                 let mut covered_mask = s_mask[top0];
                 let mut covered_ents: DetHashSet<u32> = ix.session_entities[top0].clone();

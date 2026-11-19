@@ -350,15 +350,26 @@ fn apply_session_late_sync_and_margin_swap(
                 // User/assistant streams skip this veto so BEAM keeps the
                 // un-vetoed fusion head. The closer below can still lift a
                 // 5:4 scene winner that ties or beats the incumbent on sight.
+                let win_bb_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                    bridge_boost.get(pool[winner]).copied().unwrap_or(0.0).to_bits(),
+                );
+                let inc_bb_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                    bridge_boost.get(pool[incumbent]).copied().unwrap_or(0.0).to_bits(),
+                );
+                let strong_bridge_consensus = !nqc_lock
+                    && votes_for_winner >= 3
+                    && sight_q16[winner].saturating_mul(10) >= sight_q16[incumbent].saturating_mul(11)
+                    && win_bb_q16 > inc_bb_q16;
                 let scene_veto = winner != incumbent
                     && corpus_has_named_speakers(ix)
-                    && best_scene[incumbent] > best_scene[winner];
+                    && best_scene[incumbent] > best_scene[winner]
+                    && !strong_bridge_consensus;
                 // Zero-regression IC guard (same as crate::retrieval::fusion::kemeny_mrf::solve_kemeny_order):
-                // do not dethrone #1 for a session with strictly lower exact query-IC.
-                // Only when the MRF voter is live, so monologue / BEAM 3-voter
-                // fusion stays bit-identical to the incumbent 4-voter closer.
+                // do not dethrone #1 for a session with strictly lower exact query-IC unless
+                // `!nqc_lock` holds with >=3 Kemeny votes and >=10% bridge-backed Q16.16 sight margin.
                 let ic_holds = !mrf_voter
-                    || exact_ic_q16[winner] >= exact_ic_q16[incumbent];
+                    || exact_ic_q16[winner] >= exact_ic_q16[incumbent]
+                    || strong_bridge_consensus;
                 let apply_head = (winner == incumbent
                     || ((votes_for_winner >= override_votes || tie_break_sight) && ic_holds))
                     && !scene_veto;
