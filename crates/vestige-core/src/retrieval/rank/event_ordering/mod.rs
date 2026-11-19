@@ -2,6 +2,8 @@
 //! Vilain-Kautz / Verhagen transitive closure, Eades-Lin-Smyth `GreedyFAS`, and
 //! exact `5! = 120` Kendall `tau-b` minimum-violation linear extension.
 
+pub(in crate::retrieval) mod topic_thread;
+
 use super::context::RankCtx;
 use crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16;
 

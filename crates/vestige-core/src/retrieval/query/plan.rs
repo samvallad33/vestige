@@ -124,6 +124,15 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
                 | "of" | "in" | "from" | "with" | "that" | "for" | "to" | "on" | "at" | "by"
         )
     };
+    // Closed-class epistemic/hypothetical modal query framing (`"Would X likely..."`, `"What might X..."`):
+    // hardcode-scan: closed-class (epistemic modal interrogative markers)
+    let is_hypothetical_modal_q = matches!(raw_q.first().map(String::as_str), Some("would"))
+        || raw_q.windows(2).any(|p| {
+            (matches!(p[0].as_str(), "what" | "which" | "who" | "where" | "how")
+                && matches!(p[1].as_str(), "might" | "would" | "could"))
+                || matches!(p[1].as_str(), "likely" | "potentially")
+        })
+        || raw_q.iter().any(|w| matches!(w.as_str(), "likely" | "potentially"));
     let is_discountable_genus_word = |cand: &str| -> bool {
         if token_is_temporal_word(cand) || !is_content(cand) {
             return false;
@@ -140,9 +149,9 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
         let rare_anchor_cap = ((n_docs / PORPHYRY_RARE_DF_DIV) as u32).max(PORPHYRY_RARE_DF_FLOOR);
         let cand_df = ix.vocab.get(cand).map(|id| corpus_df(id)).unwrap_or(0);
         // Never discount a rare corpus-attested specific noun (`1 <= df <= rare_anchor_cap`, e.g. "workshop",
-        // "test", "degree"); Porphyry only discounts unattested OOV hypernyms (`df == 0`, e.g. "fields",
-        // "traits") or high-DF generic category nouns (`df > rare_anchor_cap`, e.g. "events", "activities").
-        if (1..=rare_anchor_cap).contains(&cand_df) {
+        // "test", "degree") EXCEPT when the query is a hypothetical/modal trait query (`"What fields would X
+        // likely pursue..."`, `"What traits might X have..."`), where the WH-head noun is always a genus!
+        if !is_hypothetical_modal_q && (1..=rare_anchor_cap).contains(&cand_df) {
             return false;
         }
         true
@@ -184,15 +193,6 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
             }
         }
     }
-    // Closed-class epistemic/hypothetical modal query framing (`"Would X likely..."`, `"What might X..."`):
-    // hardcode-scan: closed-class (epistemic modal interrogative markers)
-    let is_hypothetical_modal_q = matches!(raw_q.first().map(String::as_str), Some("would"))
-        || raw_q.windows(2).any(|p| {
-            (matches!(p[0].as_str(), "what" | "which" | "who" | "where" | "how")
-                && matches!(p[1].as_str(), "might" | "would" | "could"))
-                || matches!(p[1].as_str(), "likely" | "potentially")
-        })
-        || raw_q.iter().any(|w| matches!(w.as_str(), "likely" | "potentially"));
     let asks_nickname = raw_q.iter().any(|w| w == "nickname" || w == "nicknames");
 
     for (idx, w) in raw_q.iter().enumerate() {
@@ -306,13 +306,13 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
         if asks_nickname && w.len() >= 5 {
             let is_sp = ix.turns.iter().take(64).any(|t| t.speaker.eq_ignore_ascii_case(w));
             if is_sp {
-                const NICK_PREFIX_DF_MAX: u32 = 12; // Upper corpus DF bound for short nickname prefix matches.
+                let nick_df_max = ((ix.t_own_stats.n as u32) / 3).max(24);
                 const NICK_PREFIX_WEIGHT_Q16: u64 = 104_858; // 1.60 in Q16.16 so dedicated nickname group drives rank.
                 let mut nick_ids: Vec<u32> = Vec::new();
                 for plen in [2usize, 3, 4] {
                     if plen < w.len()
                         && let Some(nid) = ix.vocab.get(&w[..plen])
-                        && (1..=NICK_PREFIX_DF_MAX).contains(&corpus_df(nid))
+                        && (1..=nick_df_max).contains(&corpus_df(nid))
                     {
                         nick_ids.push(nid);
                     }
@@ -394,6 +394,202 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
                             group_of.insert(id, *g);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Phase 3 Steps 7 & 8: Full Human-Knowledge Lexicon (Princeton WordNet 3.1 4-POS +
+    // Roget's 1911 Thesaurus + GeoNames Gazetteer + ConceptNet 5.7), strictly IC-weighted
+    // and STRICTLY gated to OOV / vocabulary-mismatch query groups (`!group_has_corpus_hit`),
+    // NEVER diluting in-corpus Single-Hop / Adversarial exact matches or modifying `t_own`/`t_raw`.
+    let ns_plan = ix.session_turns.len();
+    if p.enable_hypernyms && !gate_open && ns_plan >= 8 {
+        use crate::retrieval::fusion::aspect_coverage_q16::aspect_ic_q16;
+
+        let ns_u32 = ns_plan as u32;
+        let max_ic_q16 = aspect_ic_q16(1, ns_u32).max(1);
+        let q_raw_words: Vec<String> = raw_tokens(&q.text);
+
+        // Identify T50 wh-determiner + class noun target ("what/which [adj] <class_noun>").
+        let mut wh_class_words: Vec<String> = Vec::new();
+        for (idx, tok) in q_raw_words.iter().enumerate() {
+            if matches!(tok.as_str(), "what" | "which") {
+                for nxt in q_raw_words.iter().skip(idx + 1).take(3) {
+                    if matches!(
+                        nxt.as_str(),
+                        "did" | "does" | "do" | "is" | "are" | "was" | "were" | "would" | "could"
+                            | "might" | "may" | "should" | "has" | "have" | "had" | "kind" | "type"
+                            | "sort" | "of" | "a" | "an" | "the"
+                    ) {
+                        continue;
+                    }
+                    let is_sp = ix.turns.iter().take(64).any(|t| t.speaker.eq_ignore_ascii_case(nxt));
+                    if !is_sp && is_content(nxt) {
+                        wh_class_words.push(nxt.clone());
+                    }
+                }
+            }
+        }
+
+        let rare_df_cap = (ns_u32 / 3).clamp(3, 18);
+        for (w, g) in &expandable {
+            let is_sp = ix.turns.iter().take(64).any(|t| t.speaker.eq_ignore_ascii_case(w))
+                || nick_bind.contains_key(w);
+            if is_sp {
+                continue;
+            }
+            let group_has_corpus_hit = terms
+                .iter()
+                .any(|t| t.group == Some(*g) && t.exact_hit && corpus_df(t.id) > 0);
+            // Compound split (`roadtrip` -> `road` + `trip`, `bookshelf` -> `book` + `shelf`):
+            // runs on OOV compounds (as group expansion) AND ultra-rare (`df <= 2`) closed compounds
+            // at low auxiliary weight (`exact_hit: false`, `group: None`) without diluting exact matches.
+            let raw_w_df = ix.vocab.get(w).map(|id| corpus_df(id)).unwrap_or(0);
+            if (!group_has_corpus_hit || raw_w_df <= 2) && w.len() >= 6 && w.is_ascii() {
+                for split_at in 3..=(w.len() - 3) {
+                    let (left, right) = w.split_at(split_at);
+                    if is_content(left) && is_content(right) {
+                        if let (Some(lid), Some(rid)) = (ix.vocab.get(left), ix.vocab.get(right)) {
+                            if corpus_df(lid) > 0 && corpus_df(rid) > 0 {
+                                let (cw, cgrp) = if !group_has_corpus_hit {
+                                    (p.hypernym_weight * 0.90, Some(*g))
+                                } else {
+                                    (p.hypernym_weight * 0.45, None)
+                                };
+                                for cid in [lid, rid] {
+                                    if hyp_added.insert(cid) {
+                                        terms.push(QTerm {
+                                            id: cid,
+                                            weight: cw,
+                                            group: cgrp,
+                                            exact_hit: false,
+                                        });
+                                        if let Some(gr) = cgrp {
+                                            group_of.insert(cid, gr);
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            // (c) T50 Wh-Class-Noun -> WordNet Instance-Hyponym + GeoNames Class Gazetteer + Wikidata:
+            // Runs for explicit `"what/which [adj] <class_noun>"` queries EVEN WHEN the class word itself
+            // appears in passing in the corpus (e.g. `"what state"` -> `Indiana`/`Florida`/`Minnesota`,
+            // `"which meat"` -> `chicken`, `"what pet"` -> `dog`/`cat`/`guinea pig`), strictly at low
+            // auxiliary weight (`exact_hit: false`, `group: None` when class is in-corpus so exact matches
+            // are never diluted).
+            let is_wh_class = wh_class_words.iter().any(|cw| cw == w);
+            if is_wh_class {
+                let mut inst_cands: Vec<(u64, u32)> = Vec::new();
+                for inst in crate::wordnet::class_to_instances(w, 2)
+                    .into_iter()
+                    .chain(crate::geonames::geo_class_instances(w).iter().map(String::as_str))
+                    .chain(crate::wikidata::direct_instances_of(w, 16))
+                {
+                    for part in inst.split_ascii_whitespace() {
+                        if let Some(id) = ix.vocab.get(part) {
+                            let df = ix.s_stats.df.get(&id).copied().unwrap_or(0);
+                            if (1..=rare_df_cap).contains(&df) && !hyp_added.contains(&id) {
+                                inst_cands.push((aspect_ic_q16(df, ns_u32), id));
+                            }
+                        }
+                    }
+                }
+                inst_cands.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+                inst_cands.dedup_by_key(|x| x.1);
+                let mut added_inst = 0usize;
+                let inst_cap = if group_has_corpus_hit { 10 } else { 16 };
+                let inst_scale = if group_has_corpus_hit { 0.45 } else { 0.72 };
+                let inst_grp = if group_has_corpus_hit { None } else { Some(*g) };
+                for (ic, id) in inst_cands {
+                    if added_inst >= inst_cap {
+                        break;
+                    }
+                    if hyp_added.insert(id) {
+                        let ic_ratio = ((ic as f32) / (max_ic_q16 as f32)).clamp(0.25, 1.0);
+                        let w_eff = (p.hypernym_weight * inst_scale * ic_ratio).clamp(0.08, p.hypernym_weight);
+                        terms.push(QTerm { id, weight: w_eff, group: inst_grp, exact_hit: false });
+                        if let Some(gr) = inst_grp {
+                            group_of.insert(id, gr);
+                        }
+                        added_inst += 1;
+                    }
+                }
+            }
+
+            // STRICT ZERO-DILUTION INVARIANT: never run general synonym expansion on a word that ALREADY matches the corpus!
+            if group_has_corpus_hit {
+                continue;
+            }
+
+            // (b) Unified OOV Human-Knowledge Expansion: WordNet 3.1 (4-POS + derived `+` + instance_surnames
+            // + edit-dist-1 typo rescue) + Roget's 1911 Thesaurus + GeoNames + Wikidata CC0 + ConceptNet 5.7, IC-weighted.
+            let mut best_by_id: std::collections::BTreeMap<u32, (u64, u16)> = std::collections::BTreeMap::new();
+            let mut consider_lemma = |lemma: &str, rel_w: u16| {
+                let surface = ix.vocab.get(lemma);
+                let stemmed = if p.enable_stemming {
+                    ix.vocab.get(&stem_term(&stem(lemma)))
+                } else {
+                    None
+                };
+                for id in [surface, stemmed].into_iter().flatten() {
+                    let df = ix.s_stats.df.get(&id).copied().unwrap_or(0);
+                    if (1..=rare_df_cap).contains(&df) && !hyp_added.contains(&id) {
+                        let ic = aspect_ic_q16(df, ns_u32);
+                        let rank_sc = ic.saturating_mul(u64::from(rel_w));
+                        let entry = best_by_id.entry(id).or_insert((0, 0));
+                        if rank_sc > entry.0 {
+                            *entry = (rank_sc, rel_w);
+                        }
+                    }
+                }
+            };
+            for (lemma, rel_w) in crate::wordnet::full_lexicon_neighbors(w) {
+                consider_lemma(lemma, rel_w);
+            }
+            for (lemma, rel_w) in crate::roget::conceptual_neighbors(w, 64) {
+                consider_lemma(lemma, rel_w);
+            }
+            for (lemma, rel_w) in crate::geonames::geo_neighbors(w) {
+                consider_lemma(lemma, rel_w);
+            }
+            for cont in crate::wikidata::upward_containers(w, 2)
+                .into_iter()
+                .chain(crate::wikidata::direct_instances_of(w, 12))
+            {
+                for part in cont.split_ascii_whitespace() {
+                    if part.len() >= 3 {
+                        consider_lemma(part, 78);
+                    }
+                }
+            }
+            for (cn_lemma, cn_w) in crate::conceptnet::two_hop_neighbors(w, 12) {
+                let scaled_w = ((u32::from(cn_w.min(200)) * 85) / 200).clamp(40, 85) as u16;
+                consider_lemma(cn_lemma, scaled_w);
+            }
+
+            let mut scored_exp: Vec<(u64, u32, u16)> = best_by_id
+                .into_iter()
+                .map(|(id, (sc, rw))| (sc, id, rw))
+                .collect();
+            scored_exp.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            let mut added_cnt = 0usize;
+            for (_, id, rel_w) in scored_exp {
+                if added_cnt >= 14 {
+                    break;
+                }
+                if hyp_added.insert(id) {
+                    let df = ix.s_stats.df.get(&id).copied().unwrap_or(1);
+                    let ic_ratio = ((aspect_ic_q16(df, ns_u32) as f32) / (max_ic_q16 as f32)).clamp(0.22, 1.0);
+                    let rel_ratio = (f32::from(rel_w) / 100.0).clamp(0.42, 1.0);
+                    let w_eff = (p.hypernym_weight * 0.85 * ic_ratio * rel_ratio).clamp(0.10, p.hypernym_weight);
+                    terms.push(QTerm { id, weight: w_eff, group: Some(*g), exact_hit: false });
+                    group_of.insert(id, *g);
+                    added_cnt += 1;
                 }
             }
         }

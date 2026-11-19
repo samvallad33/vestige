@@ -93,7 +93,8 @@ mod tests {
 
     #[test]
     fn conceptnet_table_matches_pinned_sha256() {
-        let hash = Sha256::digest(DATA_TSV.as_bytes());
+        let normalized = DATA_TSV.replace("\r\n", "\n");
+        let hash = Sha256::digest(normalized.as_bytes());
         let digest: String = hash.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(digest, DATA_SHA256);
     }

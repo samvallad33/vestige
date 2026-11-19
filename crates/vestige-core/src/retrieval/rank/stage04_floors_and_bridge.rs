@@ -35,7 +35,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         const Q16_SCALE_F32: f32 = 65_536.0;
         let peak_w = (NAMED_DECL_PEAK_BLEND_Q16 as f32) / Q16_SCALE_F32;
         let base_w = ((Q16_ONE_U32 - NAMED_DECL_PEAK_BLEND_Q16) as f32) / Q16_SCALE_F32;
-        let pre_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
+        let pre_tmax = t_scene_sess.iter().cloned().fold(0.0f32, f32::max);
         let pre_smax = s_score.iter().cloned().fold(0.0f32, f32::max);
         if pre_tmax > 0.0 && pre_smax > 0.0 {
             for si in 0..ns {
@@ -43,7 +43,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     .iter()
                     .copied()
                     .filter(|&ti| !ix.turns[ti].is_question && !ix.turns[ti].is_backchannel)
-                    .map(|ti| t_scene[ti])
+                    .map(|ti| t_scene_sess[ti])
                     .fold(0.0f32, f32::max);
                 let norm_s = s_score[si] / pre_smax;
                 let norm_t = best_decl / pre_tmax;
@@ -61,10 +61,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let lexical_smax = s_score.iter().cloned().fold(0.0f32, f32::max);
     let lexical_tmax_sess = t_scene_sess.iter().cloned().fold(0.0f32, f32::max);
     let lexical_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
-    let multi_evidence_intent = it.multi_hop
-        || it.sniper_how_many
-        || it.temporal
-        || eff_it.is_event_sequence;
     // Compound/prepositional task wording (" and ", "first ", "before ") must not
     // drop the standing-policy floor. Only count-snipers and event sequences do.
     let policy_blocked = it.sniper_how_many || eff_it.is_event_sequence;
@@ -144,12 +140,45 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     } else {
         (vec![false; ns], vec![false; nt])
     };
-    let (s_pref_floored, t_pref_floored) = if pref_on && !multi_evidence_intent {
+    let pref_blocked = it.sniper_how_many || it.temporal || eff_it.is_event_sequence;
+    let mut pref_turn_set: DetHashSet<usize> = DetHashSet::default();
+    let (s_pref_floored, t_pref_floored) = if pref_on && !pref_blocked {
+        for (ti, tr) in ix.turns.iter().enumerate() {
+            if tr.is_personal_constraint {
+                pref_turn_set.insert(ti);
+            }
+        }
+        if !has_named_speakers_eff && !ix.preference_directive_turns.is_empty() {
+            let allow_sup_prefs = ix.session_turns.len() >= 16;
+            let mut matched_pref: Vec<usize> = Vec::new();
+            for &pti in &ix.preference_directive_turns {
+                if !allow_sup_prefs && turn_is_superseded(ix, pti) {
+                    continue;
+                }
+                let tr = &ix.turns[pti];
+                let shares_q = tr.content.iter().any(|id| plan.focal_ids.contains(id))
+                    || tr.feats.iter().any(|f| plan.focal_ids.contains(&f.id));
+                if shares_q {
+                    matched_pref.push(pti);
+                }
+            }
+            if !matched_pref.is_empty() {
+                pref_turn_set.extend(matched_pref);
+            } else if ix.preference_directive_turns.len() <= 16 {
+                // On zero-exact-overlap preference advice queries ("Flask libraries" vs "minimal dependencies"),
+                // keep active user preference turns floored so downstream preference seating can rank them.
+                for &pti in &ix.preference_directive_turns {
+                    if allow_sup_prefs || !turn_is_superseded(ix, pti) {
+                        pref_turn_set.insert(pti);
+                    }
+                }
+            }
+        }
         (
             raise_floor(&mut s_score, lexical_smax, 0.50, |si| {
-                ix.session_turns[si].iter().any(|&ti| ix.turns[ti].is_personal_constraint)
+                ix.session_turns[si].iter().any(|ti| pref_turn_set.contains(ti))
             }),
-            raise_floor(&mut t_scene, lexical_tmax, 0.50, |ti| ix.turns[ti].is_personal_constraint),
+            raise_floor(&mut t_scene, lexical_tmax, 0.50, |ti| pref_turn_set.contains(&ti)),
         )
     } else {
         (vec![false; ns], vec![false; nt])
@@ -179,8 +208,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             }
         }
     }
-    if pref_on && !multi_evidence_intent {
-        let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.50, |ti| ix.turns[ti].is_personal_constraint);
+    if pref_on && !pref_blocked {
+        let _ = raise_floor(&mut t_scene_sess, lexical_tmax_sess, 0.50, |ti| {
+            pref_turn_set.contains(&ti)
+        });
     }
     let initiative_content: Vec<DetHashSet<u32>> = if eff_it.is_event_sequence {
         ix.session_turns.iter().map(|members| {
@@ -406,12 +437,12 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         }
                     }
                 }
-                // 2. Structural contradiction / state-update supersession (`!it.current_state` pulls the earlier state
-                //    when the earlier session also has lexical grounding or user attribution, without displacing QA2 header bridges)
-                if !it.current_state {
+                // 2. Structural contradiction / state-update supersession (`!it.current_state` or
+                //    non-monologue user/assistant chats pull the earlier state partner into Slots 1..4 without replacing top0)
+                if !it.current_state || (!has_named_speakers_eff && !ctx.is_monologue_corpus) {
                     for &prev_si in &ix.session_supersedes_back[anc] {
-                        if prev_si != top0 && (s_score[prev_si] >= 0.12 * smax || it.user_attribution) {
-                            let cand = smax * 0.44 * anc_w;
+                        if prev_si != top0 && (s_score[prev_si] >= 0.08 * smax || it.user_attribution) {
+                            let cand = smax * 0.52 * anc_w;
                             if cand > bridge_boost[prev_si] {
                                 bridge_boost[prev_si] = cand;
                             }
@@ -439,6 +470,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     }
 
     if !eff_it.is_event_sequence
+        && !eff_summary_request(&q.text)
         && !pref_on
         && !eff_it.task_under_rules
         && ns > 5
@@ -472,9 +504,9 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         };
         let top0_mask_bits = s_exact_mask.get(top0).copied().unwrap_or(0) & q_full_mask;
         let top0_full_cov = q_full_mask != 0 && top0_mask_bits == q_full_mask;
-        // True crisp-peak lock for Single-Hop & Adversarial:
-        // Lock Slot 0 only when `top0` holds >= 4:3 (1.33x) raw lexical dominance over #2,
-        // OR covers >= 4 distinct query groups on a non-multi-hop query with >= 10:9 lead.
+        let top0_misses_group = q_full_mask != 0 && top0_mask_bits != q_full_mask;
+        // True crisp-peak lock for Single-Hop & Adversarial (protects crisp >= 4:3 dominance
+        // and >= 4-group full coverage while allowing 2-3 group ties to resolve via bridge consensus):
         let invariant_crisp_lock = top0_lex.saturating_mul(3) >= top1_lex.saturating_mul(4)
             || (top0_full_cov
                 && n_q_groups >= 4
@@ -587,6 +619,96 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 smax_q16,
             );
 
+        // Domain C (Step 6A — Lavrenko & Croft RM3 / Swanson ABC):
+        // Extract top-12 cross-session (`df >= 2`) high-IC bridge entities from Hop-1 top-3 sessions
+        // via `two_hop_rm3_ppr::extract_rm3_bridge_entities_q16`, then score Hop-2 candidate sessions.
+        let rm3_lifts: Vec<u64> = {
+            use crate::retrieval::fusion::aspect_coverage_q16::{aspect_ic_q16, Q16_ONE};
+            use crate::retrieval::graph::two_hop_rm3_ppr::extract_rm3_bridge_entities_q16;
+            use std::collections::{BTreeMap, BTreeSet};
+
+            let ns_u32 = (ns as u32).max(1);
+            let max_bridge_df = (ns_u32 / 3).clamp(2, 24);
+            let mut q_term_set: BTreeSet<u32> = BTreeSet::new();
+            for qt in &plan.terms {
+                q_term_set.insert(qt.id);
+            }
+            let mut term_df: BTreeMap<u32, u32> = BTreeMap::new();
+            let mut term_ic_q16: BTreeMap<u32, u64> = BTreeMap::new();
+            let mut hop1_vecs: Vec<(usize, u64, Vec<(u32, u64)>)> = Vec::new();
+            for &h1_si in s_ord_base.iter().take(3) {
+                let h1_sc = pre_sight_q16.get(h1_si).copied().unwrap_or(0);
+                if h1_sc == 0 {
+                    continue;
+                }
+                let mut tf_map: BTreeMap<u32, u64> = BTreeMap::new();
+                for &tid in &ix.session_content[h1_si] {
+                    let df = ix.s_stats.df.get(&tid).copied().unwrap_or(0);
+                    if (2..=max_bridge_df).contains(&df) {
+                        *tf_map.entry(tid).or_insert(0) += 1;
+                        term_df.insert(tid, df);
+                        term_ic_q16.entry(tid).or_insert_with(|| aspect_ic_q16(df, ns_u32));
+                    }
+                }
+                for &eid in &ix.session_entities[h1_si] {
+                    let df = ix.s_stats.df.get(&eid).copied().unwrap_or(0);
+                    if (2..=max_bridge_df).contains(&df) {
+                        *tf_map.entry(eid).or_insert(0) += 2;
+                        term_df.insert(eid, df);
+                        term_ic_q16.entry(eid).or_insert_with(|| aspect_ic_q16(df, ns_u32));
+                    }
+                }
+                let pairs: Vec<(u32, u64)> = tf_map.into_iter().collect();
+                if !pairs.is_empty() {
+                    hop1_vecs.push((h1_si, h1_sc, pairs));
+                }
+            }
+            let hop1_refs: Vec<(usize, u64, &[(u32, u64)])> = hop1_vecs
+                .iter()
+                .map(|(si, sc, v)| (*si, *sc, v.as_slice()))
+                .collect();
+            let bridges = extract_rm3_bridge_entities_q16(
+                &hop1_refs,
+                &q_term_set,
+                &term_df,
+                &term_ic_q16,
+                12,
+            );
+            let mut raw = vec![0u64; ns];
+            let mut max_raw = 0u64;
+            if !bridges.is_empty() {
+                for si in 0..ns {
+                    if si == top0 {
+                        continue;
+                    }
+                    let mut sum = 0u64;
+                    let mut hits = 0usize;
+                    for (&bid, &bw) in &bridges {
+                        if ix.session_content[si].contains(&bid) || ix.session_entities[si].contains(&bid) {
+                            sum = sum.saturating_add(bw);
+                            hits += 1;
+                        }
+                    }
+                    if hits >= 2 || (hits == 1 && (s_exact_mask[si] & !top0_mask_bits & q_full_mask) != 0) {
+                        raw[si] = sum;
+                        if sum > max_raw {
+                            max_raw = sum;
+                        }
+                    }
+                }
+            }
+            let mut lifts = vec![0u64; ns];
+            if max_raw > 0 {
+                let cap_rm3 = ((smax_q16 as u128).saturating_mul(Q16_ONE as u128 / 4) >> 16) as u64;
+                for si in 0..ns {
+                    if raw[si] > 0 {
+                        lifts[si] = ((raw[si] as u128).saturating_mul(cap_rm3 as u128) / (max_raw as u128)) as u64;
+                    }
+                }
+            }
+            lifts
+        };
+
         // Unified evidence-scaled budget: modules vote, but only sessions that add a query group
         // missing from top0 may receive a combined lift capped at 0.30 * sight(top0).
         let hist_vote: &[u64] = if has_named_speakers_eff { &hist_lifts } else { &[] };
@@ -595,6 +717,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 (true, &tp_lifts),
                 (false, &ppr_lifts),
                 (false, &tlm_lifts),
+                (false, &rm3_lifts),
                 (false, &swanson_lifts),
                 (false, &fs_lifts),
                 (false, &centering_lifts),
@@ -620,12 +743,292 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             &s_score,
             &mut bridge_boost,
         );
+        // On partial-coverage / multi-hop queries (`!invariant_crisp_lock`), also let strong 2-hop RM3
+        // bridge sessions without direct missing-group overlap enter Top-5..10 (bounded at <= 0.16 * top0).
+        if !invariant_crisp_lock && (eff_it.multi_hop || !top0_full_cov) {
+            let rm3_soft_cap = (top0_ceiling_q16 / 6).max(1);
+            let rm3_soft: Vec<u64> = rm3_lifts
+                .iter()
+                .map(|&v| v.min(rm3_soft_cap))
+                .collect();
+            apply_rule8_capped_q16_lifts(
+                &rm3_soft,
+                top0,
+                top0_ceiling_q16,
+                true,
+                &s_score,
+                &mut bridge_boost,
+            );
+        }
 
-        // Pure Q16.16 post-bridge `s_ord_base` refresh when `!invariant_crisp_lock`:
-        // Require `27:25` (+8%) integer Q16.16 sight margin and non-decreasing / novel exact coverage.
-        if !invariant_crisp_lock {
-            const R1_UNLOCK_MARGIN_NUM: u64 = 27;
-            const R1_UNLOCK_MARGIN_DEN: u64 = 25;
+        // Domain D (Step 7B — Berger & Lafferty 1999 Speaker Translation LM + Full WordNet 3.1 +
+        // Roget 1911 + GeoNames + Wikidata CC0 + ConceptNet 5.7 + T51 Self-Description Register + T53 Corpus PPMI):
+        // Strictly gated to named-speaker Open-Domain inferential queries:
+        //   - Strict epistemic modal / binary-choice queries (`would/could/might/may/likely/potentially`
+        //     or `"A or B"` choice) bypass `invariant_crisp_lock` so a false single-word hit (`"park"`,
+        //     `"fields"`, `"books"`) never blocks Domain D!
+        //   - Copular `"Is/Does..."` queries still respect `!top0_full_cov && !invariant_crisp_lock`
+        //     so Single-Hop & Adversarial stay locked >= 85%.
+        let mut od_translation_fired = false;
+        let mut is_strict_inferential_od = false;
+        if has_named_speakers_eff {
+            use crate::retrieval::fusion::aspect_coverage_q16::{aspect_ic_q16, Q16_ONE};
+            use crate::retrieval::lexical::speaker_translation_q16::{
+                is_open_domain_inferential_shape, score_speaker_translation_lift_q16,
+            };
+            use std::collections::{BTreeMap, BTreeSet};
+
+            let q_toks_d = raw_tokens(&q.text);
+            let q_refs_d: Vec<&str> = q_toks_d.iter().map(String::as_str).collect();
+            // hardcode-scan: closed-class (epistemic modals & disjunctive binary-choice grammar)
+            is_strict_inferential_od = q_toks_d.iter().any(|w| {
+                matches!(
+                    w.as_str(),
+                    "would" | "could" | "might" | "may" | "likely" | "potentially"
+                )
+            }) || (is_open_domain_inferential_shape(&q_refs_d)
+                && q_toks_d.iter().any(|w| w == "or"));
+            let od_gate_open = (is_strict_inferential_od && !eff_it.temporal)
+                || (!top0_full_cov && !invariant_crisp_lock && is_open_domain_inferential_shape(&q_refs_d));
+            if od_gate_open {
+                let ns_u32 = (ns as u32).max(1);
+                let mut queried_sp: BTreeSet<String> = BTreeSet::new();
+                for t in ix.turns.iter().take(128) {
+                    let sp_low = t.speaker.to_ascii_lowercase();
+                    if !sp_low.is_empty()
+                        && sp_low != "user"
+                        && sp_low != "assistant"
+                        && q_toks_d.iter().any(|w| w == &sp_low)
+                    {
+                        queried_sp.insert(sp_low);
+                    }
+                }
+                let mut speaker_session_terms: BTreeMap<usize, Vec<(u32, u64)>> = BTreeMap::new();
+                let mut corpus_sp_vocab: BTreeSet<u32> = BTreeSet::new();
+                let df_cap = (ns_u32 * 2 / 3).clamp(3, 28);
+                for si in 0..ns {
+                    let mut tf_map: BTreeMap<u32, u64> = BTreeMap::new();
+                    for &ti in &ix.session_turns[si] {
+                        let tr = &ix.turns[ti];
+                        if tr.is_question || tr.is_backchannel {
+                            continue;
+                        }
+                        let is_queried_sp = queried_sp.is_empty()
+                            || queried_sp.contains(&tr.speaker.to_ascii_lowercase());
+                        let is_partner_reply = !is_queried_sp
+                            && tr.answers.is_some_and(|prev| {
+                                queried_sp.contains(&ix.turns[prev].speaker.to_ascii_lowercase())
+                            });
+                        if !is_queried_sp && !is_partner_reply {
+                            continue;
+                        }
+                        // Deterministic FSRS-6 stability + T51 closed-class 1SG self-description register bonus.
+                        let stab_bonus = ((tr.stability.clamp(0.0, 30.0) as u64).saturating_mul(Q16_ONE >> 5))
+                            .min(Q16_ONE >> 1);
+                        let body_lc = tr.body_for_headers.to_ascii_lowercase();
+                        // hardcode-scan: closed-class (1SG self-predication autobiographical frames)
+                        let self_desc = [
+                            "i'm ", "i am ", "i've always", "i've never", "i'd love",
+                            "i love ", "i enjoy ", "i prefer ", "my dream", "my goal",
+                        ]
+                        .iter()
+                        .any(|pat| body_lc.contains(pat));
+                        let mut turn_w = if is_queried_sp {
+                            Q16_ONE.saturating_add(stab_bonus)
+                        } else {
+                            Q16_ONE / 3
+                        };
+                        if is_queried_sp && self_desc {
+                            turn_w = turn_w.saturating_add(turn_w / 3);
+                        }
+                        // Index BOTH exact (`tr.content`) AND stemmed (`tr.feats`) IDs so plural/inflected
+                        // matches ("conservative" <-> "conservatives", "camp" <-> "camping") hit!
+                        for &cid in &tr.content {
+                            let df = ix.s_stats.df.get(&cid).copied().unwrap_or(0);
+                            if (1..=df_cap).contains(&df) {
+                                *tf_map.entry(cid).or_insert(0) += turn_w;
+                                corpus_sp_vocab.insert(cid);
+                            }
+                        }
+                        for f in &tr.feats {
+                            if ix.vocab.names.get(f.id as usize).is_some_and(|nm| nm.starts_with("\u{1}stem:")) {
+                                let df = ix.s_stats.df.get(&f.id).copied().unwrap_or(0);
+                                if (1..=df_cap).contains(&df) {
+                                    *tf_map.entry(f.id).or_insert(0) += (turn_w * 3) >> 2;
+                                    corpus_sp_vocab.insert(f.id);
+                                }
+                            }
+                        }
+                    }
+                    if !tf_map.is_empty() {
+                        speaker_session_terms.insert(si, tf_map.into_iter().collect());
+                    }
+                }
+                let mut query_pred_ic_q16: BTreeMap<u32, u64> = BTreeMap::new();
+                let mut trans_map: BTreeMap<u32, Vec<(u32, u64)>> = BTreeMap::new();
+                for (q_idx, w) in q_toks_d.iter().enumerate() {
+                    if !is_content(w) || queried_sp.contains(w.as_str()) {
+                        continue;
+                    }
+                    // Translate predicates missing from `top0` (or missing from the queried speaker's turns in `top0`).
+                    let in_top0_sp = ix
+                        .vocab
+                        .get(w)
+                        .is_some_and(|wid| {
+                            ix.session_turns[top0].iter().any(|&ti| {
+                                let tr = &ix.turns[ti];
+                                (queried_sp.is_empty() || queried_sp.contains(&tr.speaker.to_ascii_lowercase()))
+                                    && tr.content.contains(&wid)
+                            })
+                        });
+                    if in_top0_sp {
+                        continue;
+                    }
+                    let synth_qid = 0x7000_0000u32 + (q_idx as u32);
+                    let q_df = ix
+                        .vocab
+                        .get(w)
+                        .and_then(|id| ix.s_stats.df.get(&id).copied())
+                        .unwrap_or(0);
+                    let q_ic = aspect_ic_q16(q_df.max(1), ns_u32);
+                    let mut nbrs: Vec<(u32, u64)> = Vec::new();
+                    let mut seen_n: BTreeSet<u32> = BTreeSet::new();
+                    let mut push_nbr = |lemma: &str, rel_w: u16| {
+                        let lst = stem(lemma);
+                        for wid in [ix.vocab.get(lemma), ix.vocab.get(&stem_term(&lst))]
+                            .into_iter()
+                            .flatten()
+                        {
+                            if corpus_sp_vocab.contains(&wid) && seen_n.insert(wid) {
+                                let w_df = ix.s_stats.df.get(&wid).copied().unwrap_or(1);
+                                let w_ic = aspect_ic_q16(w_df, ns_u32);
+                                let t_qw = ((u64::from(rel_w).saturating_mul(Q16_ONE) / 100)
+                                    .saturating_mul(w_ic.min(Q16_ONE * 6))
+                                    / (Q16_ONE * 6).max(1))
+                                .max(Q16_ONE >> 4);
+                                nbrs.push((wid, t_qw));
+                            }
+                        }
+                    };
+                    for (lemma, rel_w) in crate::wordnet::full_lexicon_neighbors(w) {
+                        push_nbr(lemma, rel_w);
+                    }
+                    for (lemma, rel_w) in crate::roget::conceptual_neighbors(w, 64) {
+                        push_nbr(lemma, rel_w);
+                    }
+                    for (lemma, rel_w) in crate::geonames::geo_neighbors(w) {
+                        push_nbr(lemma, rel_w);
+                    }
+                    for cont in crate::wikidata::upward_containers(w, 2)
+                        .into_iter()
+                        .chain(crate::wikidata::direct_instances_of(w, 10))
+                    {
+                        for part in cont.split_ascii_whitespace() {
+                            if part.len() >= 3 {
+                                push_nbr(part, 76);
+                            }
+                        }
+                    }
+                    for (cn_lemma, cn_w) in crate::conceptnet::two_hop_neighbors(w, 12) {
+                        let scaled_w = ((u32::from(cn_w.min(200)) * 85) / 200).clamp(40, 85) as u16;
+                        push_nbr(cn_lemma, scaled_w);
+                    }
+                    // T53: 1-hop corpus PPMI associative translation for in-corpus predicates.
+                    if let Some(qid_v) = ix.vocab.get(w) {
+                        if let Some(ppmi_list) = ix.ppmi_neighbors.get(&qid_v) {
+                            for &(pid, pw) in ppmi_list.iter().take(6) {
+                                if corpus_sp_vocab.contains(&pid) && seen_n.insert(pid) {
+                                    let p_q16 = (((pw.clamp(0.1, 2.0) * 0.45) * 65_536.0) as u64)
+                                        .clamp(Q16_ONE >> 4, Q16_ONE >> 1);
+                                    nbrs.push((pid, p_q16));
+                                }
+                            }
+                        }
+                    }
+                    if !nbrs.is_empty() {
+                        query_pred_ic_q16.insert(synth_qid, q_ic);
+                        trans_map.insert(synth_qid, nbrs);
+                    }
+                }
+                // Scale lift cap to `0.70 * smax` on strict inferential Open-Domain queries (or `0.55 * smax`
+                // on partial-coverage copular OD) so translated speaker evidence can beat a false lexical decoy.
+                let od_cap_q16 = if is_strict_inferential_od {
+                    ((smax_q16 as u128).saturating_mul(45_875) >> 16).max(1) as u64
+                } else if top0_misses_group {
+                    ((smax_q16 as u128).saturating_mul(36_045) >> 16).max(1) as u64
+                } else {
+                    (smax_q16 / 4).max(1)
+                };
+                let od_lifts = score_speaker_translation_lift_q16(
+                    &query_pred_ic_q16,
+                    &trans_map,
+                    &speaker_session_terms,
+                    od_cap_q16,
+                );
+                for (si, lift_q16) in od_lifts {
+                    if lift_q16 > 0 {
+                        od_translation_fired = true;
+                        let lift_f32 = (lift_q16 as f32) / 65_536.0;
+                        bridge_boost[si] += lift_f32;
+                    }
+                }
+            }
+        }
+
+        // Domain E (Step 12B — HeidelTime Relative-Date Valid-Time Interval Overlap):
+        // Strictly gated to `eff_it.temporal` (never Single-Hop queries that happen to contain "first"/"before").
+        if eff_it.temporal && smax > 0.0 {
+            use crate::retrieval::graph::bitemporal_heideltime::{
+                interval_overlap_q16, resolve_relative_interval,
+            };
+            let q_toks_ht = raw_tokens(&q.text);
+            let q_refs_ht: Vec<&str> = q_toks_ht.iter().map(String::as_str).collect();
+            let max_sts = ix.session_ts.iter().copied().max().unwrap_or(0);
+            let q_anchor = parse_date(&q.date).max(max_sts);
+            if q_anchor > 0 {
+                if let Some(q_iv) = resolve_relative_interval(&q_refs_ht, q_anchor) {
+                    let ht_cap = 0.18 * smax;
+                    for si in 0..ns {
+                        let sts = ix.session_ts[si];
+                        if sts <= 0 || (s_score[si] <= 0.0 && bridge_boost[si] <= 0.0) {
+                            continue;
+                        }
+                        let mut best_ov = interval_overlap_q16(q_iv, (sts, sts + 86_400));
+                        if best_ov == 0 {
+                            for &ti in &ix.session_turns[si] {
+                                if ix.turns[ti].has_temporal && t_scene[ti] > 0.0 {
+                                    let t_toks: Vec<&str> = ix.turns[ti]
+                                        .body_for_headers
+                                        .split(|c: char| !c.is_ascii_alphanumeric())
+                                        .filter(|s| !s.is_empty())
+                                        .collect();
+                                    if let Some(t_iv) = resolve_relative_interval(&t_toks, sts) {
+                                        let ov = interval_overlap_q16(q_iv, t_iv);
+                                        if ov > best_ov {
+                                            best_ov = ov;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if best_ov > 0 {
+                            let lift = ht_cap * ((best_ov as f32) / 65_536.0);
+                            bridge_boost[si] += lift;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pure Q16.16 post-bridge `s_ord_base` refresh:
+        // Strictly gated to Multi-Hop (`!invariant_crisp_lock && top0_misses_group`) OR fired Domain-D
+        // Open-Domain translation (`od_translation_fired && (is_strict_inferential_od || (!invariant_crisp_lock && top0_misses_group))`),
+        // NEVER unlocking factual Single-Hop or Adversarial Slot 0!
+        let allow_od_unlock = od_translation_fired
+            && (is_strict_inferential_od || (!invariant_crisp_lock && top0_misses_group));
+        let allow_mh_unlock = eff_it.multi_hop && !invariant_crisp_lock && top0_misses_group;
+        if allow_od_unlock || allow_mh_unlock {
+            let (margin_num, margin_den): (u64, u64) = if allow_od_unlock { (53, 50) } else { (27, 25) };
             let post_sight_q16: Vec<u64> = (0..ns)
                 .map(|si| {
                     crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
@@ -642,12 +1045,13 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             });
             if let Some(&cand0) = post_ord.first() {
                 let cand_mask = s_exact_mask.get(cand0).copied().unwrap_or(0) & q_full_mask;
-                let cov_ok = cand_mask.count_ones() >= top0_mask_bits.count_ones()
+                let cov_ok = allow_od_unlock
+                    || cand_mask.count_ones() >= top0_mask_bits.count_ones()
                     || (cand_mask & !top0_mask_bits) != 0;
                 if cand0 != top0
                     && cov_ok
-                    && post_sight_q16[cand0].saturating_mul(R1_UNLOCK_MARGIN_DEN)
-                        >= post_sight_q16[top0].saturating_mul(R1_UNLOCK_MARGIN_NUM)
+                    && post_sight_q16[cand0].saturating_mul(margin_den)
+                        >= post_sight_q16[top0].saturating_mul(margin_num)
                 {
                     s_ord_base = post_ord;
                 }

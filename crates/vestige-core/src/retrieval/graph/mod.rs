@@ -2,6 +2,7 @@
 
 pub(in crate::retrieval) mod ac3;
 pub(in crate::retrieval) mod actr;
+pub(in crate::retrieval) mod bitemporal_heideltime;
 pub(in crate::retrieval) mod bridge;
 pub(in crate::retrieval) mod causal;
 pub(in crate::retrieval) mod fellegi_sunter;
@@ -18,6 +19,7 @@ pub(in crate::retrieval) mod swanson_abc;
 pub(in crate::retrieval) mod taxa;
 pub(in crate::retrieval) mod temporal_allen;
 pub(in crate::retrieval) mod torrens;
+pub(in crate::retrieval) mod two_hop_rm3_ppr;
 pub(in crate::retrieval) mod viterbi;
 
 pub(in crate::retrieval) use self::bridge::*;

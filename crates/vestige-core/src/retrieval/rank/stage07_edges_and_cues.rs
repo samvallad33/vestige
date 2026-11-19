@@ -47,7 +47,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             if !(if is_monologue_corpus {
                 eff_it.current_state
             } else {
-                it.current_state
+                it.current_state && ctx.has_named_speakers_eff
             }) {
                 for &target in &ix.turns[ti].supersedes_turns {
                     let c = src * 0.66;

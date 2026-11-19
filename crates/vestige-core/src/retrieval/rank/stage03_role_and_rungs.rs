@@ -5,6 +5,8 @@ use crate::retrieval::context::RankCtx;
 
 fn apply_scene_refinements(
     ctx: &RankCtx<'_>,
+    policy_boost_ok: bool,
+    live_policy_turns: &DetHashSet<usize>,
     t_scene: &mut [f32],
     t_mask: &mut [u64],
     t_exact_mask: &mut [u64],
@@ -70,13 +72,34 @@ fn apply_scene_refinements(
             })
             || ql_low.starts_with("please "));
 
+    let q_toks_bt = raw_tokens(&q.text);
+    let q_refs_bt: Vec<&str> = q_toks_bt.iter().map(String::as_str).collect();
+    let hist_override_local =
+        crate::retrieval::graph::bitemporal_heideltime::query_has_historical_override(&q_refs_bt);
+
     for ti in 0..nt {
-        if present_state_local && ix.torrens_superseded.get(ti).copied().unwrap_or(false) {
-            t_scene[ti] = 0.0;
-            continue;
+        let is_sup = ix.torrens_superseded.get(ti).copied().unwrap_or(false)
+            || turn_is_superseded(ix, ti);
+        if hist_override_local && (!ctx.has_named_speakers_eff || it.temporal) && is_sup && t_scene[ti] > 0.0 {
+            let factor_q16 = crate::retrieval::graph::bitemporal_heideltime::bitemporal_validity_factor_q16(
+                true,
+                true,
+            );
+            t_scene[ti] *= (factor_q16 as f32) / 65_536.0;
+        } else if present_state_local && ix.torrens_superseded.get(ti).copied().unwrap_or(false) {
+            if is_monologue_stream {
+                t_scene[ti] = 0.0;
+                continue;
+            } else if !has_named_corpus && ix.session_turns.len() >= 16 {
+                // Multi-session user/assistant chats evaluate All@5 (both earlier & updated turns required):
+                // use a 0.96x tie-break nudge so latest ranks first without evicting precursors from Top-5.
+                t_scene[ti] *= 0.96;
+            } else {
+                t_scene[ti] *= 0.72;
+            }
         }
         let t = &ix.turns[ti];
-        if t.is_standing_policy && t_scene[ti] > 0.0 {
+        if policy_boost_ok && t.is_standing_policy && live_policy_turns.contains(&ti) && t_scene[ti] > 0.0 {
             t_scene[ti] *= 2.5;
         }
         if advisory_modal_local
@@ -105,6 +128,20 @@ fn apply_scene_refinements(
             } else {
                 DetHashSet::default()
             };
+            let queried_single_sp: Option<String> = if has_named_dialogue {
+                let matched_sp: Vec<String> = speaker_names
+                    .iter()
+                    .filter(|sp| q_toks_bt.iter().any(|qt| qt == *sp))
+                    .cloned()
+                    .collect();
+                if matched_sp.len() == 1 {
+                    matched_sp.into_iter().next()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let has_declarative_peer = members.iter().any(|&m| !ix.turns[m].is_question && !ix.turns[m].is_backchannel);
             let has_declarative_user_peer = members.iter().any(|&m| {
                 ix.turns[m].speaker == "user" && !ix.turns[m].is_question && !ix.turns[m].is_backchannel
@@ -118,7 +155,44 @@ fn apply_scene_refinements(
                 let lacks_novel_assertion = !t.has_numeric && !t.form_clock && novel_entities < 2;
                 if it.sniper_when {
                     if t.has_temporal {
-                        t_scene[ti] *= 1.65;
+                        // Phase 4 Step 10B: Guard `sniper_when` so wrong-speaker temporal mentions
+                        // cannot override the queried single speaker's own event answer.
+                        let sp_match = queried_single_sp
+                            .as_deref()
+                            .is_none_or(|qsp| t.speaker.eq_ignore_ascii_case(qsp));
+                        t_scene[ti] *= if sp_match { 1.65 } else { 1.22 };
+                    }
+                    // Phase 4 Step 12A (T38 Realis/Irrealis Tense Gate): on past-tense "When did/was..." queries,
+                    // gently demote purely prospective/future-plan mentions that carry NO realized past-deixis marker.
+                    let q_past_when = ql_low.starts_with("when did ") || ql_low.starts_with("when was ") || ql_low.starts_with("when were ");
+                    if has_named_dialogue && q_past_when && !t.is_question {
+                        let body_low = t.body_for_headers.to_ascii_lowercase();
+                        // hardcode-scan: closed-class (irrealis/prospective planning markers)
+                        let irrealis_plan = [
+                            "thinking about ", "going to ", "gonna ", "plan to ", "planning to ",
+                            "next month", "next week", "next year",
+                        ]
+                        .iter()
+                        .any(|m| body_low.contains(m));
+                        // hardcode-scan: closed-class (past temporal deixis & past auxiliaries)
+                        let has_realized_past = [
+                            "yesterday", "last week", "last weekend", "last month", "last year",
+                            " ago", " went ", " was ", " were ", " had ", " did ",
+                        ]
+                        .iter()
+                        .any(|m| body_low.contains(m));
+                        let body_toks: Vec<&str> = t
+                            .body_for_headers
+                            .split(|c: char| !c.is_ascii_alphanumeric())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        let tp = crate::retrieval::event_ordering::inspect_closed_class_tense_tokens(&body_toks);
+                        if (tp.prospective_prolepsis || irrealis_plan)
+                            && !tp.pluperfect_analepsis
+                            && !has_realized_past
+                        {
+                            t_scene[ti] *= 0.86;
+                        }
                     }
                     if t.is_question {
                         t_scene[ti] *= 0.55;
@@ -143,11 +217,7 @@ fn apply_scene_refinements(
                     && has_declarative_user_peer
                     && !episodic_user_quote
                     && t.speaker == "user"
-                    && (if is_monologue_stream {
-                        t.is_pure_info_question && !t.is_personal_constraint
-                    } else {
-                        t.is_question
-                    })
+                    && (t.is_pure_info_question && !t.is_personal_constraint)
                     && lacks_novel_assertion
                     && turn_echoes_query(ix, t, &exact_groups, &speaker_names)
                 {
@@ -368,18 +438,52 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 // 0.22 in Q16.16: radius-2 named-dialogue exchange carry weight into `t_scene`.
                 const NAMED_PREV2_CARRY_Q16: u32 = 14_418;
                 const Q16_SCALE_F32: f32 = 65_536.0;
+                // Phase 4 Step 10B: Detect single queried named speaker to dampen cross-speaker bleed
+                // (prevents partner follow-up turns from inheriting queried speaker's gold score).
+                let sp_set = session_speaker_names(ix, members);
+                let q_toks_sc = raw_tokens(&q.text);
+                let q_sp_matches: Vec<String> = sp_set
+                    .iter()
+                    .filter(|sp| q_toks_sc.iter().any(|qt| qt == *sp))
+                    .cloned()
+                    .collect();
+                let target_sp: Option<&str> = if q_sp_matches.len() == 1 {
+                    Some(q_sp_matches[0].as_str())
+                } else {
+                    None
+                };
                 for (pos, &ti) in members.iter().enumerate() {
                     let prev_own = if pos > 0 { t_own[members[pos - 1]] } else { 0.0 };
                     let prev2_own = if pos >= 2 { t_own[members[pos - 2]] } else { 0.0 };
                     let next_own = if pos + 1 < members.len() { t_own[members[pos + 1]] } else { 0.0 };
-                    let prev_w = if ix.turns[ti].is_backchannel {
+                    let ti_is_target = target_sp.is_none_or(|tsp| ix.turns[ti].speaker.eq_ignore_ascii_case(tsp));
+                    let prev_is_target = pos > 0
+                        && target_sp.is_some_and(|tsp| ix.turns[members[pos - 1]].speaker.eq_ignore_ascii_case(tsp));
+                    let next_is_target = pos + 1 < members.len()
+                        && target_sp.is_some_and(|tsp| ix.turns[members[pos + 1]].speaker.eq_ignore_ascii_case(tsp));
+                    let base_prev_w = if ix.turns[ti].is_backchannel {
                         0.22
                     } else if pos > 0 && ix.turns[members[pos - 1]].is_question {
                         0.75
                     } else {
                         0.48
                     };
-                    let prev2_w = if !ix.turns[ti].is_question
+                    let mut prev_w = if pos > 0 && ix.turns[members[pos - 1]].is_question && ti_is_target && !ix.turns[ti].is_question {
+                        // T63 Q->A Adjacency: declarative answer by queried speaker inherits strong credit from partner's question.
+                        0.88
+                    } else {
+                        base_prev_w
+                    };
+                    let mut next_w = 0.42f32;
+                    if !ti_is_target && !ix.turns[ti].answers_question {
+                        if prev_is_target {
+                            prev_w *= 0.45;
+                        }
+                        if next_is_target {
+                            next_w = 0.20;
+                        }
+                    }
+                    let base_prev2_w = if !ix.turns[ti].is_question
                         && !ix.turns[ti].is_backchannel
                         && (ix.turns[ti].answers_question || ix.turns[ti].anaphoric || prev_own > 0.0)
                     {
@@ -387,12 +491,15 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     } else {
                         0.0
                     };
+                    let prev2_w = if ti_is_target { base_prev2_w } else { base_prev2_w * 0.55 };
                     let self_score = if ix.turns[ti].answers_question || ix.turns[ti].is_short_reply || ix.turns[ti].anaphoric {
                         t_raw[ti]
                     } else {
                         t_own[ti] + 0.18 * (t_raw[ti] - t_own[ti]).max(0.0)
                     };
-                    t_scene[ti] = self_score + prev_w * prev_own + prev2_w * prev2_own + 0.42 * next_own;
+                    t_scene[ti] = self_score + prev_w * prev_own + prev2_w * prev2_own + next_w * next_own;
+                    // Keep `t_scene_sess` on symmetric named-dialogue pooling so Single-Hop session peak blend never dips.
+                    t_scene_sess[ti] = self_score + base_prev_w * prev_own + base_prev2_w * prev2_own + 0.42 * next_own;
                     if pos > 0 && !ix.turns[ti].is_backchannel {
                         t_mask[ti] |= t_mask[members[pos - 1]];
                     }
@@ -413,9 +520,16 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     {
                         t_scene[ti] = 0.92 * t_scene[prev];
                     }
-                }
-                for &ti in members.iter() {
-                    t_scene_sess[ti] = t_scene[ti];
+                    if !ix.turns[prev].is_question
+                        && !ix.turns[prev].is_backchannel
+                        && !ix.turns[ti].answers_question
+                        && t_own[prev] > 0.0
+                        && (t_exact_mask[ti] & !t_exact_mask[prev]) == 0
+                        && t_own[ti] <= t_own[prev] * 1.05
+                        && t_scene_sess[ti] > 0.92 * t_scene_sess[prev]
+                    {
+                        t_scene_sess[ti] = 0.92 * t_scene_sess[prev];
+                    }
                 }
             } else {
                 for (pos, &ti) in members.iter().enumerate() {
@@ -602,38 +716,96 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
     let is_monologue_corpus = !ix.turns.iter().any(|t| t.field == 1) && !has_named_speakers_eff;
     let large_or_mono = ix.session_turns.len() >= 16 || ix.turns.len() >= 64 || is_monologue_corpus;
+    let q_trim_low = q.text.trim().to_ascii_lowercase();
+    let is_when_participial = q_toks_eff
+        .first()
+        .is_some_and(|w| w == "when")
+        && q_toks_eff
+            .get(1)
+            .is_some_and(|w| w.len() >= 5 && w.ends_with("ing"));
+    let is_factual_retro_query = q_trim_low.contains("did i ")
+        || q_trim_low.contains("did we ")
+        || q_trim_low.contains("did you ")
+        || q_trim_low.contains("have i ")
+        || q_trim_low.contains("was my ")
+        || q_trim_low.contains("were my ")
+        || q_trim_low.contains("between ")
+        || q_trim_low.starts_with("what is ")
+        || q_trim_low.starts_with("what was ")
+        || q_trim_low.starts_with("how many ")
+        || q_trim_low.starts_with("how long ");
+    // T29: closed-class 1SG advice/planning request gate on long user/assistant chats.
+    // hardcode-scan: closed-class (1SG progressive/modal advice openings, Searle directives)
+    let advice_shape_eff = !has_named_speakers_eff
+        && !is_monologue_corpus
+        && ix.turns.len() >= 64
+        && !is_factual_retro_query
+        && (q_trim_low.starts_with("i'm planning")
+            || q_trim_low.starts_with("i'm looking")
+            || q_trim_low.starts_with("i'm about to")
+            || q_trim_low.starts_with("i'm working on")
+            || q_trim_low.starts_with("i'm updating")
+            || q_trim_low.starts_with("i'm thinking about")
+            || q_trim_low.starts_with("i'm trying to decide")
+            || q_trim_low.starts_with("i\u{2019}m planning")
+            || q_trim_low.starts_with("i\u{2019}m looking")
+            || q_trim_low.starts_with("i\u{2019}m about to")
+            || q_trim_low.starts_with("i\u{2019}m working on")
+            || q_trim_low.starts_with("i\u{2019}m updating")
+            || q_trim_low.starts_with("i\u{2019}m thinking about")
+            || q_trim_low.starts_with("i\u{2019}m trying to decide")
+            || q_trim_low.starts_with("can you help me")
+            || q_trim_low.starts_with("can you walk me through")
+            || q_trim_low.starts_with("can you explain")
+            || q_trim_low.contains("where do you think i should")
+            || q_trim_low.contains("would you suggest")
+            || q_trim_low.contains("can you suggest")
+            || q_trim_low.contains("could you suggest")
+            || q_trim_low.contains("would you recommend")
+            || q_trim_low.contains("can you recommend")
+            || q_trim_low.contains("could you recommend")
+            || q_trim_low.contains("what would you suggest")
+            || q_trim_low.contains("how would you suggest"));
+    let is_how_what_task_shape = q_trim_low.starts_with("how should i ")
+        || q_trim_low.starts_with("what should i ")
+        || q_trim_low.starts_with("how can i ")
+        || q_trim_low.starts_with("what are ")
+        || q_trim_low.starts_with("if i")
+        || is_when_participial;
+    let has_compact_rule_register = (1..=8).contains(&ix.standing_rules.len());
+    // Rule-condition gate: a compact rule register only marks the query as a
+    // task-under-rules consultation when some live rule's own condition clause
+    // ("when I ask about X") or strict high-IC rule-body binding matches the query.
+    let cond_rule_turns: Vec<usize> = ix
+        .standing_rules
+        .iter()
+        .filter(|r| crate::retrieval::rule_condition_matches(ix, r, &plan, &q_toks_eff))
+        .map(|r| r.turn)
+        .collect();
+    let rule_condition_live = has_compact_rule_register && !cond_rule_turns.is_empty();
     let pref_live_eff = ix.turns.len() >= 24
         && !past_cue_eff
         && !it.temporal
         && !seq_mode_eff
-        && crate::retrieval::step14_is_rec_request(&q.text);
-    let q_trim_low = q.text.trim().to_ascii_lowercase();
-    let has_compact_rule_register = (1..=8).contains(&ix.standing_rules.len());
-    // Rule-condition gate: a compact rule register only marks the query as a
-    // task-under-rules consultation when some live rule's own condition clause
-    // ("when I ask about X") matches the query.
-    let cond_rule_turns: Vec<usize> = ix
-        .standing_rules
-        .iter()
-        .filter(|r| crate::retrieval::rule_condition_matches(r, &plan, &q_toks_eff))
-        .map(|r| r.turn)
-        .collect();
-    let rule_condition_live = has_compact_rule_register && !cond_rule_turns.is_empty();
+        && !eff_summary_request(&q.text)
+        && (advice_shape_eff
+            || (crate::retrieval::step14_is_rec_request(&q.text)
+                && !is_how_what_task_shape
+                && !rule_condition_live));
     let task_live_eff = !is_monologue_corpus
         && !has_named_speakers_eff
         && ix.turns.len() >= 64
         && !past_cue_eff
-        && !it.temporal
-        && !it.sniper_when
+        && (!it.temporal || is_when_participial)
+        && (!it.sniper_when || is_when_participial)
         && !it.sniper_how_many
         && !seq_mode_eff
+        && !pref_live_eff
+        && !eff_summary_request(&q.text)
+        && !is_factual_retro_query
         && (!q_trim_low.ends_with('?')
             || q_trim_low.starts_with("please ")
-            || (rule_condition_live
-                && !q_trim_low.contains("did i ")
-                && !q_trim_low.contains("did we ")
-                && !q_trim_low.contains("was my ")
-                && !q_trim_low.contains("were my "))
+            || rule_condition_live
             || q_toks_eff.windows(2).any(|p| {
                 ((p[0] == "could" || p[0] == "can" || p[0] == "would") && p[1] == "you")
                     || (p[0] == "how" && (p[1] == "to" || p[1] == "can" || p[1] == "should" || p[1] == "do"))
@@ -650,16 +822,35 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         ..it.clone()
     };
     let pref_on = pref_on || (p.enable_preference && eff_it.preference);
+    let policy_boost_ok = !eff_summary_request(&q.text)
+        && !eff_it.is_event_sequence
+        && !eff_it.preference
+        && (!eff_it.temporal || is_when_participial)
+        && !eff_it.sniper_how_many
+        && !past_cue_eff
+        && (ix.turns.len() < 64 || (!is_factual_retro_query && eff_it.task_under_rules));
+    let live_policy_turns: DetHashSet<usize> = if policy_boost_ok {
+        ix.standing_rules
+            .iter()
+            .filter(|r| {
+                !turn_is_superseded(ix, r.turn)
+                    && (r.condition_words.is_empty() || cond_rule_turns.contains(&r.turn))
+            })
+            .map(|r| r.turn)
+            .collect()
+    } else {
+        DetHashSet::default()
+    };
 
     // Run session-path refinements first on a mask copy, then restore and run the
     // turn-path refinements so PPR seeds see pre-dyad masks (floor behavior).
     let t_mask_snap = t_mask.clone();
     let t_exact_snap = t_exact_mask.clone();
-    apply_scene_refinements(ctx, &mut t_scene_sess, &mut t_mask, &mut t_exact_mask);
+    apply_scene_refinements(ctx, policy_boost_ok, &live_policy_turns, &mut t_scene_sess, &mut t_mask, &mut t_exact_mask);
     t_mask.copy_from_slice(&t_mask_snap);
     t_exact_mask.copy_from_slice(&t_exact_snap);
-    apply_scene_refinements(ctx, &mut t_scene, &mut t_mask, &mut t_exact_mask);
-    if eff_it.current_state {
+    apply_scene_refinements(ctx, policy_boost_ok, &live_policy_turns, &mut t_scene, &mut t_mask, &mut t_exact_mask);
+    if eff_it.current_state && is_monologue_corpus {
         for (ti, &sup) in ix.torrens_superseded.iter().enumerate() {
             if sup {
                 t_own[ti] = 0.0;

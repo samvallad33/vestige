@@ -46,9 +46,24 @@ pub(in crate::retrieval) fn has_compound_preference_frame(text: &str) -> bool {
         return false;
     }
     let lower = prose.to_lowercase();
+    // Guard against meta/rule-restatement framing ("Given that I have to provide...").
+    if lower.starts_with("given that i have to")
+        || lower.starts_with("given that i need")
+        || lower.starts_with("since i have to")
+        || lower.starts_with("since i need")
+    {
+        return false;
+    }
     let hit = [
-        "i prefer ", "i'd prefer ", "i\u{2019}d prefer ",
+        "i prefer ", "i prefer,", "i prefer.", "i'd prefer ", "i\u{2019}d prefer ",
         "i'd like to ", "i\u{2019}d like to ", "i'd rather ", "i\u{2019}d rather ",
+        "i'd love to ", "i\u{2019}d love to ",
+        "i don't want ", "i don\u{2019}t want ",
+        "i don't like ", "i don\u{2019}t like ",
+        "i'm trying to keep ", "i\u{2019}m trying to keep ",
+        "i'm looking for ", "i\u{2019}m looking for ",
+        "i want to keep ", "i want to avoid ", "i try to avoid ",
+        "i've chosen to ", "i\u{2019}ve chosen to ",
         "my favorite ", "i really like ", "i enjoy ",
     ]
     .iter()
@@ -60,17 +75,31 @@ pub(in crate::retrieval) fn has_compound_preference_frame(text: &str) -> bool {
             || lower.contains(&format!("so {pat}"))
             || lower.contains(&format!("and {pat}"))
             || lower.contains(&format!("but {pat}"))
-    });
+            || lower.contains(&format!("like {pat}"))
+            || lower.contains(&format!("as {pat}"))
+    }) || ((lower.starts_with("i'm trying to ")
+        || lower.starts_with("i\u{2019}m trying to ")
+        || lower.starts_with("i want to ")
+        || lower.starts_with("i'd like to ")
+        || lower.starts_with("i\u{2019}d like to "))
+        && lower.contains(" without "));
     hit && raw_tokens(prose).iter().filter(|w| is_content(w)).count() >= 3
 }
 
 // hardcode-scan: closed-class (Halakha-ke comparative contrast prepositions)
 pub(in crate::retrieval) fn has_comparative_choice_frame(text: &str) -> bool {
     let prose = text.split("```").next().unwrap_or(text).trim();
-    if prose.is_empty() || prose.ends_with('?') {
+    if prose.is_empty() {
         return false;
     }
     let lower = prose.to_lowercase();
+    if lower.starts_with("given that i have to")
+        || lower.starts_with("given that i need")
+        || lower.starts_with("since i have to")
+        || lower.starts_with("since i need")
+    {
+        return false;
+    }
     let has_first_person = lower.starts_with("i ")
         || lower.starts_with("i'")
         || lower.starts_with("i\u{2019}")
@@ -124,13 +153,23 @@ pub(in crate::retrieval) const DETERMINERS: &[&str] =
     // hardcode-scan: closed-class (determiners)
     &["a", "an", "the", "this", "that", "these", "those", "my", "your", "our", "their", "its", "his", "her", "every", "each", "all", "any", "no", "some"];
 
-/// Scope words are the turn's own content tokens. No directive-verb list.
+/// Scope words are the turn's own content tokens (including `<alpha><digit>` base splits
+/// such as `HTML5` -> `html`). No directive-verb list.
 pub(in crate::retrieval) fn extract_rule_scope(text: &str) -> (bool, Vec<String>) {
     let (prose, _) = split_blip_caption(text);
-    (
-        false,
-        raw_tokens(prose).into_iter().filter(|w| is_content(w)).collect(),
-    )
+    let mut out: Vec<String> = raw_tokens(prose).into_iter().filter(|w| is_content(w)).collect();
+    for raw_word in prose.split_whitespace() {
+        let word = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+        if word.is_empty() {
+            continue;
+        }
+        for (part, _) in surface_aux_tokens(word) {
+            if is_content(&part) && !out.contains(&part) {
+                out.push(part);
+            }
+        }
+    }
+    (false, out)
 }
 
 /// Condition clause of a standing rule ("Always X when I ask about Y" -> Y).

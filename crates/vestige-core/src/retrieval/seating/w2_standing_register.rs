@@ -21,12 +21,14 @@ pub(in crate::retrieval) fn apply_w2_standing_register_seat(
         return;
     }
     let ql = q_text.to_ascii_lowercase();
-    // hardcode-scan: closed-class (modal recommendation & planning question openings)
+    // hardcode-scan: closed-class (modal recommendation, planning, and task question openings)
     let is_planning_or_rec = [
         "what should", "how should", "where should", "which should",
         "can you", "could you", "would you", "should i", "should we",
         "do you recommend", "any suggestions", "any recommendations",
         "suggest", "recommend", "advice", "what can i", "how can i",
+        "what are some", "when building", "i'm planning", "i'm looking",
+        "i'm about to", "what typical", "how do i", "how to ",
     ]
     .iter()
     .any(|cue| ql.contains(cue));
@@ -53,25 +55,42 @@ pub(in crate::retrieval) fn apply_w2_standing_register_seat(
     for &id in &q_domain {
         q_bloom |= 1u64 << (id % 64);
     }
-    if (ix.standing_register & q_bloom) == 0 {
+    if (ix.standing_register & q_bloom) == 0 && ix.preference_directive_turns.is_empty() {
         return;
     }
 
     // hardcode-scan: closed-class (modal preference consultation, guarded against factual WH-past)
-    let explicit_pref_consult = wh_slots(q_text) == 0
-        && !ql.contains("did i ")
+    let explicit_pref_consult = !ql.contains("did i ")
         && !ql.contains("did we ")
+        && !ql.contains("did you ")
+        && !ql.contains("have i ")
         && !ql.contains("was my ")
+        && !ql.contains("were my ")
         && (ql.contains("suggest")
             || ql.contains("recommend")
             || ql.contains("advice")
             || ql.contains("any tips")
             || ql.contains("which should i")
             || ql.contains("what should i")
-            || ql.contains("should i ")
-            || ql.contains("would you "));
+            || ql.contains("where do you think i should")
+            || (wh_slots(q_text) == 0 && (ql.contains("should i ") || ql.contains("would you ")))
+            || ql.starts_with("i'm planning")
+            || ql.starts_with("i'm looking")
+            || ql.starts_with("i'm about to")
+            || ql.starts_with("i'm working on")
+            || ql.starts_with("i'm updating"));
 
-    let mut best_dir: Option<(usize, usize)> = None;
+    let ns_u32 = (ix.session_turns.len() as u32).max(1);
+    let mut q_hi_ic: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
+    for &id in &q_domain {
+        let df = ix.s_stats.df.get(&id).copied().unwrap_or(1);
+        q_hi_ic.insert(
+            id,
+            crate::retrieval::fusion::aspect_coverage_q16::aspect_ic_q16(df, ns_u32),
+        );
+    }
+
+    let mut best_dir: Option<(u64, usize, usize)> = None;
     let directive_pool: &[usize] = if explicit_pref_consult && !ix.preference_directive_turns.is_empty() {
         &ix.preference_directive_turns
     } else {
@@ -97,38 +116,64 @@ pub(in crate::retrieval) fn apply_w2_standing_register_seat(
         {
             continue;
         }
+        let toks_vec: Vec<&str> = ix.turns[dti]
+            .body_for_headers
+            .split(|c: char| !c.is_alphanumeric() && c != '\'')
+            .filter(|w| !w.is_empty())
+            .collect();
+        let is_deontic = ix.turns[dti].is_standing_policy
+            || ix.preference_directive_turns.contains(&dti)
+            || crate::retrieval::seating::standing_constraint_q16::is_standing_constraint_utterance(&toks_vec);
+        let mut turn_ents: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        for &cid in &ix.turns[dti].content {
+            turn_ents.insert(cid);
+        }
+        for f in &ix.turns[dti].feats {
+            turn_ents.insert(f.id);
+        }
+        let ic_sc = crate::retrieval::seating::standing_constraint_q16::score_standing_constraint_q16(
+            is_deontic,
+            true,
+            &turn_ents,
+            &q_hi_ic,
+            crate::retrieval::fusion::aspect_coverage_q16::Q16_ONE,
+        );
         let mut hits = q_domain
             .iter()
-            .filter(|id| ix.turns[dti].content.contains(id))
+            .filter(|id| turn_ents.contains(id))
             .count();
         if hits == 0 && c2_policy_inflects_query(ix, dti, plan) {
             hits = 1;
         }
-        if hits == 0 {
+        if hits == 0 && ic_sc == 0 {
             continue;
         }
-        if best_dir.map_or(true, |(bh, _)| hits > bh) {
-            best_dir = Some((hits, dti));
+        if best_dir.is_none_or(|(bic, bh, _)| (ic_sc, hits) > (bic, bh)) {
+            best_dir = Some((ic_sc, hits, dti));
         }
     }
 
-    // Fallback to general `standing_directive_turns` when `preference_directive_turns` had 0 domain overlap:
+    // Fallback to general `standing_directive_turns` when `preference_directive_turns` had 0 domain overlap
+    // (skipping standing policies on explicit preference consults so instructions never hijack preferences).
     if best_dir.is_none() && explicit_pref_consult && !ix.preference_directive_turns.is_empty() {
         for &dti in ix.standing_directive_turns.iter().rev() {
-            if turn_is_superseded(ix, dti) || final_turn_indices[..3].contains(&dti) {
+            if turn_is_superseded(ix, dti)
+                || ix.turns[dti].is_standing_policy
+                || final_turn_indices[..3].contains(&dti)
+            {
                 continue;
             }
             let hits = q_domain
                 .iter()
                 .filter(|id| ix.turns[dti].content.contains(id))
                 .count();
-            if hits > 0 && best_dir.map_or(true, |(bh, _)| hits > bh) {
-                best_dir = Some((hits, dti));
+            if hits > 0 && best_dir.is_none_or(|(_, bh, _)| hits > bh) {
+                best_dir = Some((0, hits, dti));
             }
         }
     }
 
-    let Some((best_hits, dir_ti)) = best_dir else { return };
+    let Some((_, best_hits, dir_ti)) = best_dir else { return };
     let dir_sess = ix.turns[dir_ti].session;
 
     // Explicit `"would you suggest"` / `"would you recommend"` preference consultation in long chats:

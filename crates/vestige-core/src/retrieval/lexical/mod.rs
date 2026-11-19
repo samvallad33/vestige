@@ -8,6 +8,7 @@ pub(in crate::retrieval) mod qld;
 pub(in crate::retrieval) mod rbp;
 pub(in crate::retrieval) mod rocchio;
 pub(in crate::retrieval) mod rungs;
+pub(in crate::retrieval) mod speaker_translation_q16;
 pub(in crate::retrieval) mod steps;
 pub(in crate::retrieval) mod translation_lm;
 pub(in crate::retrieval) mod wand;

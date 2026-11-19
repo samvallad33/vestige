@@ -131,7 +131,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 .iter()
                 .copied()
                 .filter(|&ti| {
-                    !ix.turns[ti].is_question
+                    !ix.turns[ti].is_pure_info_question
                         && !ix.turns[ti].is_backchannel
                         && !turn_is_superseded(ix, ti)
                         && t_scene[ti] > 0.0
@@ -203,6 +203,49 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             &mut t_scene,
             &mut final_turn_indices,
         );
+    }
+
+    // Phase 4 Step 10C (T63 Question->Answer Adjacency Pairing on named-speaker dialogues):
+    // When a question turn occupies Top-4 (`0..4`) and its immediate declarative reply by the partner
+    // in the same session is missing from Top-5, seat that reply inside Top-5 (never displacing Slot 0).
+    if has_named_speakers_top
+        && !eff_it.is_event_sequence
+        && !pref_on
+        && !eff_it.task_under_rules
+        && final_turn_indices.len() >= 5
+    {
+        let mut pairs_to_seat: Vec<(usize, usize)> = Vec::new();
+        for slot in 0..4usize {
+            let q_ti = final_turn_indices[slot];
+            if !ix.turns[q_ti].is_question {
+                continue;
+            }
+            let sess = ix.turns[q_ti].session;
+            let members = &ix.session_turns[sess];
+            if let Some(pos) = members.iter().position(|&m| m == q_ti) {
+                if let Some(&ans_ti) = members.get(pos + 1) {
+                    let ans = &ix.turns[ans_ti];
+                    if !ans.is_question
+                        && !ans.is_backchannel
+                        && ans.speaker != ix.turns[q_ti].speaker
+                        && !final_turn_indices[..5].contains(&ans_ti)
+                    {
+                        pairs_to_seat.push((slot, ans_ti));
+                    }
+                }
+            }
+        }
+        for (q_slot, ans_ti) in pairs_to_seat.into_iter().take(2) {
+            if final_turn_indices[..5].contains(&ans_ti) {
+                continue;
+            }
+            if let Some(existing) = final_turn_indices.iter().position(|&t| t == ans_ti) {
+                final_turn_indices.remove(existing);
+            }
+            let ins_slot = if q_slot == 0 { 1 } else { q_slot };
+            final_turn_indices.insert(ins_slot, ans_ti);
+            final_turn_indices.truncate(k.max(5));
+        }
     }
 
     ctx.t_scene = t_scene;

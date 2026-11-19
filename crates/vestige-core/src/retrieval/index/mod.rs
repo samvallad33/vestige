@@ -450,21 +450,30 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 }
             }
             // Stream 2: Auxiliary BLIP caption field (w=0.75, b_blip=0, counts_len:false, inheritable:false)
+            // Index caption tokens into `blip_feats`, turn `content`, and `seq` (after sentinel gap)
+            // for turn-level visual queries without polluting session-level `s_cont`/`s_ents` exact masks.
             if let Some(cap) = blip_opt {
+                if !seq.is_empty() {
+                    seq.push((u32::MAX, u32::MAX));
+                }
                 for bw in raw_tokens(cap).into_iter().filter(|w| is_content(w)) {
                     let bid = vocab.intern(&bw);
                     blip_feats.push(Feat { id: bid, w: 1.0, counts_len: false, inheritable: false });
-                    if p.enable_stemming {
+                    content.insert(bid);
+                    let bsid = if p.enable_stemming {
                         let bst = stem(&bw);
-                        let bsid = vocab.intern(&stem_term(&bst));
-                        blip_feats.push(Feat { id: bsid, w: 0.75, counts_len: false, inheritable: false });
-                    }
+                        let id = vocab.intern(&stem_term(&bst));
+                        blip_feats.push(Feat { id, w: 0.75, counts_len: false, inheritable: false });
+                        id
+                    } else {
+                        bid
+                    };
+                    seq.push((bid, bsid));
                 }
                 for bent in proper_entity_tokens(cap) {
                     let eid = vocab.intern(&bent);
                     blip_feats.push(Feat { id: eid, w: 0.85, counts_len: false, inheritable: false });
                     entities.insert(eid);
-                    s_ents.insert(eid);
                 }
             }
             // Pre-saturation BM25F title boost for structured `{Title}\n{Body}` documents.
@@ -504,6 +513,10 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                     }
                     let id = vocab.intern(&part);
                     feats.push(Feat { id, w: aux_w, counts_len: false, inheritable: false });
+                    if is_content(&part) {
+                        content.insert(id);
+                        s_cont.insert(id);
+                    }
                 }
             }
             let slots = typed_slot_tokens(prose_body);
@@ -598,8 +611,9 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 && content.len() >= 4;
             let turn_idx = turns.len();
             if field == 0
-                && !prose_body.trim_end().ends_with('?')
-                && (is_personal_constraint
+                && !is_standing_policy
+                && !is_short_question
+                && ((!is_pure_info_question && is_personal_constraint)
                     || has_compound_preference_frame(prose_body)
                     || has_comparative_choice_frame(prose_body))
             {

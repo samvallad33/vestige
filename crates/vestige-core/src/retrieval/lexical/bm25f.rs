@@ -164,18 +164,103 @@ pub(in crate::retrieval) fn rank_standing_rules(
         return Vec::new();
     }
     let it = eff_it;
-    // Multi-evidence recall keeps every standing policy on the stratified channel,
-    // including zero-overlap rules. The episodic floor stays off for these intents,
-    // so the channel can fire without taking one of the five episodic slots.
     let multi_evidence = it.multi_hop || it.sniper_how_many || it.temporal || it.is_event_sequence;
+
+    // Precompute query words + human-knowledge lexicon (WordNet 3.1 + Roget + ConceptNet)
+    // once per query so condition/scope matching catches typos ("desing"->"design"),
+    // alphanumeric splits ("html"->"html5"), and lexical bridges ("sources"->"references/citation",
+    // "jobs"->"work/experience") in O(1) per rule word.
+    let q_words: Vec<&str> = plan
+        .groups
+        .iter()
+        .map(String::as_str)
+        .filter(|w| !w.starts_with('\u{1}') && is_content(w))
+        .collect();
+    let mut q_lex_words: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for &qw in &q_words {
+        for (lem, _) in crate::wordnet::full_lexicon_neighbors(qw).into_iter().take(24) {
+            q_lex_words.insert(lem.to_string());
+            q_lex_words.insert(stem(lem));
+        }
+        for (lem, _) in crate::roget::conceptual_neighbors(qw, 32) {
+            q_lex_words.insert(lem.to_string());
+            q_lex_words.insert(stem(lem));
+        }
+        for (lem, _) in crate::conceptnet::two_hop_neighbors(qw, 10) {
+            q_lex_words.insert(lem.to_string());
+            q_lex_words.insert(stem(lem));
+        }
+    }
+    let morph_word_hit = |rw: &str| -> bool {
+        let rst = stem(rw);
+        q_words.iter().any(|&qw| {
+            qw == rw
+                || (rst.len() >= 4 && stem(qw) == rst)
+                || damerau_levenshtein_le_1(rw, qw)
+                || (rw.len() >= 4 && qw.len() >= 4 && (rw.starts_with(qw) || qw.starts_with(rw)) && rw.len().abs_diff(qw.len()) <= 2)
+        })
+    };
+    let lex_word_hit = |rw: &str| -> bool {
+        q_lex_words.contains(rw) || {
+            let rst = stem(rw);
+            rst.len() >= 4 && q_lex_words.contains(&rst)
+        }
+    };
+    // Closed-class temporal WH-interrogative trigger ("When is/was/will..."):
+    // a temporal WH question asks for a calendar date/time, so standing rules carrying
+    // >= 2 closed-class calendar-unit tokens ("month", "day", "year") govern its formatting.
+    let q_is_temporal_when = it.sniper_when || it.temporal;
+
     let mut latest_by_key: DetHashMap<&str, (usize, i32, i32, i64)> = DetHashMap::default();
     for (ri, r) in ix.standing_rules.iter().enumerate() {
         let mut scope_hits = r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
         if scope_hits == 0 && crate::retrieval::seating::c2_policy_inflects_query(ix, r.turn, plan) {
             scope_hits = 1;
         }
+        let cond_exact_hits = r.condition.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
+        let cond_morph_hits = r
+            .condition_words
+            .iter()
+            .filter(|cw| morph_word_hit(cw))
+            .count() as i32;
+        let cond_lex_hits = r
+            .condition_words
+            .iter()
+            .filter(|cw| !morph_word_hit(cw) && lex_word_hit(cw))
+            .count() as i32;
+        let cal_unit_hits: i32 = if q_is_temporal_when {
+            ix.turns
+                .get(r.turn)
+                .map(|tr| {
+                    let body_l = tr.body_for_headers.to_ascii_lowercase();
+                    // hardcode-scan: closed-class (ISO calendar unit words)
+                    let mut cnt = 0i32;
+                    for u in ["month", "day", "year"] {
+                        if body_l.contains(u) {
+                            cnt += 1;
+                        }
+                    }
+                    if cnt >= 2 { 1 } else { 0 }
+                })
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let own_lex_hits = ix
+            .turns
+            .get(r.turn)
+            .map(|tr| {
+                tr.content
+                    .iter()
+                    .filter_map(|&id| ix.vocab.names.get(id as usize).map(String::as_str))
+                    .filter(|w| !w.starts_with('\u{1}') && is_content(w) && (morph_word_hit(w) || lex_word_hit(w)))
+                    .count()
+                    .min(3) as i32
+            })
+            .unwrap_or(0);
         let asst_hits = r.assistant_nouns.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
-        let spec = 5 * scope_hits + asst_hits;
+        let cond_best = cond_exact_hits.max(cond_morph_hits);
+        let spec = 8 * cond_best + 10 * cal_unit_hits + 5 * scope_hits + 4 * cond_lex_hits + 2 * own_lex_hits + asst_hits;
         let fires = if r.has_explicit_scope {
             spec > 0 || it.task_under_rules || multi_evidence
         } else {
@@ -219,24 +304,56 @@ pub(in crate::retrieval) fn rank_standing_rules(
         .collect()
 }
 
-/// Rule-condition gate: does this standing rule's own "when I ask about X"
-/// condition match the query? Exact/stem id overlap with the query focal ids,
-/// a shared stem, or one WordNet relation (synonym / direct hypernym / hyponym)
-/// between a condition word and a query content word. Unconditional rules never match.
-pub(in crate::retrieval) fn rule_condition_matches(r: &StandingRule, plan: &QueryPlan, q_toks: &[String]) -> bool {
-    // Two or more rare elicitation-context hits (rule scope enriched from the
-    // turns around the rule) are as specific as a condition match.
-    if r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() >= 2 {
-        return true;
-    }
-    if r.condition_words.is_empty() {
+/// Closed-class universal spelling-typo check (restricted Damerau-Levenshtein <= 1 for len >= 5).
+/// Catches single adjacent transposition (`desing` <-> `design`) or single insertion/deletion
+/// (`editting` <-> `editing`) without any word list.
+pub(in crate::retrieval) fn damerau_levenshtein_le_1(a: &str, b: &str) -> bool {
+    let ab = a.as_bytes();
+    let bb = b.as_bytes();
+    if ab.len() < 5 || bb.len() < 5 || ab.len().abs_diff(bb.len()) > 1 {
         return false;
     }
-    if r.condition.iter().any(|id| plan.focal_ids.contains(id)) {
+    if ab == bb {
         return true;
     }
-    let q_content: Vec<&str> = q_toks.iter().map(String::as_str).filter(|w| is_content(w)).collect();
-    // Derivational/inflectional suffix equivalence ("implement" ~ "implementation").
+    if ab.len() == bb.len() {
+        let mut diffs = [0usize; 3];
+        let mut dc = 0usize;
+        for i in 0..ab.len() {
+            if ab[i] != bb[i] {
+                if dc >= 2 {
+                    return false;
+                }
+                diffs[dc] = i;
+                dc += 1;
+            }
+        }
+        return dc == 1
+            || (dc == 2
+                && diffs[0] + 1 == diffs[1]
+                && ab[diffs[0]] == bb[diffs[1]]
+                && ab[diffs[1]] == bb[diffs[0]]);
+    }
+    let (short, long) = if ab.len() < bb.len() { (ab, bb) } else { (bb, ab) };
+    let (mut i, mut j, mut skipped) = (0usize, 0usize, false);
+    while i < short.len() && j < long.len() {
+        if short[i] == long[j] {
+            i += 1;
+            j += 1;
+        } else if !skipped {
+            skipped = true;
+            j += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// Does a single rule condition word `cw` match a query/context content word `qw`
+/// via exact equality, stem, derivational morphology, edit-distance <= 1, WordNet 1-hop /
+/// 2-hop hypernym, or ConceptNet 2-hop?
+pub(in crate::retrieval) fn rule_condition_word_matches(cw: &str, qw: &str) -> bool {
     fn derives(a: &str, b: &str) -> bool {
         let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
         if short.len() < 5 {
@@ -251,32 +368,93 @@ pub(in crate::retrieval) fn rule_condition_matches(r: &StandingRule, plan: &Quer
             )
         })
     }
-    // One WordNet hop, or up to two hypernym hops from the query word; multiword
-    // lemmas ("philosophical_doctrine") count when one of their parts is the condition word.
-    // Same lexeme family: derivational suffix, or a long shared root
-    // ("philosophy" ~ "philosophical": >=7 shared leading chars, <=3 chars short of the shorter word).
     let morph_eq = |a: &str, b: &str| {
-        if a == b || derives(a, b) {
+        if a == b || derives(a, b) || damerau_levenshtein_le_1(a, b) {
             return true;
         }
         let shared = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
         shared >= 7 && shared + 3 >= a.len().min(b.len())
     };
     let lemma_hits = |lemmas: &[&str], w: &str| {
-        lemmas.iter().any(|l| morph_eq(l, w) || (l.contains('_') && l.split('_').any(|p| morph_eq(p, w))))
+        lemmas
+            .iter()
+            .any(|l| morph_eq(l, w) || (l.contains('_') && l.split('_').any(|p| morph_eq(p, w))))
     };
-    r.condition_words.iter().any(|cw| {
-        let cst = stem(cw);
-        let c_lemmas = crate::wordnet::expansion_lemmas(cw);
-        q_content.iter().any(|&qw| {
-            qw == cw
-                || (cst.len() >= 4 && stem(qw) == cst)
-                || morph_eq(qw, cw)
-                || lemma_hits(&c_lemmas, qw)
-                || lemma_hits(&crate::wordnet::expansion_lemmas(qw), cw)
-                || lemma_hits(&crate::wordnet::upward_hypernyms(qw, 2), cw)
-        })
-    })
+    let cst = stem(cw);
+    if qw == cw || (cst.len() >= 4 && stem(qw) == cst) || morph_eq(qw, cw) {
+        return true;
+    }
+    let c_lemmas = crate::wordnet::expansion_lemmas(cw);
+    lemma_hits(&c_lemmas, qw)
+        || lemma_hits(&crate::wordnet::expansion_lemmas(qw), cw)
+        || lemma_hits(&crate::wordnet::upward_hypernyms(qw, 2), cw)
+        || crate::conceptnet::two_hop_neighbors(qw, 10)
+            .iter()
+            .any(|&(cn, _)| morph_eq(cn, cw))
+}
+
+/// Rule-condition gate: does this standing rule's own "when I ask about X"
+/// condition match the query? Exact/stem id overlap with the query focal ids,
+/// a shared stem, edit-distance <= 1, WordNet/ConceptNet relation, or strict high-IC
+/// rule-turn binding (`>= 2` matched rare terms or single ultra-rare `df <= 3`, IC >= 5 bits).
+/// Unconditional rules never match here.
+pub(in crate::retrieval) fn rule_condition_matches(
+    ix: &Index,
+    r: &StandingRule,
+    plan: &QueryPlan,
+    q_toks: &[String],
+) -> bool {
+    use crate::retrieval::fusion::aspect_coverage_q16::{aspect_ic_q16, Q16_ONE};
+    use crate::retrieval::seating::standing_constraint_q16::score_standing_constraint_q16;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // Two or more rare elicitation-context hits (rule scope enriched from the
+    // turns around the rule) are as specific as a condition match.
+    if r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() >= 2 {
+        return true;
+    }
+
+    // Strict Domain F high-IC binding on the rule turn's OWN content (including `<alpha><digit>`
+    // splits like `HTML5 -> html`), NEVER ambient surrounding-turn scope:
+    // requires either >= 2 matched rare query tokens (`df <= max(3, ns/8)`) OR total shared IC >= 5.0 bits
+    // (ultra-rare exact entity like `html` in a 100-session chat) so generic words never hijack.
+    let ns = (ix.session_turns.len() as u32).max(1);
+    let hi_df_cap = (ns / 8).clamp(2, 8);
+    let mut q_hi_ic: BTreeMap<u32, u64> = BTreeMap::new();
+    for qt in &plan.terms {
+        if !qt.exact_hit {
+            continue;
+        }
+        let df = ix.s_stats.df.get(&qt.id).copied().unwrap_or(0);
+        if df > 0 && df <= hi_df_cap {
+            q_hi_ic.insert(qt.id, aspect_ic_q16(df, ns));
+        }
+    }
+    if !q_hi_ic.is_empty() {
+        let mut rule_own_ents: BTreeSet<u32> = BTreeSet::new();
+        if let Some(tr) = ix.turns.get(r.turn) {
+            for &cid in &tr.content {
+                rule_own_ents.insert(cid);
+            }
+        }
+        let matched_rare_cnt = q_hi_ic.keys().filter(|id| rule_own_ents.contains(id)).count();
+        let is_active = !turn_is_superseded(ix, r.turn);
+        let min_ic = if matched_rare_cnt >= 2 { Q16_ONE * 3 } else { Q16_ONE * 5 };
+        if score_standing_constraint_q16(true, is_active, &rule_own_ents, &q_hi_ic, min_ic) > 0 {
+            return true;
+        }
+    }
+
+    if r.condition_words.is_empty() {
+        return false;
+    }
+    if r.condition.iter().any(|id| plan.focal_ids.contains(id)) {
+        return true;
+    }
+    let q_content: Vec<&str> = q_toks.iter().map(String::as_str).filter(|w| is_content(w)).collect();
+    r.condition_words
+        .iter()
+        .any(|cw| q_content.iter().any(|&qw| rule_condition_word_matches(cw, qw)))
 }
 
 pub(in crate::retrieval) fn policy_spec_winner_floor(lexical_max: f32) -> f32 {

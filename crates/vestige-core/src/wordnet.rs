@@ -21,9 +21,21 @@ use std::sync::OnceLock;
 
 /// The bundled WordNet 3.1 `data.noun`, byte-for-byte as distributed.
 const DATA_NOUN: &str = include_str!("../data/wordnet-3.1/data.noun");
+/// The bundled WordNet 3.1 `data.verb`, byte-for-byte as distributed.
+const DATA_VERB: &str = include_str!("../data/wordnet-3.1/data.verb");
+/// The bundled WordNet 3.1 `data.adj`, byte-for-byte as distributed.
+const DATA_ADJ: &str = include_str!("../data/wordnet-3.1/data.adj");
+/// The bundled WordNet 3.1 `data.adv`, byte-for-byte as distributed.
+const DATA_ADV: &str = include_str!("../data/wordnet-3.1/data.adv");
 
-/// sha256 of [`DATA_NOUN`]; checked by a unit test.
+/// sha256 of [`DATA_NOUN`]; checked by unit test and `scripts/hardcode_scan.sh`.
 pub const DATA_NOUN_SHA256: &str = "2cad22fe43461ee7ae61a564ae6a518c57445c8597e53542caddb5c26a6a5d94";
+/// sha256 of [`DATA_VERB`]; checked by unit test and `scripts/hardcode_scan.sh`.
+pub const DATA_VERB_SHA256: &str = "eb1cf196dab6e1b815a1c86fa20c909fb7413b2f34250d7fe60a0fb35ef59e03";
+/// sha256 of [`DATA_ADJ`]; checked by unit test and `scripts/hardcode_scan.sh`.
+pub const DATA_ADJ_SHA256: &str = "ca1033bf627eb95f6cbb2864f8990be8e6a01a3c182e7d7c7094ccf8ead242cc";
+/// sha256 of [`DATA_ADV`]; checked by unit test and `scripts/hardcode_scan.sh`.
+pub const DATA_ADV_SHA256: &str = "aea301f39ac1b24be9a880dbc6cc6331bc5391f58c7525a1b298a13c922f2ed3";
 
 #[derive(Default)]
 struct Tables {
@@ -1130,6 +1142,394 @@ pub fn typed_part_and_isa_parents(term: &str) -> Vec<&'static str> {
     out
 }
 
+/// Full 4-POS Princeton WordNet 3.1 relational graph (`data.noun`, `data.verb`, `data.adj`, `data.adv`):
+/// stores synonyms, instance (`@i`/`~i`), hypernym/hyponym (`@`/`~`), part/member (`#p`/`#m`/`%p`/`%m`),
+/// cross-POS derivationally related forms (`+`), adjective similar-to/attribute/pertainym (`&`/`=`/`\`),
+/// and verb entailment/cause (`*`/`>`). Loaded lazily once and immutable.
+#[derive(Default)]
+struct FullLexicon {
+    /// lowercased lemma -> typed synset keys `((pos << 28) | offset)` across n/v/a/r.
+    senses: HashMap<String, Vec<u32>>,
+    /// typed synset key -> single-word lemmas (and distinctive tokens of `_` compounds).
+    lemmas: HashMap<u32, Vec<String>>,
+    /// typed synset key -> `(target_key, weight_u16)` where 100 = strongest relation.
+    edges: HashMap<u32, Vec<(u32, u16)>>,
+    /// noun/all downward instance + hyponym + meronym children for T50 class->instance lookup.
+    down_children: HashMap<u32, Vec<u32>>,
+}
+
+#[inline]
+fn pos_code(pos: &str) -> Option<u32> {
+    match pos {
+        "n" => Some(0),
+        "v" => Some(1),
+        "a" | "s" => Some(2),
+        "r" => Some(3),
+        _ => None,
+    }
+}
+
+#[inline]
+fn syn_key(pos_id: u32, offset: u32) -> u32 {
+    (pos_id << 28) | (offset & 0x0FFF_FFFF)
+}
+
+fn parse_full_wordnet() -> FullLexicon {
+    let mut lex = FullLexicon::default();
+    let files: [(u32, &str); 4] = [
+        (0, DATA_NOUN),
+        (1, DATA_VERB),
+        (2, DATA_ADJ),
+        (3, DATA_ADV),
+    ];
+    for (src_pos, data) in files {
+        for line in data.lines() {
+            if !line.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+                continue;
+            }
+            let head = line.split(" | ").next().unwrap_or(line);
+            let f: Vec<&str> = head.split_ascii_whitespace().collect();
+            let Some(off) = f.first().and_then(|s| s.parse::<u32>().ok()) else {
+                continue;
+            };
+            let Some(w_cnt) = f.get(3).and_then(|s| usize::from_str_radix(s, 16).ok()) else {
+                continue;
+            };
+            let p_at = 4 + 2 * w_cnt;
+            let Some(p_cnt) = f.get(p_at).and_then(|s| s.parse::<usize>().ok()) else {
+                continue;
+            };
+            let own = syn_key(src_pos, off);
+
+            for i in 0..w_cnt {
+                let Some(raw_lemma) = f.get(4 + 2 * i) else {
+                    break;
+                };
+                // Strip adjective syntactic markers like `alone(p)` -> `alone`.
+                let cleaned = raw_lemma.split('(').next().unwrap_or(raw_lemma);
+                if cleaned.contains('_') {
+                    // Keep distinctive alphabetic compound tokens for instance names (e.g. `thanksgiving_day`).
+                    let parts: Vec<String> = cleaned
+                        .split('_')
+                        .map(|p| p.trim_matches('.').to_ascii_lowercase())
+                        .filter(|p| p.len() >= 3 && p.bytes().all(|b| b.is_ascii_alphabetic()))
+                        .collect();
+                    if (2..=4).contains(&parts.len()) {
+                        let lem_vec = lex.lemmas.entry(own).or_default();
+                        for part in parts {
+                            if !lem_vec.contains(&part) {
+                                lem_vec.push(part);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                let key = cleaned.to_ascii_lowercase();
+                if key.len() >= 2 && key.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-') {
+                    push_unique(lex.senses.entry(key.clone()).or_default(), own);
+                    push_unique(lex.lemmas.entry(own).or_default(), key);
+                }
+            }
+
+            for k in 0..p_cnt {
+                let b = p_at + 1 + 4 * k;
+                let (Some(&sym), Some(&t_off_s), Some(&t_pos_s)) = (f.get(b), f.get(b + 1), f.get(b + 2)) else {
+                    break;
+                };
+                let (Some(t_pos), Ok(t_off)) = (pos_code(t_pos_s), t_off_s.parse::<u32>()) else {
+                    continue;
+                };
+                let dst = syn_key(t_pos, t_off);
+                let rel_w: Option<u16> = match sym {
+                    "+" | "\\" => Some(95),            // derivationally related form, pertainym
+                    "&" | "=" | "@i" | "~i" => Some(85), // similar-to, attribute, instance hyper/hyponym
+                    "@" | "~" | "*" | ">" => Some(72),   // hypernym, hyponym, entailment, cause
+                    "#p" | "#m" | "%p" | "%m" => Some(62), // part/member holonym & meronym
+                    _ => None,
+                };
+                if let Some(w) = rel_w {
+                    let e = lex.edges.entry(own).or_default();
+                    if !e.iter().any(|&(d, _)| d == dst) {
+                        e.push((dst, w));
+                    }
+                    // Ensure symmetry for cross-POS derived forms & similar-to links.
+                    if matches!(sym, "+" | "\\" | "&" | "=") {
+                        let rev = lex.edges.entry(dst).or_default();
+                        if !rev.iter().any(|&(d, _)| d == own) {
+                            rev.push((own, w));
+                        }
+                    }
+                    if matches!(sym, "~" | "~i" | "%p" | "%m") {
+                        push_unique(lex.down_children.entry(own).or_default(), dst);
+                    } else if matches!(sym, "@" | "@i") {
+                        push_unique(lex.down_children.entry(dst).or_default(), own);
+                    }
+                }
+            }
+        }
+    }
+    lex
+}
+
+fn full_table() -> &'static FullLexicon {
+    static FULL: OnceLock<FullLexicon> = OnceLock::new();
+    FULL.get_or_init(parse_full_wordnet)
+}
+
+// hardcode-scan: closed-class (English inflectional morphology stripping for WordNet lemma lookup)
+const FULL_MORPH_DETACH: &[(&str, &str)] = &[
+    ("ies", "y"),
+    ("ied", "y"),
+    ("ves", "f"),
+    ("ches", "ch"),
+    ("shes", "sh"),
+    ("sses", "ss"),
+    ("xes", "x"),
+    ("zes", "z"),
+    ("ing", ""),
+    ("ing", "e"),
+    ("ed", ""),
+    ("ed", "e"),
+    ("er", ""),
+    ("est", ""),
+    ("ly", ""),
+    ("es", ""),
+    ("s", ""),
+];
+
+fn full_senses_of<'a>(lex: &'a FullLexicon, word: &str) -> &'a [u32] {
+    if let Some(v) = lex.senses.get(word) {
+        return v;
+    }
+    for &(suf, rep) in FULL_MORPH_DETACH {
+        if let Some(base) = word.strip_suffix(suf)
+            && base.len() >= 3
+        {
+            let cand = if rep.is_empty() {
+                base.to_string()
+            } else {
+                format!("{base}{rep}")
+            };
+            if let Some(v) = lex.senses.get(&cand) {
+                return v;
+            }
+        }
+    }
+    &[]
+}
+
+/// Deterministic full-WordNet 3.1 (noun + verb + adj + adv) 1-hop relational neighbors
+/// `(lemma, relation_weight_u16)` where 100 = same-synset synonym, 95 = derived form `+` / pertainym `\`,
+/// 85 = similar-to `&` / attribute `=` / instance `@i`/`~i`, 72 = hypernym/hyponym/entailment,
+/// 62 = part/member `#p`/`%p`. Memoized globally.
+type FullNbrCache = std::sync::Mutex<HashMap<String, Vec<(&'static str, u16)>>>;
+
+pub fn full_lexicon_neighbors(word: &str) -> Vec<(&'static str, u16)> {
+    static CACHE: OnceLock<FullNbrCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let key = word.to_ascii_lowercase();
+    if let Ok(guard) = cache.lock()
+        && let Some(hit) = guard.get(&key)
+    {
+        return hit.clone();
+    }
+    let lex = full_table();
+    let noun_tbl = table();
+    let mut scores: HashMap<&'static str, u16> = HashMap::new();
+    let direct_ss = full_senses_of(lex, &key);
+    let ss: &[u32] = if !direct_ss.is_empty() {
+        direct_ss
+    } else if key.len() >= 6 {
+        let wb = key.as_bytes();
+        let first = wb[0];
+        let mut best_fix: Option<&'static str> = None;
+        for k in lex.senses.keys() {
+            let kb = k.as_bytes();
+            if kb.first().copied() != Some(first) || kb.len().abs_diff(wb.len()) > 1 {
+                continue;
+            }
+            let ok = if kb.len() == wb.len() {
+                let mut diffs = [0usize; 3];
+                let mut dc = 0usize;
+                for i in 0..wb.len() {
+                    if wb[i] != kb[i] {
+                        if dc >= 2 {
+                            dc = 3;
+                            break;
+                        }
+                        diffs[dc] = i;
+                        dc += 1;
+                    }
+                }
+                dc == 1
+                    || (dc == 2
+                        && diffs[0] + 1 == diffs[1]
+                        && wb[diffs[0]] == kb[diffs[1]]
+                        && wb[diffs[1]] == kb[diffs[0]])
+            } else {
+                let (s, l) = if wb.len() < kb.len() { (wb, kb) } else { (kb, wb) };
+                let (mut i, mut j, mut skip) = (0usize, 0usize, false);
+                let mut good = true;
+                while i < s.len() && j < l.len() {
+                    if s[i] == l[j] {
+                        i += 1;
+                        j += 1;
+                    } else if !skip {
+                        skip = true;
+                        j += 1;
+                    } else {
+                        good = false;
+                        break;
+                    }
+                }
+                good
+            };
+            if ok && best_fix.is_none_or(|b| k.as_str() < b) {
+                best_fix = Some(k.as_str());
+            }
+        }
+        if let Some(fixed) = best_fix {
+            scores.insert(fixed, 100);
+            full_senses_of(lex, fixed)
+        } else {
+            &[]
+        }
+    } else {
+        &[]
+    };
+    // Cap per-word senses to primary 6 so hyper-polysemous hubs don't explode.
+    for &s in ss.iter().take(6) {
+        if let Some(lems) = lex.lemmas.get(&s) {
+            for l in lems {
+                if l != &key {
+                    let e = scores.entry(l.as_str()).or_insert(0);
+                    *e = (*e).max(100);
+                }
+            }
+        }
+        if let Some(nbrs) = lex.edges.get(&s) {
+            for &(dst, w) in nbrs {
+                if let Some(lems) = lex.lemmas.get(&dst) {
+                    for l in lems {
+                        if l != &key {
+                            let e = scores.entry(l.as_str()).or_insert(0);
+                            *e = (*e).max(w);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Named instance-hypernym surnames (`vivaldi -> Antonio_Vivaldi -> composer -> bach/mozart`,
+    // `seuss -> Dr._Seuss -> author / children / books`) from WordNet 3.1 `data.noun`.
+    if let Some(inst_syns) = noun_tbl.instance_surnames.get(&key) {
+        for &isyn in inst_syns {
+            if let Some(gl) = noun_tbl.gloss_lemmas.get(&isyn) {
+                for g in gl {
+                    if g != &key {
+                        let e = scores.entry(g.as_str()).or_insert(0);
+                        *e = (*e).max(90);
+                    }
+                }
+            }
+            for &par in noun_tbl.parents.get(&isyn).map(Vec::as_slice).unwrap_or(&[]) {
+                for pl in noun_tbl.lemmas.get(&par).map(Vec::as_slice).unwrap_or(&[]) {
+                    if pl != &key {
+                        let e = scores.entry(pl.as_str()).or_insert(0);
+                        *e = (*e).max(95);
+                    }
+                }
+                if let Some(gl) = noun_tbl.gloss_lemmas.get(&par) {
+                    for g in gl {
+                        if g != &key {
+                            let e = scores.entry(g.as_str()).or_insert(0);
+                            *e = (*e).max(80);
+                        }
+                    }
+                }
+                for &sib in noun_tbl.children.get(&par).map(Vec::as_slice).unwrap_or(&[]).iter().take(40) {
+                    for sl in noun_tbl.lemmas.get(&sib).map(Vec::as_slice).unwrap_or(&[]) {
+                        if sl != &key {
+                            let e = scores.entry(sl.as_str()).or_insert(0);
+                            *e = (*e).max(78);
+                        }
+                    }
+                    for ph in noun_tbl.phrases.get(&sib).map(Vec::as_slice).unwrap_or(&[]) {
+                        if let Some(last) = ph.split_ascii_whitespace().last()
+                            && last.len() >= 4
+                            && last != key.as_str()
+                        {
+                            let e = scores.entry(last).or_insert(0);
+                            *e = (*e).max(78);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut out: Vec<(&'static str, u16)> = scores.into_iter().collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(key, out.clone());
+    }
+    out
+}
+
+/// T50 Class-to-Instance downward expansion across full WordNet 3.1 (`~`, `~i`, `%p`, `%m`)
+/// up to `max_depth` hops (e.g., `"holiday"` -> `"thanksgiving"`, `"christmas"`;
+/// `"state"` -> `"california"`, `"texas"`, `"colorado"`). Memoized and deterministic.
+pub fn class_to_instances(class_word: &str, max_depth: usize) -> Vec<&'static str> {
+    static CACHE: OnceLock<HopCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let key = (class_word.to_ascii_lowercase(), max_depth);
+    if let Ok(guard) = cache.lock()
+        && let Some(hit) = guard.get(&key)
+    {
+        return hit.clone();
+    }
+    let lex = full_table();
+    let mut visited: Vec<u32> = Vec::new();
+    let mut frontier: Vec<u32> = Vec::new();
+    for &s in full_senses_of(lex, &key.0) {
+        // Prefer noun synsets (`pos == 0`) for class->instance queries.
+        if (s >> 28) == 0 && !visited.contains(&s) {
+            visited.push(s);
+            frontier.push(s);
+        }
+    }
+    for _ in 0..max_depth.min(2) {
+        let mut next: Vec<u32> = Vec::new();
+        for s in frontier {
+            for &ch in lex.down_children.get(&s).map(Vec::as_slice).unwrap_or(&[]) {
+                if !visited.contains(&ch) && visited.len() < 1500 {
+                    visited.push(ch);
+                    next.push(ch);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    let mut out: Vec<&'static str> = Vec::new();
+    for s in visited {
+        if let Some(lems) = lex.lemmas.get(&s) {
+            for l in lems {
+                if l != &key.0 {
+                    out.push(l.as_str());
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(key, out.clone());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1137,10 +1537,32 @@ mod tests {
 
     #[test]
     fn bundled_file_matches_recorded_sha256() {
-        let normalized = DATA_NOUN.replace("\r\n", "\n");
-        let digest = Sha256::digest(normalized.as_bytes());
-        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, DATA_NOUN_SHA256);
+        for (name, data, expected) in [
+            ("data.noun", DATA_NOUN, DATA_NOUN_SHA256),
+            ("data.verb", DATA_VERB, DATA_VERB_SHA256),
+            ("data.adj", DATA_ADJ, DATA_ADJ_SHA256),
+            ("data.adv", DATA_ADV, DATA_ADV_SHA256),
+        ] {
+            let normalized = data.replace("\r\n", "\n");
+            let digest = Sha256::digest(normalized.as_bytes());
+            let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(hex, expected, "WordNet 3.1 checksum mismatch for {name}");
+        }
+    }
+
+    #[test]
+    fn full_wordnet_cross_pos_and_class_instances_work() {
+        let lonely_nbrs = full_lexicon_neighbors("lonely");
+        assert!(
+            lonely_nbrs.iter().any(|&(w, _)| w == "alone" || w == "solitary" || w == "loneliness"),
+            "expected adj/derived neighbors for lonely: {lonely_nbrs:?}"
+        );
+        let hols = class_to_instances("holiday", 2);
+        assert!(
+            hols.contains(&"thanksgiving") || hols.contains(&"christmas"),
+            "expected holiday instances: {:?}",
+            &hols[..hols.len().min(20)]
+        );
     }
 
     #[test]

@@ -48,3 +48,14 @@ opt-level = "z"
 
 [profile.dev]
 opt-level = 1
+debug = 0
+incremental = true
+
+# Local benchmarking only: fast to build, fast to run. `release` stays the shipping profile.
+[profile.bench-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+opt-level = 3
+incremental = true
+strip = false

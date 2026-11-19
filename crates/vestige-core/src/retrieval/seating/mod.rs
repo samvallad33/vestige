@@ -11,6 +11,7 @@ pub(in crate::retrieval) mod rst_and_milestones;
 pub(in crate::retrieval) mod w2_trajectory;
 pub(in crate::retrieval) mod w2_standing_register;
 pub(in crate::retrieval) mod slot_promotions;
+pub(in crate::retrieval) mod standing_constraint_q16;
 pub(in crate::retrieval) mod vault_closers;
 pub(in crate::retrieval) mod c2;
 

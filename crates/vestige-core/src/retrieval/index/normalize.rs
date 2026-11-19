@@ -239,6 +239,21 @@ pub(in crate::retrieval) fn surface_aux_tokens(word: &str) -> Vec<(String, f32)>
                 out.push((part, 0.85));
             }
         }
+        // Alphanumeric versioned base split (`HTML5` -> `html`, `CSS3` -> `css`, `OAuth2` -> `oauth`).
+        let alpha_end = piece
+            .bytes()
+            .take_while(|b| b.is_ascii_alphabetic())
+            .count();
+        let digit_tail = piece.len().saturating_sub(alpha_end);
+        if alpha_end >= 3
+            && (1..=2).contains(&digit_tail)
+            && piece.as_bytes()[alpha_end..].iter().all(u8::is_ascii_digit)
+        {
+            let base = piece[..alpha_end].to_ascii_lowercase();
+            if is_content(&base) && !out.iter().any(|(p, _)| p == &base) {
+                out.push((base, 0.85));
+            }
+        }
     }
     out
 }

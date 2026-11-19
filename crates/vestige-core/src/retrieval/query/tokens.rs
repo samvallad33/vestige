@@ -188,12 +188,30 @@ pub(in crate::retrieval) fn prose_without_blip(text: &str) -> &str {
     text.split_once("\n[BLIP caption]").map(|(body, _)| body).unwrap_or(text)
 }
 
+/// Strip a trailing structured provenance notation (`" ->-> 1,25"`) without touching prose text.
+/// Only strips when the suffix after `"->->"` consists solely of digits, commas, periods, or whitespace.
+pub(in crate::retrieval) fn strip_trailing_provenance_tag(text: &str) -> &str {
+    if let Some((head, tail)) = text.rsplit_once("->->") {
+        let trimmed_tail = tail.trim();
+        if !trimmed_tail.is_empty()
+            && trimmed_tail.len() <= 24
+            && trimmed_tail
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, ',' | '.' | '-' | ' ' | '\t'))
+            && trimmed_tail.chars().any(|c| c.is_ascii_digit())
+        {
+            return head.trim_end();
+        }
+    }
+    text
+}
+
 pub(in crate::retrieval) fn split_blip_caption(text: &str) -> (&str, Option<&str>) {
     if let Some((body, cap)) = text.split_once("\n[BLIP caption]") {
         let trimmed = cap.trim();
-        (body, (!trimmed.is_empty()).then_some(trimmed))
+        (strip_trailing_provenance_tag(body), (!trimmed.is_empty()).then_some(trimmed))
     } else {
-        (text, None)
+        (strip_trailing_provenance_tag(text), None)
     }
 }
 

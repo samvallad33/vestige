@@ -125,8 +125,12 @@ pub mod neuroscience;
 #[allow(clippy::all)]
 pub mod retrieval;
 pub(crate) mod zero_overlap;
-/// Princeton WordNet 3.1 noun hypernyms (bundled data file, WordNet license).
+/// Princeton WordNet 3.1 full 4-POS lexical relations (bundled data files, WordNet license).
 pub mod wordnet;
+/// Roget's 1911 Thesaurus of English Words and Phrases (Project Gutenberg #10681, sha256-pinned).
+pub mod roget;
+/// GeoNames geographical gazetteer (CC BY 4.0, sha256-pinned).
+pub mod geonames;
 /// Packed ConceptNet 5.7.0 2-hop commonsense bridge (sha256-pinned, Issue #817).
 pub mod conceptnet;
 /// Packed Wikidata CC0 1.0 topological containment & composition graph (sha256-pinned).

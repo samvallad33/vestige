@@ -16,19 +16,79 @@ pub(in crate::retrieval) fn run<'a>(
     let persona_infer_on = false;
     let episodic_user_quote = false;
     let summary_hold = false;
+    let q_toks_s1 = raw_tokens(&q.text);
+    let q_low_s1 = q.text.trim_start().to_ascii_lowercase();
+    let has_named_s1 = ix
+        .turns
+        .iter()
+        .take(32)
+        .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
+    // T58 Closed-class 2nd-person past attribution ("did you ...", "have you ...") on user/assistant chats:
+    // weights assistant turns (`field 1`) without mutating public `QueryIntent::assistant_attribution`.
+    let eff_asst_attr = !has_named_s1
+        && ix.turns.len() >= 24
+        && (q_low_s1.contains("did you ")
+            || q_low_s1.contains("have you ")
+            || q_low_s1.contains("you recommend")
+            || q_low_s1.contains("you suggest")
+            || q_low_s1.contains("you advise")
+            || q_low_s1.contains("you outline")
+            || q_low_s1.contains("you propose")
+            || q_low_s1.contains("you help"));
     let user_role = p.enable_roles
         && it.user_attribution
+        && !eff_asst_attr
         && !pref_on
         && !it.task_under_rules
         && !summary_hold;
     let fl = if p.enable_roles && it.assistant_attribution {
-        Fields { w: [1.0, p.assistant_attribution_weight, 0.75], b: [p.b_user, p.b_assistant_attributed, 0.0] }
+        Fields { w: [0.65, p.assistant_attribution_weight, 0.75], b: [p.b_user, p.b_assistant_attributed, 0.0] }
+    } else if p.enable_roles && eff_asst_attr {
+        Fields { w: [1.10, p.assistant_attribution_weight, 0.75], b: [p.b_user, p.b_assistant_attributed, 0.0] }
     } else if user_role {
         Fields { w: [p.user_attribution_weight, 0.35, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
     } else if p.enable_roles && pref_on {
         Fields { w: [1.45, 0.55, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
     } else {
         Fields { w: [1.0, 1.0, 0.75], b: [p.b_user, p.b_assistant, 0.0] }
+    };
+    let is_when_participial = q_toks_s1
+        .first()
+        .is_some_and(|w| w == "when")
+        && q_toks_s1
+            .get(1)
+            .is_some_and(|w| w.len() >= 5 && w.ends_with("ing"));
+    let long_chat_s1 = ix.turns.len() >= 64;
+    let policy_win_allowed = !eff_summary_request(&q.text)
+        && !it.is_event_sequence
+        && (!it.temporal || is_when_participial)
+        && !it.sniper_how_many
+        && !pref_on
+        && !crate::retrieval::step14_is_rec_request(&q.text)
+        && (!long_chat_s1
+            || (!q_low_s1.contains("did i ")
+                && !q_low_s1.contains("did we ")
+                && !q_low_s1.contains("have i ")
+                && !q_low_s1.contains("was my ")
+                && !q_low_s1.contains("were my ")
+                && !q_low_s1.contains("between ")
+                && !q_low_s1.starts_with("what is ")
+                && !q_low_s1.starts_with("what was ")
+                && !q_low_s1.starts_with("how many ")
+                && !q_low_s1.starts_with("how long ")))
+        && !q_toks_s1.windows(2).any(|w| w[0] == "order" && (w[1] == "in" || w[1] == "of"));
+    let live_policy_turns: DetHashSet<usize> = if policy_win_allowed {
+        ix.standing_rules
+            .iter()
+            .filter(|r| {
+                !turn_is_superseded(ix, r.turn)
+                    && (r.condition_words.is_empty()
+                        || crate::retrieval::rule_condition_matches(ix, r, &plan, &q_toks_s1))
+            })
+            .map(|r| r.turn)
+            .collect()
+    } else {
+        DetHashSet::default()
     };
     let ns = ix.session_bags.len();
 
@@ -72,7 +132,9 @@ pub(in crate::retrieval) fn run<'a>(
             } else if persona_infer_on && members.iter().any(|&t| is_structural_personal_turn(ix, t)) {
                 sc *= 1.38;
             }
-            if members.iter().any(|&t| ix.turns[t].is_standing_policy) {
+            if !live_policy_turns.is_empty()
+                && members.iter().any(|&t| live_policy_turns.contains(&t))
+            {
                 sc *= 1.8;
             }
             if sc > s_win[si] {

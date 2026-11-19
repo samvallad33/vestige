@@ -32,7 +32,7 @@ pub(in crate::retrieval) fn apply_vault_closers(
     }
     let ql = query.to_ascii_lowercase();
     let is_summary = eff_summary_request(query) && ix.turns.len() >= 32;
-    let is_pref_rec = crate::retrieval::step14_is_rec_request(query) && ix.turns.len() >= 24;
+    let is_pref_rec = (crate::retrieval::step14_is_rec_request(query) || eff_it.preference) && ix.turns.len() >= 24;
 
     // 1. `S8-002` Dead-reckoning ordinal leg + `winter_kleroterion` (`BEAM event_ordering`):
     if eff_it.is_event_sequence && !is_summary {
@@ -162,7 +162,8 @@ pub(in crate::retrieval) fn apply_vault_closers(
     if is_pref_rec && !c2_named_session(ix, list[0]) {
         let head0 = list[0];
         let head_is_stance_user = ix.turns[head0].field == 0
-            && !ix.turns[head0].is_question
+            && !ix.turns[head0].is_pure_info_question
+            && !ix.turns[head0].is_standing_policy
             && (ix.turns[head0].is_personal_constraint
                 || !ix.turns[head0].role_objs.is_empty()
                 || ix.preference_directive_turns.contains(&head0));
@@ -174,73 +175,78 @@ pub(in crate::retrieval) fn apply_vault_closers(
             q_ids.insert(fid);
         }
         if !head_is_stance_user {
-            // Search Top-10 first, then full `preference_directive_turns` (`W2-087` recency tie-break):
-            let mut best_pref: Option<(usize, usize, i64, f32)> = None;
-            let mut cands: Vec<usize> = list.iter().take(10).copied().collect();
-            for &pti in &ix.preference_directive_turns {
-                if !cands.contains(&pti) {
-                    cands.push(pti);
+            let ns_u32 = (ix.session_turns.len() as u32).max(1);
+            let mut q_hi_ic: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
+            for qt in &plan.terms {
+                let df = ix.s_stats.df.get(&qt.id).copied().unwrap_or(0);
+                if df > 0 && df <= (ns_u32 / 2).max(4) {
+                    q_hi_ic.insert(
+                        qt.id,
+                        crate::retrieval::fusion::aspect_coverage_q16::aspect_ic_q16(df, ns_u32),
+                    );
                 }
             }
-            for cand in cands {
-                let ct = &ix.turns[cand];
-                if ct.field != 0 || ct.is_question || ct.is_backchannel || turn_is_superseded(ix, cand) {
-                    continue;
-                }
-                let is_stance = ct.is_personal_constraint
-                    || !ct.role_objs.is_empty()
-                    || ix.preference_directive_turns.contains(&cand);
-                if !is_stance {
-                    continue;
-                }
-                let hits = ct.content.iter().filter(|id| q_ids.contains(id)).count()
-                    + ct.role_objs.iter().filter(|id| q_ids.contains(id)).count();
-                let sc = t_scene.get(cand).copied().unwrap_or(0.0);
-                if hits == 0 && sc <= 0.0 {
-                    continue;
-                }
-                let ts = ix.session_ts.get(ct.session).copied().unwrap_or(0);
-                let key = (hits, usize::from(ix.preference_directive_turns.contains(&cand)), ts, sc);
-                if best_pref.is_none_or(|(bh, bp, bts, bsc)| {
-                    (key.0, key.1, key.2) > (bh, bp, bts)
-                        || ((key.0, key.1, key.2) == (bh, bp, bts) && key.3 > bsc)
-                }) {
-                    best_pref = Some((hits, key.1, ts, sc));
-                    // Store winner turn index by replacing `head0` below
-                }
-                let _ = best_pref;
-            }
-            // Select the winning stance turn cleanly:
-            let mut winner: Option<(usize, (usize, i32, usize, i64))> = None;
+            // Select winning stance/preference turn cleanly (`is_pure_info_question` keeps declarative requests ending in "?"):
+            let mut winner: Option<(usize, (u64, usize, i32, usize, i64))> = None;
             let mut pool_cands: Vec<usize> = list.iter().take(10).copied().collect();
             for &pti in &ix.preference_directive_turns {
                 if !pool_cands.contains(&pti) {
                     pool_cands.push(pti);
                 }
             }
+            let head_sc = t_scene.get(head0).copied().unwrap_or(0.0);
             for cand in pool_cands {
                 let ct = &ix.turns[cand];
-                if ct.field != 0 || ct.is_question || ct.is_backchannel || turn_is_superseded(ix, cand) {
+                let is_pref_dir = ix.preference_directive_turns.contains(&cand);
+                if ct.field != 0
+                    || (!is_pref_dir && ct.is_pure_info_question)
+                    || ct.is_backchannel
+                    || ct.is_standing_policy
+                    || (!(is_pref_dir && ix.session_turns.len() >= 16) && turn_is_superseded(ix, cand))
+                {
                     continue;
                 }
                 let is_stance = ct.is_personal_constraint
                     || !ct.role_objs.is_empty()
-                    || ix.preference_directive_turns.contains(&cand);
+                    || is_pref_dir;
                 if !is_stance {
                     continue;
                 }
+                let mut turn_ents: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+                for &cid in &ct.content {
+                    turn_ents.insert(cid);
+                }
+                for f in &ct.feats {
+                    turn_ents.insert(f.id);
+                }
+                for &rid in &ct.role_objs {
+                    turn_ents.insert(rid);
+                }
+                let ic_score = crate::retrieval::seating::standing_constraint_q16::score_standing_constraint_q16(
+                    true,
+                    true,
+                    &turn_ents,
+                    &q_hi_ic,
+                    crate::retrieval::fusion::aspect_coverage_q16::Q16_ONE >> 1,
+                );
                 let hits = ct.content.iter().filter(|id| q_ids.contains(id)).count()
                     + ct.role_objs.iter().filter(|id| q_ids.contains(id)).count();
                 let sc = t_scene.get(cand).copied().unwrap_or(0.0);
-                let head_sc = t_scene.get(head0).copied().unwrap_or(0.0);
-                if hits == 0 || (hits == 1 && sc < 0.65 * head_sc) {
+                // Allow a high-IC preference directive even when raw `sc` is modest, while gating non-directive turns strictly.
+                let qualifies = if is_pref_dir {
+                    ic_score > 0 || hits >= 1 || sc >= 0.40 * head_sc
+                } else {
+                    hits >= 2 || (hits == 1 && sc >= 0.65 * head_sc)
+                };
+                if !qualifies {
                     continue;
                 }
                 let ts = ix.session_ts.get(ct.session).copied().unwrap_or(0);
                 let ord_key = (
+                    ic_score,
                     hits,
                     (sc * 1000.0) as i32,
-                    usize::from(ix.preference_directive_turns.contains(&cand)),
+                    usize::from(is_pref_dir),
                     ts,
                 );
                 if winner.is_none_or(|(_, bk)| ord_key > bk) {
@@ -310,7 +316,7 @@ pub(in crate::retrieval) fn apply_vault_closers(
     if plan.intent.multi_hop && plan.groups.len() >= 2 && ix.session_turns.len() >= 3 {
         let pos_sessions: Vec<usize> = final_session_indices
             .iter()
-            .take(10)
+            .take(15)
             .copied()
             .filter(|&si| s_score.get(si).copied().unwrap_or(0.0) > 0.0 && s_mask.get(si).copied().unwrap_or(0) != 0)
             .collect();
@@ -321,7 +327,7 @@ pub(in crate::retrieval) fn apply_vault_closers(
                 let mb = s_mask[pos_sessions[j]];
                 if ma != 0 && mb != 0 && (ma & mb) == 0 {
                     let target_u = ma | mb;
-                    if let Some(&sc_u) = pos_sessions.iter().find(|&&su| s_mask[su] == target_u) {
+                    if let Some(&sc_u) = pos_sessions.iter().find(|&&su| (s_mask[su] & target_u) == target_u) {
                         union_sess = Some(sc_u);
                         break 'rhumb;
                     }
@@ -406,8 +412,10 @@ pub(in crate::retrieval) fn apply_vault_closers(
             let h_mask = t_exact_mask.get(h0).copied().unwrap_or(0);
             let h_sc = t_scene.get(h0).copied().unwrap_or(0.0);
             let mut best_sup: Option<(usize, usize)> = None;
-            for slot in 1..list.len().min(5) {
-                let cand = list[slot];
+            for &cand in &ix.session_turns[ht.session] {
+                if cand == h0 {
+                    continue;
+                }
                 let ct = &ix.turns[cand];
                 if ct.session != ht.session
                     || ct.is_question
@@ -421,15 +429,19 @@ pub(in crate::retrieval) fn apply_vault_closers(
                 let c_mask = t_exact_mask.get(cand).copied().unwrap_or(0);
                 let c_sc = t_scene.get(cand).copied().unwrap_or(0.0);
                 let is_strict_subset = ht.entities.iter().all(|e| ct.entities.contains(e));
-                if is_strict_subset && (c_mask & h_mask) == h_mask && c_sc >= 0.82 * h_sc {
+                if is_strict_subset && (c_mask & h_mask) == h_mask && c_sc >= 0.80 * h_sc {
                     if best_sup.is_none_or(|(_, blen)| ct.entities.len() > blen) {
-                        best_sup = Some((slot, ct.entities.len()));
+                        best_sup = Some((cand, ct.entities.len()));
                     }
                 }
             }
-            if let Some((slot, _)) = best_sup {
-                let moved = list.remove(slot);
-                list.insert(0, moved);
+            if let Some((win_ti, _)) = best_sup {
+                let orig_len = list.len();
+                if let Some(pos) = list.iter().position(|&x| x == win_ti) {
+                    list.remove(pos);
+                }
+                list.insert(0, win_ti);
+                list.truncate(orig_len.max(k));
             }
         }
     }

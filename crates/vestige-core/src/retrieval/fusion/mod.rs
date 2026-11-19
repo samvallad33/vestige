@@ -1,5 +1,6 @@
 //! Stage 5: Rank aggregation, submodular set cover, Kemeny consensus, and PSL/ILP solvers.
 
+pub(in crate::retrieval) mod aspect_coverage_q16;
 pub(in crate::retrieval) mod kemeny;
 pub(in crate::retrieval) mod kemeny_mrf;
 pub(in crate::retrieval) mod lin_bilmes;

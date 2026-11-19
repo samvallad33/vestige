@@ -64,7 +64,7 @@ pub(in crate::retrieval) fn build_rsb_and_supersession_edges(
     //    asserts an explicit revision/constraint, record a backward `supersedes` edge (`later -> earlier`).
     let mut ent_user_postings: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
     for (ti, t) in turns.iter().enumerate() {
-        if t.field != 0 || t.is_question || t.is_backchannel {
+        if t.field != 0 || t.is_pure_info_question || t.is_backchannel {
             continue;
         }
         for &eid in &t.entities {

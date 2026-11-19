@@ -20,7 +20,7 @@
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
 function resetAutopsyLedger(benchName) {
@@ -36,16 +36,25 @@ function recordAutopsyMiss(ledgerPath, record) {
 }
 
 const rootDir = resolve('.');
-const binCandidates = [
-  join(rootDir, 'target', 'release', 'retrieval_bench.exe'),
-  join(rootDir, 'target', 'release', 'retrieval_bench'),
-  join(rootDir, 'target', 'debug', 'retrieval_bench.exe'),
-  join(rootDir, 'target', 'debug', 'retrieval_bench'),
-];
-const binPath = binCandidates.find(p => existsSync(p));
+const targetRoots = [
+  process.env.CARGO_TARGET_DIR,
+  'C:\\cargo-target',
+  join(rootDir, 'target'),
+].filter(Boolean);
+const binCandidates = targetRoots.flatMap(t => [
+  join(t, 'bench-fast', 'retrieval_bench.exe'),
+  join(t, 'bench-fast', 'retrieval_bench'),
+  join(t, 'release', 'retrieval_bench.exe'),
+  join(t, 'release', 'retrieval_bench'),
+  join(t, 'debug', 'retrieval_bench.exe'),
+  join(t, 'debug', 'retrieval_bench'),
+]);
+const existingBins = [...new Set(binCandidates)].filter(p => existsSync(p));
+existingBins.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+const binPath = existingBins[0];
 if (!binPath) {
   console.error('ERROR: retrieval_bench binary not found. Build it with:');
-  console.error('  cargo build --release -p vestige-core --bin retrieval_bench');
+  console.error('  cargo build --profile bench-fast -p vestige-core --bin retrieval_bench');
   process.exit(1);
 }
 
