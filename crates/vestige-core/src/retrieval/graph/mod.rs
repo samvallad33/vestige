@@ -4,6 +4,7 @@ pub(in crate::retrieval) mod ac3;
 pub(in crate::retrieval) mod actr;
 pub(in crate::retrieval) mod bridge;
 pub(in crate::retrieval) mod causal;
+pub(in crate::retrieval) mod fellegi_sunter;
 pub(in crate::retrieval) mod ghostlink_dgs;
 pub(in crate::retrieval) mod locke_ledger;
 pub(in crate::retrieval) mod ppr_rwr;

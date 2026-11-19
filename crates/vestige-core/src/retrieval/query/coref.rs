@@ -87,6 +87,11 @@ pub(in crate::retrieval) fn coref_class_affinity_q16(ix: &Index, plan: &QueryPla
         }
     }
 
+    for (role_id, ent_id) in crate::retrieval::graph::fellegi_sunter::discover_fellegi_sunter_aliases(ix) {
+        uf.union(role_id, ent_id);
+        any_union = true;
+    }
+
     if !any_union {
         return scores;
     }
