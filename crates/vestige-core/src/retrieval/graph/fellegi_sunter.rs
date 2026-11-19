@@ -16,7 +16,7 @@ const W_COPULA_BRIDGE_Q16: i64 = 98_304;        // +1.5: copula/naming verb or r
 const W_MULTI_TURN_Q16: i64 = 65_536;           // +1.0: corroborated across >=2 turns by same speaker
 const W_RARE_ENT_Q16: i64 = 65_536;             // +1.0: proper entity session df <= 10
 const DISAGREE_HIGH_FANOUT_Q16: i64 = -196_608; // -3.0: generic noun binding >4 distinct entities
-const MATCH_THRESHOLD_Q16: i64 = 196_608;       // >= 3.0 total LLR required for union
+const MATCH_THRESHOLD_Q16: i64 = 294_912;       // >= 4.5: explicit naming plus rarity or corroboration
 const MAX_FANOUT_ENTITIES: usize = 4;
 const MAX_WORD_WINDOW: usize = 5;
 const ALIAS_COEFF_Q16: u64 = 22_938;            // 0.35 in Q16.16
@@ -51,6 +51,14 @@ pub(in crate::retrieval) fn fellegi_sunter_llr_q16(
     llr
 }
 
+// Closed-class copula/naming grammar, bounded to the actual role-name span.
+fn explicit_naming_link(words: &[(String, bool)], poss: usize, role: usize, entity: usize) -> bool {
+    let naming = |i: usize| words.get(i).is_some_and(|(w, _)|
+        matches!(w.as_str(), "is" | "was" | "are" | "were" | "named" | "called"));
+    (entity == role + 2 && naming(role + 1))
+        || (entity + 2 == poss && naming(entity + 1) && role == poss + 1)
+}
+
 pub(in crate::retrieval) fn discover_fellegi_sunter_aliases(ix: &Index) -> Vec<(u32, u32)> {
     // hardcode-scan: closed-class (possessive determiners and copula/naming verbs only)
     let is_poss_det = |w: &str| matches!(w, "my" | "our" | "his" | "her" | "their");
@@ -78,7 +86,6 @@ pub(in crate::retrieval) fn discover_fellegi_sunter_aliases(ix: &Index) -> Vec<(
             continue;
         }
 
-        let has_copula = words.iter().any(|(w, _)| is_copula_or_name(w.as_str()));
 
         // Locate proper entity token positions inside `words` attested in `t.entities`.
         let mut ent_pos: Vec<(usize, u32)> = Vec::new();
@@ -124,13 +131,16 @@ pub(in crate::retrieval) fn discover_fellegi_sunter_aliases(ix: &Index) -> Vec<(
                     continue;
                 }
                 let rpos = i + step;
-                let in_role_objs = t.role_objs.contains(&role_id);
                 for &(ep, eid) in &ent_pos {
                     if eid != role_id && ep.abs_diff(rpos) <= MAX_WORD_WINDOW {
-                        let appos_adj = ep.abs_diff(rpos) <= 2;
+                        // The naming verb must CONNECT the role and name, not merely occur
+                        // elsewhere in the turn. Possessive cue is already required above.
+                        if !explicit_naming_link(&words, i, rpos, ep) {
+                            continue;
+                        }
                         let acc = pair_ev.entry((role_id, eid)).or_default();
                         acc.speakers.insert(t.speaker.clone());
-                        acc.has_copula_or_role_obj |= has_copula || in_role_objs || appos_adj;
+                        acc.has_copula_or_role_obj = true;
                         acc.hits = acc.hits.saturating_add(1);
                         role_to_ents.entry(role_id).or_default().insert(eid);
                     }
@@ -149,7 +159,7 @@ pub(in crate::retrieval) fn discover_fellegi_sunter_aliases(ix: &Index) -> Vec<(
             (1..=10).contains(&edf),
             fanout,
         );
-        if llr >= MATCH_THRESHOLD_Q16 {
+        if acc.has_copula_or_role_obj && llr >= MATCH_THRESHOLD_Q16 {
             linked.push((role_id, eid));
         }
     }
@@ -225,5 +235,29 @@ mod tests {
         let generic = fellegi_sunter_llr_q16(true, false, true, 6);
         assert!(specific >= MATCH_THRESHOLD_Q16);
         assert!(generic < MATCH_THRESHOLD_Q16);
+    }
+}
+
+#[cfg(test)]
+mod raw_alias_tests {
+    use super::*;
+    use crate::retrieval::tests::{ix_of, s, turn};
+    #[test]
+    fn raw_naming_requires_connecting_verb_and_possessive() {
+        let words = |text: &str| text.split_whitespace().map(|w| (w.to_lowercase(), false)).collect::<Vec<_>>();
+        assert!(explicit_naming_link(&words("my sister is alice"), 0, 1, 3));
+        assert!(explicit_naming_link(&words("alice is my sister"), 2, 3, 0));
+        assert!(!explicit_naming_link(&words("my sister visited alice who is happy"), 0, 1, 3));
+        assert!(!explicit_naming_link(&words("my sister alice is happy"), 0, 1, 2));
+        assert!(fellegi_sunter_llr_q16(false, false, true, 1) < MATCH_THRESHOLD_Q16);
+    }
+    #[test]
+    fn aliases_visible_when_possessive_is_a_stopword() {
+        let mut sessions = vec![s("a", vec![turn("user", "My sister is Alice. Alice paints murals.")])];
+        for i in 0..7 { sessions.push(s(&format!("b{i}"), vec![turn("user", "Quiet weather arrived today.")])); }
+        let ix = ix_of(&sessions);
+        let role = ix.vocab.get("sister").unwrap();
+        let entity = ix.vocab.get("alice").unwrap();
+        assert!(discover_fellegi_sunter_aliases(&ix).contains(&(role, entity)));
     }
 }
