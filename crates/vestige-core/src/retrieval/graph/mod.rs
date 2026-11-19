@@ -7,6 +7,7 @@ pub(in crate::retrieval) mod causal;
 pub(in crate::retrieval) mod fellegi_sunter;
 pub(in crate::retrieval) mod freeman_brokerage;
 pub(in crate::retrieval) mod ghostlink_dgs;
+pub(in crate::retrieval) mod lachmann_stemma;
 pub(in crate::retrieval) mod locke_ledger;
 pub(in crate::retrieval) mod ppr_rwr;
 pub(in crate::retrieval) mod shepard_citations;
