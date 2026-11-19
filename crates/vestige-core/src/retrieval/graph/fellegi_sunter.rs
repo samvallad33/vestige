@@ -1,9 +1,9 @@
 //! Fellegi–Sunter Record Linkage (`Q16.16` integer log-likelihood ratios, JASA 1969).
 //!
 //! Resolves cross-session `(possessive_role_noun, proper_entity)` aliases (e.g. `"my sister"`
-//! <-> `"Mia"`) using strictly closed-class English possessive determiners and copula verbs,
-//! speaker corroboration, entity rarity, and high-fanout disagreement weights.
-//! Zero floats, zero open-class wordlists.
+//! <-> `"Mia"`) by scanning `t.body_for_headers` (preserving closed-class possessive determiners
+//! and copulas stripped from `t.feats`), corroborated by `t.role_objs`, speaker identity, entity
+//! rarity, and high-fanout disagreement weights. Zero floats, zero open-class wordlists.
 
 use crate::retrieval::index::Index;
 use crate::retrieval::QueryPlan;
@@ -11,33 +11,32 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const Q16_ONE: u64 = 65_536;
 const Q16_SHIFT: u32 = 16;
-const W_POSS_PROX_Q16: i64 = 131_072;           // +2.0
-const W_COPULA_BRIDGE_Q16: i64 = 98_304;        // +1.5
-const W_MULTI_TURN_Q16: i64 = 65_536;           // +1.0
-const W_RARE_ENT_Q16: i64 = 65_536;             // +1.0
-const DISAGREE_HIGH_FANOUT_Q16: i64 = -196_608; // -3.0
-const MATCH_THRESHOLD_Q16: i64 = 196_608;       // >= 3.0 LLR
-const MAX_FANOUT_ENTITIES: usize = 3;
-const MAX_PROX_SPAN: usize = 3;
-const ALIAS_COEFF_Q16: u64 = 19_661;            // 0.30
+const W_POSS_PROX_Q16: i64 = 131_072;           // +2.0: <poss_det> <role_noun> near proper entity
+const W_COPULA_BRIDGE_Q16: i64 = 98_304;        // +1.5: copula/naming verb or role_objs attestation
+const W_MULTI_TURN_Q16: i64 = 65_536;           // +1.0: corroborated across >=2 turns by same speaker
+const W_RARE_ENT_Q16: i64 = 65_536;             // +1.0: proper entity session df <= 10
+const DISAGREE_HIGH_FANOUT_Q16: i64 = -196_608; // -3.0: generic noun binding >4 distinct entities
+const MATCH_THRESHOLD_Q16: i64 = 196_608;       // >= 3.0 total LLR required for union
+const MAX_FANOUT_ENTITIES: usize = 4;
+const MAX_WORD_WINDOW: usize = 5;
+const ALIAS_COEFF_Q16: u64 = 22_938;            // 0.35 in Q16.16
 
 #[derive(Default)]
 struct AliasEvidenceAcc {
     speakers: BTreeSet<String>,
-    has_copula: bool,
+    has_copula_or_role_obj: bool,
     hits: u32,
 }
 
-/// Computes Fellegi-Sunter match score in signed `Q16.16` log-likelihood units.
 #[inline]
 pub(in crate::retrieval) fn fellegi_sunter_llr_q16(
-    has_copula: bool,
+    has_copula_or_role_obj: bool,
     single_speaker_multi_turn: bool,
     rare_entity: bool,
     role_fanout: usize,
 ) -> i64 {
     let mut llr = W_POSS_PROX_Q16;
-    if has_copula {
+    if has_copula_or_role_obj {
         llr += W_COPULA_BRIDGE_Q16;
     }
     if single_speaker_multi_turn {
@@ -55,76 +54,87 @@ pub(in crate::retrieval) fn fellegi_sunter_llr_q16(
 pub(in crate::retrieval) fn discover_fellegi_sunter_aliases(ix: &Index) -> Vec<(u32, u32)> {
     // hardcode-scan: closed-class (possessive determiners and copula/naming verbs only)
     let is_poss_det = |w: &str| matches!(w, "my" | "our" | "his" | "her" | "their");
-    let is_copula_or_name = |w: &str| matches!(w, "is" | "was" | "are" | "were" | "named" | "called");
+    let is_copula_or_name =
+        |w: &str| matches!(w, "is" | "was" | "are" | "were" | "named" | "called");
 
     let ns = ix.session_turns.len().max(1);
     let mut pair_ev: BTreeMap<(u32, u32), AliasEvidenceAcc> = BTreeMap::new();
     let mut role_to_ents: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
 
     for t in &ix.turns {
-        if t.field != 0 || t.is_question || t.is_backchannel || t.seq.len() < 2 || t.entities.is_empty() {
+        if t.field != 0 || t.is_question || t.is_backchannel || t.entities.is_empty() {
             continue;
         }
-        let mut ent_positions: Vec<(usize, u32)> = Vec::new();
-        for (pos, &(ex_id, _)) in t.seq.iter().enumerate() {
-            let Some(name) = ix.vocab.names.get(ex_id as usize) else {
+        let words: Vec<(String, bool)> = t
+            .body_for_headers
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                let cap = s.chars().next().is_some_and(|c| c.is_ascii_uppercase()) && s.len() >= 2;
+                (s.to_ascii_lowercase(), cap)
+            })
+            .collect();
+        if words.len() < 3 {
+            continue;
+        }
+
+        let has_copula = words.iter().any(|(w, _)| is_copula_or_name(w.as_str()));
+
+        // Locate proper entity token positions inside `words` attested in `t.entities`.
+        let mut ent_pos: Vec<(usize, u32)> = Vec::new();
+        for (idx, (w, cap)) in words.iter().enumerate() {
+            if !*cap {
+                continue;
+            }
+            let Some(vid) = ix.vocab.get(w) else {
                 continue;
             };
-            let is_ent = t.entities.contains(&ex_id)
-                || ix
-                    .vocab
-                    .get(&format!("\u{1}ent:{name}"))
-                    .is_some_and(|eid| t.entities.contains(&eid));
+            let ent_tag = format!("\u{1}ent:{w}");
+            let is_ent = t.entities.contains(&vid)
+                || ix.vocab.get(&ent_tag).is_some_and(|eid| t.entities.contains(&eid));
             if is_ent {
-                ent_positions.push((pos, ex_id));
+                ent_pos.push((idx, vid));
             }
         }
-        if ent_positions.is_empty() {
+        if ent_pos.is_empty() {
             continue;
         }
 
-        let has_poss = t.feats.iter().any(|f| {
-            ix.vocab
-                .names
-                .get(f.id as usize)
-                .is_some_and(|w| is_poss_det(w.as_str()))
-        });
-        if !has_poss {
-            continue;
-        }
-        let has_copula = t.feats.iter().any(|f| {
-            ix.vocab
-                .names
-                .get(f.id as usize)
-                .is_some_and(|w| is_copula_or_name(w.as_str()))
-        });
-
-        for &(epos, eid) in &ent_positions {
-            let lo = epos.saturating_sub(MAX_PROX_SPAN);
-            let hi = (epos + MAX_PROX_SPAN).min(t.seq.len().saturating_sub(1));
-            for pos in lo..=hi {
-                if pos == epos {
+        // Scan `<poss_det> <role_noun>` or `<poss_det> <adj> <role_noun>` within MAX_WORD_WINDOW of entity.
+        for i in 0..words.len() {
+            if !is_poss_det(words[i].0.as_str()) {
+                continue;
+            }
+            for step in 1..=2usize {
+                if i + step >= words.len() {
+                    break;
+                }
+                let (ref cand_role, cand_cap) = words[i + step];
+                if cand_cap || cand_role.len() < 3 || is_copula_or_name(cand_role.as_str()) {
                     continue;
                 }
-                let role_id = t.seq[pos].0;
-                if role_id == eid {
-                    continue;
-                }
-                let Some(rname) = ix.vocab.names.get(role_id as usize) else {
+                let Some(role_id) = ix.vocab.get(cand_role) else {
                     continue;
                 };
-                if rname.len() < 3 || t.entities.contains(&role_id) {
+                if !t.content.contains(&role_id) || t.entities.contains(&role_id) {
                     continue;
                 }
                 let rdf = ix.s_stats.df.get(&role_id).copied().unwrap_or(0) as usize;
                 if rdf == 0 || rdf * 2 > ns {
                     continue;
                 }
-                let acc = pair_ev.entry((role_id, eid)).or_default();
-                acc.speakers.insert(t.speaker.clone());
-                acc.has_copula |= has_copula;
-                acc.hits = acc.hits.saturating_add(1);
-                role_to_ents.entry(role_id).or_default().insert(eid);
+                let rpos = i + step;
+                let in_role_objs = t.role_objs.contains(&role_id);
+                for &(ep, eid) in &ent_pos {
+                    if eid != role_id && ep.abs_diff(rpos) <= MAX_WORD_WINDOW {
+                        let appos_adj = ep.abs_diff(rpos) <= 2;
+                        let acc = pair_ev.entry((role_id, eid)).or_default();
+                        acc.speakers.insert(t.speaker.clone());
+                        acc.has_copula_or_role_obj |= has_copula || in_role_objs || appos_adj;
+                        acc.hits = acc.hits.saturating_add(1);
+                        role_to_ents.entry(role_id).or_default().insert(eid);
+                    }
+                }
             }
         }
     }
@@ -134,9 +144,9 @@ pub(in crate::retrieval) fn discover_fellegi_sunter_aliases(ix: &Index) -> Vec<(
         let edf = ix.s_stats.df.get(&eid).copied().unwrap_or(0);
         let fanout = role_to_ents.get(&role_id).map_or(0, BTreeSet::len);
         let llr = fellegi_sunter_llr_q16(
-            acc.has_copula,
+            acc.has_copula_or_role_obj,
             acc.hits >= 2 && acc.speakers.len() == 1,
-            (1..=8).contains(&edf),
+            (1..=10).contains(&edf),
             fanout,
         );
         if llr >= MATCH_THRESHOLD_Q16 {

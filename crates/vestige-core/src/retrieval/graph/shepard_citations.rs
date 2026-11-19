@@ -66,12 +66,12 @@ pub(in crate::retrieval) fn compute_shepard_citator_lifts_q16(
             continue;
         }
         let has_distinguish = ix.session_turns[citing].iter().any(|&ti| {
-            ix.turns[ti].feats.iter().any(|f| {
-                ix.vocab
-                    .names
-                    .get(f.id as usize)
-                    .is_some_and(|w| is_distinguishing_conj(w.as_str()))
-            })
+            ix.turns[ti]
+                .body_for_headers
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|w| {
+                    !w.is_empty() && is_distinguishing_conj(w.to_ascii_lowercase().as_str())
+                })
         });
         for &(deg, cited) in &ix.session_rsb_back[citing] {
             if cited >= ns || cited == top0 {

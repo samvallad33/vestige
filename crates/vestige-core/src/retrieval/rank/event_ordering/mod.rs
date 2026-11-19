@@ -333,12 +333,12 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
                 continue;
             }
             decl_turns += 1;
-            let feat_words: Vec<&str> = t
-                .feats
-                .iter()
-                .filter_map(|feat| ix.vocab.names.get(feat.id as usize).map(String::as_str))
+            let body_words: Vec<&str> = t
+                .body_for_headers
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|s| !s.is_empty())
                 .collect();
-            let tp = inspect_closed_class_tense_tokens(&feat_words);
+            let tp = inspect_closed_class_tense_tokens(&body_words);
             if tp.pluperfect_analepsis {
                 retro_turns += 1;
             }
