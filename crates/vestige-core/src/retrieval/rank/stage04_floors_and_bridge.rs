@@ -573,6 +573,21 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             &s_score,
             &mut bridge_boost,
         );
+        let centering_lifts =
+            crate::retrieval::query::centering::compute_centering_coherence_lifts_q16(
+                ix,
+                plan,
+                top0,
+                smax_q16,
+            );
+        apply_rule8_capped_q16_lifts(
+            &centering_lifts,
+            top0,
+            top0_ceiling_q16,
+            invariant_crisp_lock,
+            &s_score,
+            &mut bridge_boost,
+        );
     }
 
     ctx.s_score = s_score;

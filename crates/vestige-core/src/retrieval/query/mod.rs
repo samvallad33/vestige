@@ -1,5 +1,6 @@
 //! Stage 1: Understanding the question — tokens, stemming, dates, intent, plan, WH-slots, and coreference.
 
+pub(in crate::retrieval) mod centering;
 pub(in crate::retrieval) mod coref;
 pub(in crate::retrieval) mod dates;
 pub(in crate::retrieval) mod focus;
