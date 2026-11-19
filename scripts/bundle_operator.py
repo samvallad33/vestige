@@ -47,7 +47,7 @@ SYNC_MAP = [
 
 
 def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
 
 
 def sync_pin(text: str, name: str, digest: str) -> str:

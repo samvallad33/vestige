@@ -3650,11 +3650,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-causal-math"
+version = "6.2.3"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "strata-crypto"
+version = "6.2.3"
+dependencies = [
+ "blake3",
+ "borsh",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "strata-episodic"
+version = "6.2.3"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "strata-gate"
 version = "6.2.2"
 dependencies = [
  "blake3",
  "borsh",
+]
+
+[[package]]
+name = "strata-import"
+version = "6.2.3"
+dependencies = [
+ "blake3",
+ "borsh",
+ "serde",
+ "serde_json",
+ "strata-gate",
 ]
 
 [[package]]
@@ -3705,6 +3744,32 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "vestige-core",
+]
+
+[[package]]
+name = "strata-passport"
+version = "6.2.3"
+dependencies = [
+ "blake3",
+ "borsh",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "strata-runtime"
+version = "6.2.3"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "strata-simd"
+version = "6.2.3"
+dependencies = [
+ "blake3",
 ]
 
 [[package]]
@@ -4410,10 +4475,17 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "strata",
+ "strata-causal-math",
+ "strata-crypto",
+ "strata-episodic",
  "strata-gate",
+ "strata-import",
  "strata-kernel",
  "strata-mesh",
  "strata-migrate",
+ "strata-passport",
+ "strata-runtime",
+ "strata-simd",
  "strata-store",
  "strata-verify",
  "subtle",

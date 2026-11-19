@@ -1,0 +1,12 @@
+[package]
+name = "strata-simd"
+version = "6.2.3"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "SIMD Intrinsics (#834): AVX-512, AVX2 & ARM NEON hardware-accelerated discrete posting scoring, sorted posting intersection, and batch BLAKE3 hashing"
+publish = false
+
+[workspace]
+
+[dependencies]
+blake3 = "1"

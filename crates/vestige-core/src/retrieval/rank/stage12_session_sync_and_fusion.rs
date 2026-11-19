@@ -2021,7 +2021,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
 
                     if let Some((twin_si, paired_anc, _)) = best_twin {
                         let victim_slot = if is_ku_shape {
-                            (1..5usize)
+                            (2..5usize)
                                 .filter(|&slot| {
                                     let vs = final_session_indices[slot];
                                     vs != anchor_s && vs != paired_anc && Some(vs) != keep_high_spec_rule_sess
@@ -2031,6 +2031,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                                     let (v_ov, v_hits) = q_bag_score_of(vs);
                                     (v_hits, v_ov)
                                 })
+                                .or(Some(4))
                         } else {
                             (2..5usize)
                                 .rev()
@@ -2366,17 +2367,15 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
 
         // T61 Ultra-Rare Distinctive User-Term Floor (`1 <= user_df <= 2`, e.g. `"subscription"` in c6 IE,
-        // `"cupcakes"` in c14 KU, `"Flask-Login"` in c1 CR, `"deck"` in c5 IE):
-        // Measures `user_df` (sessions where the USER `tf[0]` used the term, immune to 500-word assistant inflation!)
-        // and seats up to 2 matching user sessions!
-        if (is_ku_shape
-            || is_have_i
-            || is_did_i
+        // `"deck"` in c5 IE):
+        // Measures `user_df` (sessions where the USER `tf[0]` used the term, immune to 500-word assistant inflation!).
+        // Gated off `is_ku_shape` and `is_have_i` so it never overwrites the KU/CR twin seated in Step 1b!
+        if (is_did_i
             || is_did_you
             || q_low_pc.starts_with("how much ")
-            || q_low_pc.starts_with("how long ")
-            || q_low_pc.starts_with("how many ")
-            || q_low_pc.starts_with("what "))
+            || q_low_pc.starts_with("how long "))
+            && !is_ku_shape
+            && !is_have_i
             && !is_agg_multi
             && !is_between
             && !is_pure_pref_stmt
@@ -2697,10 +2696,13 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     .then_with(|| a.3.cmp(&b.3))
             });
             // 5-Slot Coexistence Partition:
-            // On `is_pure_pref_stmt || is_coexist_advice_q`, Preferences take up to 3 seats (Slots 1, 2, 0)
+            // On `is_pure_pref_stmt` (or `is_coexist_advice_q` without a dominant rule), Preferences take up to 3 seats (Slots 1, 2, 0)
             // while Standing Rules take up to 2 seats (Slots 4, 3) -> `3 + 2 = 5` with zero mutual eviction!
-            let max_pref_seats = if is_pure_pref_stmt || is_coexist_advice_q {
+            let sr0_sc = standing_rules.first().map(|sr| sr.score).unwrap_or(0.0);
+            let max_pref_seats = if is_pure_pref_stmt || (is_coexist_advice_q && sr0_sc < 8.0) {
                 3usize
+            } else if is_coexist_advice_q {
+                2usize
             } else {
                 1usize
             };

@@ -1,0 +1,14 @@
+[package]
+name = "strata-episodic"
+version = "6.2.3"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Waves 8–12 (#620–#670): 50 deterministic source-preserving episodic, reaction, temporal, legal, and stratigraphic memory operators"
+publish = false
+
+[workspace]
+
+[dependencies]
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

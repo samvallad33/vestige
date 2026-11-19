@@ -387,6 +387,8 @@ RULES = {
                "Deleting production DNS zones, modifying DNS records, or revoking TLS certificates is owner-only."),
     "OP-085": ("no-cloud-secret-destroy", "STOP",
                "Deleting or destroying cloud secrets, parameters, or vault entries is owner-only."),
+    "OP-IMMORTAL": ("no-vestige-immortal-tamper", "STOP",
+                    "Killing Vestige/watchdog processes or tampering with Strata segments, AGENTS.md, or hooks.json is owner-only."),
     "OP-098": ("no-tls-disable", "STOP",
                "Disabling TLS certificate verification in HTTP clients, env vars, or tool configs is owner-only."),
     "OP-099": ("no-untrusted-package-source", "STOP",
@@ -1749,6 +1751,27 @@ def check_cloud_secret_destroy(toks):
         return "vault kv destroys vault secret key"
     return None
 
+def check_vestige_immortal_tamper(toks, text):
+    """OP-IMMORTAL (#836): Block signal kills, immutable-bit stripping, or deletes targeting Vestige/Strata."""
+    if not toks:
+        return None
+    low = (text or "").lower()
+    kill_verbs = ("kill", "pkill", "killall", "taskkill", "stop-process")
+    proc_targets = ("vestige-mcp", "vestige-watchdog", "vestige-daemon", "vestige")
+    head = os.path.basename(toks[0]).lower()
+    if head in kill_verbs or any(re.search(rf"\b{v}\b", low) for v in kill_verbs):
+        if any(t in low for t in proc_targets):
+            return "process kill targeting Vestige daemon/watchdog"
+    if ("chattr" in low and "-i" in low) or ("icacls" in low and any(f in low for f in ("/remove", "/reset", "/deny", "/grant"))):
+        if any(t in low for t in (".strata", ".vestige", "agents.md", "hooks.json")):
+            return "stripping immutability or DACL protections on Vestige/Strata files"
+    del_verbs = ("rm", "del", "erase", "remove-item", "chmod", "chown", "unlink", "truncate")
+    if head in del_verbs or any(re.search(rf"\b{v}\b", low) for v in del_verbs):
+        if any(t in low for t in (".vestige/", ".vestige\\", ".strata", ".gemini/config/hooks.json", ".gemini\\config\\hooks.json")):
+            return "tampering with Vestige store, Strata segments, or hooks configuration"
+    return None
+
+
 def check_tls_disable(toks, text):
     if not toks:
         return None
@@ -2343,6 +2366,9 @@ def hard_stop_effect_hits(e, cfg, cwd):
     r85 = check_cloud_secret_destroy(toks)
     if r85:
         hits.append(("OP-085", r85, "Deleting or force-overwriting cloud secrets or vault entries is owner-only."))
+    r91 = check_vestige_immortal_tamper(toks, text)
+    if r91:
+        hits.append(("OP-IMMORTAL", r91, "SECURITY_FENCE_TRIPPED: Killing Vestige processes or tampering with Strata/hooks is owner-only."))
     r98 = check_tls_disable(toks, text)
     if r98:
         hits.append(("OP-098", r98, "Disabling TLS certificate verification is owner-only."))
@@ -11027,7 +11053,7 @@ def load_automaton():
             path = alt
     try:
         raw = open(path, "rb").read()
-        digest = hashlib.sha256(raw).hexdigest()
+        digest = hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
         if digest != AUTOMATON_SHA256:
             _AUTOMATON["status"] = "hash-mismatch:%s" % digest[:16]
             return None
@@ -11196,6 +11222,24 @@ def spawn_lifecycle_hits(effects, ti, tool, cwd):
                 hits.append(("OP-SPAWN", "%s %s may run unreviewed lifecycle scripts without --ignore-scripts" % (prog, args[0]),
                              "Re-run with `--ignore-scripts` or approve the package install explicitly."))
     return hits
+
+
+def immortal_fortress_hits(payload, tool):
+    """OP-IMMORTAL (#836): Unconditional PreToolUse shield against killing Vestige or tampering with Strata/hooks."""
+    ti = payload.get("tool_input") or {}
+    cmd_text = str(ti.get("command") or ti.get("cmd") or ti.get("CommandLine") or "").strip()
+    if cmd_text:
+        toks = cmd_text.split()
+        r = check_vestige_immortal_tamper(toks, cmd_text)
+        if r:
+            return [("OP-IMMORTAL", r, "SECURITY_FENCE_TRIPPED: Killing Vestige processes or tampering with Strata/hooks is owner-only.")]
+    target_file = str(ti.get("file_path") or ti.get("path") or ti.get("target_file") or ti.get("Path") or "").strip()
+    if target_file and str(tool or "").lower() in ("write", "edit", "write_file", "edit_file", "delete_file"):
+        low_p = target_file.replace("\\", "/").lower()
+        if any(p in low_p for p in ("/.vestige/", ".strata", "/.gemini/config/hooks.json")):
+            return [("OP-IMMORTAL", "direct write/delete targeting %s" % target_file,
+                     "SECURITY_FENCE_TRIPPED: Modifying Strata segments or Vestige hooks configuration is owner-only.")]
+    return []
 
 
 def check_to_use_path_candidates(payload, cwd, effects):
@@ -11771,6 +11815,7 @@ def hook_main(argv):
                          "Restore the pinned session_automaton.json image from the verified install."))
         hits += guarded(lattice_join_hits, [], payload, cwd, fx_effects)
         hits += guarded(spawn_lifecycle_hits, [], fx_effects, payload.get("tool_input") or {}, tool, cwd)
+        hits += guarded(immortal_fortress_hits, [], payload, tool)
         hits += guarded(check_to_use_hits, [], payload, cwd, fx_effects)
         BRAKE_TRIPPED["sid"] = ""
         CHAIN_PENDING["sid"] = session_of(payload)
@@ -11889,7 +11934,7 @@ def hook_main(argv):
         priority = ["OP-CANARY", "OP-000", "OP-022", "OP-002", "OP-001", "OP-012", "OP-013", "OP-014", "OP-015", "OP-016", "OP-017", "OP-018", "OP-019", "OP-010", "OP-009", "OP-008", "OP-004",
                     "OP-003", "OP-011", "OP-005", "OP-006", "OP-023", "OP-007", "OP-026", "OP-021", "OP-020", "OP-024",
                     "OP-025", "OP-027", "OP-028", "OP-029", "OP-030",
-                    "OP-031", "OP-032", "OP-033", "OP-034", "OP-035", "OP-036", "OP-037", "OP-038", "OP-039", "OP-040", "OP-041", "OP-042", "OP-043", "OP-044", "OP-045", "OP-046", "OP-047", "OP-048", "OP-049", "OP-050", "OP-051", "OP-052", "OP-053", "OP-054", "OP-055", "OP-056", "OP-057", "OP-058", "OP-059", "OP-060", "OP-061", "OP-062", "OP-063", "OP-064", "OP-065", "OP-066", "OP-067", "OP-068", "OP-069", "OP-070", "OP-071", "OP-072", "OP-073", "OP-074", "OP-075", "OP-076", "OP-077", "OP-078", "OP-079", "OP-080", "OP-081", "OP-082", "OP-083", "OP-084", "OP-085", "OP-098", "OP-099", "OP-101", "OP-102", "OP-103", "OP-104", "OP-105", "OP-106", "OP-107", "OP-108", "OP-109", "OP-110", "OP-111", "OP-112", "OP-113", "OP-114",
+                    "OP-031", "OP-032", "OP-033", "OP-034", "OP-035", "OP-036", "OP-037", "OP-038", "OP-039", "OP-040", "OP-041", "OP-042", "OP-043", "OP-044", "OP-045", "OP-046", "OP-047", "OP-048", "OP-049", "OP-050", "OP-051", "OP-052", "OP-053", "OP-054", "OP-055", "OP-056", "OP-057", "OP-058", "OP-059", "OP-060", "OP-061", "OP-062", "OP-063", "OP-064", "OP-065", "OP-066", "OP-067", "OP-068", "OP-069", "OP-070", "OP-071", "OP-072", "OP-073", "OP-074", "OP-075", "OP-076", "OP-077", "OP-078", "OP-079", "OP-080", "OP-081", "OP-082", "OP-083", "OP-084", "OP-085", "OP-IMMORTAL", "OP-098", "OP-099", "OP-101", "OP-102", "OP-103", "OP-104", "OP-105", "OP-106", "OP-107", "OP-108", "OP-109", "OP-110", "OP-111", "OP-112", "OP-113", "OP-114",
                     "OP-S06", "OP-S17", "OP-S12", "OP-S13", "OP-S07", "OP-S08", "OP-S11", "OP-S01",
                     "OP-S02", "OP-S03", "OP-S04", "OP-S05", "OP-S14", "OP-S15", "OP-S16"]
 

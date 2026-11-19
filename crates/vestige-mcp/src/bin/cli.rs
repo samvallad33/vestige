@@ -209,6 +209,32 @@ enum Commands {
         dry_run: bool,
     },
 
+    /// Wave 14N Universal Importer: convert external vector stores, DBs, and memory layers into Strata
+    Import {
+        /// Store slug (e.g. qdrant, pinecone, pgvector, mem0, jsonl)
+        store: Option<String>,
+
+        /// List all supported stores and their protocol families
+        #[arg(long)]
+        list_sources: bool,
+
+        /// Collection or namespace to import
+        #[arg(long, default_value = "default")]
+        collection: String,
+
+        /// Path to exported snapshot or JSONL/NDJSON source file
+        #[arg(long)]
+        source_file: Option<PathBuf>,
+
+        /// Optional checkpoint file to resume from
+        #[arg(long)]
+        resume: Option<PathBuf>,
+
+        /// Print the deterministic ImportReceipt without writing frames
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Update Vestige binaries from the latest GitHub release
     Update {
         /// Install a specific release tag instead of latest (example: v2.1.27)
@@ -932,6 +958,14 @@ fn main() -> anyhow::Result<()> {
         Commands::Stats { tagging, states } => run_stats(tagging, states),
         Commands::Health => run_health(),
         Commands::Upgrade { dry_run } => run_upgrade(dry_run),
+        Commands::Import {
+            store,
+            list_sources,
+            collection,
+            source_file,
+            resume,
+            dry_run,
+        } => run_universal_import(store, list_sources, collection, source_file, resume, dry_run),
         Commands::Update {
             version,
             install_dir,
@@ -2686,6 +2720,81 @@ fn cli_db_path() -> anyhow::Result<PathBuf> {
 }
 
 /// Import a v3 `vestige.db` by running `vestige-upgrade`. The file is not opened.
+fn run_universal_import(
+    store: Option<String>,
+    list_sources: bool,
+    collection: String,
+    source_file: Option<PathBuf>,
+    resume: Option<PathBuf>,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    if list_sources {
+        for entry in strata_import::STORE_CATALOG {
+            println!(
+                "{:<22} | {:<22} | {:<24} | {}",
+                entry.slug,
+                entry.family.code(),
+                entry.driver,
+                entry.display_name
+            );
+        }
+        return Ok(());
+    }
+
+    let slug = store.ok_or_else(|| {
+        anyhow::anyhow!("store slug required (or pass `--list-sources` to inspect supported stores)")
+    })?;
+    let cat = strata_import::lookup_catalog(&slug)
+        .ok_or_else(|| anyhow::anyhow!("unknown store '{slug}'; run `vestige import --list-sources`"))?;
+    let file_path = source_file.ok_or_else(|| {
+        anyhow::anyhow!("`--source-file <path>` required to pull snapshot records for '{slug}'")
+    })?;
+
+    let resume_checkpoint = match resume {
+        Some(p) => Some(
+            strata_import::ImportCheckpoint::load_from_file(&p)
+                .with_context(|| format!("failed to load checkpoint {}", p.display()))?,
+        ),
+        None => None,
+    };
+
+    let connector = strata_import::JsonlSnapshotConnector::new(cat.slug, cat.family, &file_path);
+    let out = strata_import::run_import(
+        &connector,
+        &collection,
+        strata_import::ImportOptions {
+            git_index: None,
+            resume_checkpoint,
+            stop_after_pages: None,
+        },
+    );
+
+    if !dry_run {
+        let storage = open_storage()?;
+        for frame in &out.frames {
+            if frame.quarantined.is_none() {
+                let mut tags = vec![
+                    format!("import:{}", out.receipt.connector_slug),
+                    format!("source_id:{}", frame.source_id),
+                ];
+                if let Some(commit) = &frame.commit_anchor {
+                    tags.push(format!("commit:{commit}"));
+                }
+                let _ = storage.ingest(IngestInput {
+                    content: frame.text.clone(),
+                    node_type: "fact".to_string(),
+                    source: Some(frame.writer_id.clone()),
+                    tags,
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    println!("{}", serde_json::to_string_pretty(&out.receipt)?);
+    Ok(())
+}
+
 fn run_upgrade(dry_run: bool) -> anyhow::Result<()> {
     let source = cli_db_path()?;
     if !vestige_mcp::v3_launch::db_present(&source) {

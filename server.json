@@ -1,21 +1,18 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-01/server.schema.json",
   "name": "io.github.samvallad33/vestige",
-  "title": "Vestige",
-  "description": "Causal Proof Engine for AI agents: signed Strata log, zero vectors, proof on every answer.",
-  "websiteUrl": "https://github.com/samvallad33/vestige",
+  "description": "Vestige Causal Proof Engine & Agent Operating System: local-first signed Strata log, exact-handle recall, causal walks, and 102-rule Operator gate.",
+  "version": "6.2.3",
   "repository": {
     "url": "https://github.com/samvallad33/vestige",
-    "source": "github",
-    "subfolder": "packages/vestige-mcp-npm"
+    "source": "github"
   },
-  "version": "6.2.2",
   "packages": [
     {
-      "registryType": "npm",
-      "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "vestige-mcp-server",
-      "version": "6.2.2",
+      "registry_name": "npm",
+      "name": "@vestige/mcp",
+      "version": "6.2.3",
+      "runtime": "node",
       "transport": {
         "type": "stdio"
       }
