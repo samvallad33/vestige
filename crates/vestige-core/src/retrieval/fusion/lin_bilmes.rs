@@ -3,6 +3,17 @@
 use crate::retrieval::*;
 use crate::retrieval::rank::context::RankCtx;
 
+/// Returns `true` when the query requires a deep scored session pool prior to
+/// the final `top_k` cut (`event_ordering` and `summarization` only).
+/// All other query types stay strictly on the existing `k` cut (byte-identical).
+#[inline]
+pub(in crate::retrieval) fn deep_session_pool_enabled(
+    eff_it: &QueryIntent,
+    query: &str,
+) -> bool {
+    eff_it.is_event_sequence || eff_summary_request(query)
+}
+
 pub(in crate::retrieval) fn select_submodular_sessions(
     ctx: &RankCtx<'_>,
     total_q_groups: usize,
@@ -22,6 +33,11 @@ pub(in crate::retrieval) fn select_submodular_sessions(
     let s_ord_base = &ctx.s_ord_base;
     let smax = ctx.smax;
     let initiative_content = &ctx.initiative_content;
+    let pool_cap = if deep_session_pool_enabled(eff_it, &ctx.q.text) {
+        ns.max(k)
+    } else {
+        k
+    };
 
 if p.enable_submodular && ns > 1 {
         let mut selected: Vec<usize> = Vec::with_capacity(k);
@@ -111,7 +127,7 @@ if p.enable_submodular && ns > 1 {
             }
         }
         for si in s_ord_base {
-            if selected.len() >= k {
+            if selected.len() >= pool_cap {
                 break;
             }
             if selected.contains(si) {
@@ -142,7 +158,7 @@ if p.enable_submodular && ns > 1 {
             .iter()
             .copied()
             .filter(|&si| s_score[si] > 0.0 || bridge_boost[si] > 0.0)
-            .take(k)
+            .take(pool_cap)
             .collect()
     }
 }

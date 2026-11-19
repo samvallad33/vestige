@@ -502,7 +502,9 @@ fn apply_session_late_sync_and_margin_swap(
             final_session_indices.push(evicted);
         }
     }
-    if final_session_indices.len() > k.max(5) {
+    if !crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled(eff_it, q_text)
+        && final_session_indices.len() > k.max(5)
+    {
         final_session_indices.truncate(k.max(5));
     }
 }
@@ -854,4 +856,9 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     ctx.final_session_indices = final_session_indices;
     ctx.final_turn_indices = final_turn_indices;
     crate::retrieval::event_ordering::apply_event_ordering_stack(ctx);
+    if crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled(&ctx.eff_it, &ctx.q.text)
+        && ctx.final_session_indices.len() > ctx.k
+    {
+        ctx.final_session_indices.truncate(ctx.k);
+    }
 }

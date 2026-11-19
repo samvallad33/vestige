@@ -51,8 +51,16 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 final_session_indices.remove(pos);
             }
             final_session_indices.insert(ins_rank, cad_si);
-            if final_session_indices.len() > k {
-                final_session_indices.truncate(k);
+            let pool_cap = if crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled(
+                &ctx.eff_it,
+                &ctx.q.text,
+            ) {
+                ns.max(k)
+            } else {
+                k
+            };
+            if final_session_indices.len() > pool_cap {
+                final_session_indices.truncate(pool_cap);
             }
         }
     }
