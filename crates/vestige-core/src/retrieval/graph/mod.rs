@@ -8,6 +8,7 @@ pub(in crate::retrieval) mod ghostlink_dgs;
 pub(in crate::retrieval) mod locke_ledger;
 pub(in crate::retrieval) mod ppr_rwr;
 pub(in crate::retrieval) mod supersession;
+pub(in crate::retrieval) mod swanson_abc;
 pub(in crate::retrieval) mod taxa;
 pub(in crate::retrieval) mod temporal_allen;
 pub(in crate::retrieval) mod torrens;

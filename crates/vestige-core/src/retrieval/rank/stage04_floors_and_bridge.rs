@@ -542,6 +542,22 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             &s_score,
             &mut bridge_boost,
         );
+        let swanson_lifts = crate::retrieval::graph::swanson_abc::compute_swanson_abc_lifts_q16(
+            ix,
+            plan,
+            multi_or_partial,
+            &pre_sight_q16,
+            &s_ord_base,
+            smax_q16,
+        );
+        apply_rule8_capped_q16_lifts(
+            &swanson_lifts,
+            top0,
+            top0_ceiling_q16,
+            invariant_crisp_lock,
+            &s_score,
+            &mut bridge_boost,
+        );
     }
 
     ctx.s_score = s_score;
