@@ -445,6 +445,38 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && ns > 5
         && smax > 0.0
     {
+        let pre_sight_q16: Vec<u64> = (0..ns)
+            .map(|si| {
+                crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                    (s_score[si] + bridge_boost[si]).to_bits(),
+                )
+            })
+            .collect();
+        let lex_only_q16: Vec<u64> = s_score
+            .iter()
+            .map(|&v| crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(v.to_bits()))
+            .collect();
+        let smax_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(smax.to_bits());
+        let top0 = s_ord_base.first().copied().unwrap_or(0);
+        let top0_lex = lex_only_q16.get(top0).copied().unwrap_or(0);
+        let top1_lex = s_ord_base
+            .get(1)
+            .and_then(|&s1| lex_only_q16.get(s1).copied())
+            .unwrap_or(0);
+        let n_q_groups = plan.groups.len().min(64);
+        let q_full_mask = if n_q_groups == 64 {
+            u64::MAX
+        } else if n_q_groups == 0 {
+            0
+        } else {
+            (1u64 << n_q_groups) - 1
+        };
+        let top0_full_cov = q_full_mask != 0
+            && (s_exact_mask.get(top0).copied().unwrap_or(0) & q_full_mask) == q_full_mask;
+        let invariant_crisp_lock =
+            top0_full_cov || top0_lex.saturating_mul(3) >= top1_lex.saturating_mul(4);
+        let multi_or_partial = eff_it.multi_hop || !top0_full_cov;
+
         associative_multihop_bridge_q16::apply_multihop_open_domain_session_lift(
             ix,
             plan,
@@ -454,6 +486,28 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             s_exact_mask,
             &s_ord_base,
             smax,
+            &mut bridge_boost,
+        );
+        let top0_ceiling_q16 = (crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+            (s_score[top0] + bridge_boost[top0]).to_bits(),
+        )
+        .saturating_mul(9))
+            / 10;
+
+        let ppr_lifts = crate::retrieval::graph::ppr_rwr::compute_bipartite_ppr_lifts_q16(
+            ix,
+            plan,
+            multi_or_partial,
+            &pre_sight_q16,
+            &s_ord_base,
+            smax_q16,
+        );
+        apply_rule8_capped_q16_lifts(
+            &ppr_lifts,
+            top0,
+            top0_ceiling_q16,
+            invariant_crisp_lock,
+            &s_score,
             &mut bridge_boost,
         );
     }
@@ -475,6 +529,35 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     ctx.s_ord_base = s_ord_base;
 }
 
+
+/// Applies a `Q16.16` lift vector to `bridge_boost` while strictly enforcing the invariant
+/// Rule-8 crisp-peak ceiling (`s_score[si] + bridge_boost[si] <= 0.90 * sight(top0)`).
+fn apply_rule8_capped_q16_lifts(
+    lifts_q16: &[u64],
+    top0: usize,
+    top0_ceiling_q16: u64,
+    invariant_crisp_lock: bool,
+    s_score: &[f32],
+    bridge_boost: &mut [f32],
+) {
+    const Q16_SCALE_F32: f32 = 65_536.0;
+    for (si, &raw_lift) in lifts_q16.iter().enumerate() {
+        if si == top0 || raw_lift == 0 {
+            continue;
+        }
+        let lift_q16 = if invariant_crisp_lock {
+            let cur_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                (s_score[si] + bridge_boost[si]).to_bits(),
+            );
+            raw_lift.min(top0_ceiling_q16.saturating_sub(cur_q16))
+        } else {
+            raw_lift
+        };
+        if lift_q16 > 0 {
+            bridge_boost[si] += (lift_q16 as f32) / Q16_SCALE_F32;
+        }
+    }
+}
 
 /// Domain-agnostic `Q16.16` associative session lift for Multi-Hop and Open-Domain recall.
 ///
