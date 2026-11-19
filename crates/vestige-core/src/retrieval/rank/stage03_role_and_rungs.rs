@@ -475,22 +475,53 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         let hobbs_res = crate::retrieval::query::hobbs::resolve_hobbs_pronouns(ix, &plan);
         let coref_q16 = crate::retrieval::query::coref::coref_class_affinity_q16(ix, &plan);
         let t_max_sc = t_scene.iter().cloned().fold(0.0f32, f32::max);
-        if t_max_sc > 0.0 {
+        let t_max_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(t_max_sc.to_bits());
+        let smax_s03_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(smax.to_bits());
+        if t_max_q16 > 0 {
+            // Pure Q16.16 integer weights: ANA_W=3932 (~0.06), COREF_W=7864 (~0.12), RESCUE_W=15729 (~0.24)
+            const ANA_W_Q16: u64 = 3_932;
+            const COREF_W_Q16: u64 = 7_864;
+            const RESCUE_W_Q16: u64 = 15_729;
+            const Q16_SCALE_F32: f32 = 65_536.0;
             for ti in 0..nt {
-                if t_scene[ti] <= 0.0 {
-                    continue;
-                }
                 let fq = focus_q16[ti];
                 let hq = hobbs_res.turn_score_q16[ti];
                 let cq = coref_q16[ti];
-                if fq > 0 || hq > 0 || cq > 0 {
-                    let f_frac = (fq as f32) / (crate::retrieval::query::focus::Q16 as f32);
-                    let h_frac = (hq as f32) / (crate::retrieval::query::hobbs::Q16 as f32);
-                    let c_frac = (cq as f32) / (crate::retrieval::query::coref::Q16 as f32);
-                    let ana_boost = 0.05 * f_frac.max(h_frac);
-                    let boost = t_max_sc * (ana_boost + 0.03 * c_frac);
-                    t_scene[ti] += boost;
-                    t_scene_sess[ti] += boost;
+                if fq == 0 && hq == 0 && cq == 0 {
+                    continue;
+                }
+                if t_scene[ti] > 0.0 {
+                    let ana_part = (ANA_W_Q16.saturating_mul(fq.max(hq))) >> 16;
+                    let coref_part = (COREF_W_Q16.saturating_mul(cq)) >> 16;
+                    let boost_q16 = (t_max_q16.saturating_mul(ana_part.saturating_add(coref_part))) >> 16;
+                    if boost_q16 > 0 {
+                        let boost_f32 = (boost_q16 as f32) / Q16_SCALE_F32;
+                        t_scene[ti] += boost_f32;
+                        t_scene_sess[ti] += boost_f32;
+                    }
+                } else {
+                    // Rescue zero-lexical declarative pronoun/alias answer turns inside strong
+                    // grounded sessions in Q16.16 (t_own and t_raw remain 100% untouched).
+                    let tr = &ix.turns[ti];
+                    let sess_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                        s_score[tr.session].to_bits(),
+                    );
+                    let sess_ok = smax_s03_q16 > 0 && sess_q16.saturating_mul(20) >= smax_s03_q16.saturating_mul(7);
+                    if sess_ok
+                        && !tr.is_question
+                        && !tr.is_backchannel
+                        && !turn_is_superseded(ix, ti)
+                        && (hq >= (crate::retrieval::query::hobbs::Q16 >> 1)
+                            || cq >= (crate::retrieval::query::coref::Q16 >> 1))
+                    {
+                        let hc_q16 = (RESCUE_W_Q16.saturating_mul(hq.max(cq))) >> 16;
+                        let rescue_q16 = (t_max_q16.saturating_mul(hc_q16)) >> 16;
+                        if rescue_q16 > 0 {
+                            let rescue_f32 = (rescue_q16 as f32) / Q16_SCALE_F32;
+                            t_scene[ti] += rescue_f32;
+                            t_scene_sess[ti] += rescue_f32;
+                        }
+                    }
                 }
             }
         }

@@ -707,6 +707,93 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
     }
 
+    // Pure Q16.16 turn-level evidence propagation inside bridge-boosted sessions
+    // (closes the Session R@5 -> Turn R@5 gap without touching t_own or t_turn_raw).
+    let lex_tmax_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(lexical_tmax.to_bits());
+    let smax_prop_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(smax.to_bits());
+    if !eff_it.is_event_sequence
+        && !pref_on
+        && !eff_it.task_under_rules
+        && smax_prop_q16 > 0
+        && lex_tmax_q16 > 0
+    {
+        const Q16_ONE_PROP: u64 = 65_536;
+        const BB_RATIO_CAP_Q16: u64 = 55_706; // 0.85
+        const W_TB_Q16: u64 = 29_491;         // 0.45
+        const W_ALIAS_Q16: u64 = 29_491;      // 0.45
+        const W_GRP_Q16: u64 = 13_107;        // 0.20 per group (up to 3)
+        const TURN_PROP_COEFF_Q16: u64 = 18_350; // 0.28
+        const Q16_SCALE_F32: f32 = 65_536.0;
+
+        let t_bridge_q16: Vec<u64> = ctx
+            .t_bridge
+            .iter()
+            .map(|&v| crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(v.to_bits()))
+            .collect();
+        let max_tb_q16 = t_bridge_q16.iter().copied().max().unwrap_or(0);
+        let alias_pairs = crate::retrieval::graph::fellegi_sunter::discover_fellegi_sunter_aliases(ix);
+        let q_exact_ids: std::collections::BTreeSet<u32> = plan
+            .terms
+            .iter()
+            .filter(|qt| qt.exact_hit)
+            .map(|qt| qt.id)
+            .collect();
+        let mut linked_alias_ids: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        for (a, b) in alias_pairs {
+            if q_exact_ids.contains(&a) && !q_exact_ids.contains(&b) {
+                linked_alias_ids.insert(b);
+            } else if q_exact_ids.contains(&b) && !q_exact_ids.contains(&a) {
+                linked_alias_ids.insert(a);
+            }
+        }
+
+        for si in 0..ns {
+            let bb_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                bridge_boost[si].to_bits(),
+            );
+            if bb_q16.saturating_mul(10) < smax_prop_q16 {
+                continue;
+            }
+            let bb_ratio_q16 = ((bb_q16.saturating_mul(Q16_ONE_PROP)) / smax_prop_q16).min(BB_RATIO_CAP_Q16);
+            for &ti in &ix.session_turns[si] {
+                let tr = &ix.turns[ti];
+                if tr.is_question || tr.is_backchannel || turn_is_superseded(ix, ti) {
+                    continue;
+                }
+                let tb_part = if max_tb_q16 > 0 && t_bridge_q16[ti] > 0 {
+                    let norm_tb = ((t_bridge_q16[ti].saturating_mul(Q16_ONE_PROP)) / max_tb_q16).min(Q16_ONE_PROP);
+                    (W_TB_Q16.saturating_mul(norm_tb)) >> 16
+                } else {
+                    0
+                };
+                let alias_part = if !linked_alias_ids.is_empty()
+                    && tr.content.iter().any(|cid| linked_alias_ids.contains(cid))
+                {
+                    W_ALIAS_Q16
+                } else {
+                    0
+                };
+                let grp_cnt = (t_mask[ti].count_ones() as u64).min(3);
+                let grp_part = W_GRP_Q16.saturating_mul(grp_cnt);
+                let ev_q16 = tb_part
+                    .saturating_add(alias_part)
+                    .saturating_add(grp_part)
+                    .min(Q16_ONE_PROP);
+                if ev_q16 > 0 {
+                    let scale_q16 = (((TURN_PROP_COEFF_Q16.saturating_mul(bb_ratio_q16)) >> 16)
+                        .saturating_mul(ev_q16))
+                        >> 16;
+                    let add_q16 = (lex_tmax_q16.saturating_mul(scale_q16)) >> 16;
+                    if add_q16 > 0 {
+                        let add_f32 = (add_q16 as f32) / Q16_SCALE_F32;
+                        t_scene[ti] += add_f32;
+                        t_scene_sess[ti] += add_f32;
+                    }
+                }
+            }
+        }
+    }
+
     ctx.s_score = s_score;
     ctx.t_scene = t_scene;
     ctx.t_scene_sess = t_scene_sess;
