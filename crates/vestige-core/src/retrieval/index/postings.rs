@@ -1,0 +1,307 @@
+//! Inverted postings, 64-bit Bloom filters, turn metadata, and bridge/PPMI postings.
+
+use crate::retrieval::*;
+
+
+pub(in crate::retrieval) fn build_turn_meta(turns: &[TurnIx], turn_bloom: &[u64]) -> Vec<TurnMeta> {
+    turns
+        .iter()
+        .zip(turn_bloom.iter())
+        .map(|(t, &bloom)| {
+            let mut flags = 0u16;
+            if t.is_question { flags |= TM_QUESTION; }
+            if t.is_pure_info_question { flags |= TM_PURE_INFO_Q; }
+            if t.answers_question { flags |= TM_ANSWERS_Q; }
+            if t.is_short_reply { flags |= TM_SHORT_REPLY; }
+            if t.is_backchannel { flags |= TM_BACKCHANNEL; }
+            if t.anaphoric { flags |= TM_ANAPHORIC; }
+            if t.is_personal_constraint { flags |= TM_CONSTRAINT; }
+            if t.is_standing_policy { flags |= TM_STANDING_POLICY; }
+            TurnMeta {
+                bloom,
+                session: t.session as u32,
+                content_len: t.content.len().min(u16::MAX as usize) as u16,
+                entity_len: t.entities.len().min(u16::MAX as usize) as u16,
+                flags,
+                field: t.field as u8,
+                _pad: 0,
+            }
+        })
+        .collect()
+}
+
+/// Burton Bloom (1970) 64-bit 2-hash bitmask for a dense `u32` TokenId.
+#[inline]
+pub(in crate::retrieval) fn bloom_mask64(id: u32) -> u64 {
+    let mut x = (id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    let b1 = (x & 63) as u32;
+    let b2 = ((x >> 6) & 63) as u32;
+    (1u64 << b1) | (1u64 << b2)
+}
+
+#[allow(dead_code)]
+#[inline]
+pub(in crate::retrieval) fn session_may_contain_token(ix: &Index, si: usize, id: u32) -> bool {
+    let m = bloom_mask64(id);
+    (ix.session_bloom[si] & m) == m
+}
+
+pub(in crate::retrieval) fn build_postings(bags: &[Bag], vocab_len: usize) -> Vec<Vec<u32>> {
+    let mut postings = vec![Vec::new(); vocab_len];
+    let mut seen: DetHashSet<u32> = DetHashSet::default();
+    for (doc_idx, b) in bags.iter().enumerate() {
+        seen.clear();
+        for f in 0..3 {
+            for (&t, &v) in &b.tf[f] {
+                if v > 0.0 {
+                    seen.insert(t);
+                }
+            }
+        }
+        let d = doc_idx as u32;
+        for &t in &seen {
+            if let Some(list) = postings.get_mut(t as usize) {
+                list.push(d);
+            }
+        }
+    }
+    postings
+}
+
+pub(in crate::retrieval) fn build_turn_postings_and_bloom(
+    turn_bags: &[Bag],
+    turn_own_bags: &[Bag],
+    vocab_len: usize,
+) -> (Vec<Vec<u32>>, Vec<u64>) {
+    let mut postings = vec![Vec::new(); vocab_len];
+    let mut blooms = vec![0u64; turn_bags.len()];
+    let mut seen: DetHashSet<u32> = DetHashSet::default();
+    for (ti, (tb, ob)) in turn_bags.iter().zip(turn_own_bags.iter()).enumerate() {
+        seen.clear();
+        for f in 0..3 {
+            for (&t, &v) in &tb.tf[f] {
+                if v > 0.0 {
+                    seen.insert(t);
+                }
+            }
+            for (&t, &v) in &ob.tf[f] {
+                if v > 0.0 {
+                    seen.insert(t);
+                }
+            }
+        }
+        let d = ti as u32;
+        let mut mask = 0u64;
+        for &t in &seen {
+            mask |= bloom_mask64(t);
+            if let Some(list) = postings.get_mut(t as usize) {
+                list.push(d);
+            }
+        }
+        blooms[ti] = mask;
+    }
+    (postings, blooms)
+}
+
+pub(in crate::retrieval) fn build_session_bloom(bags: &[Bag]) -> Vec<u64> {
+    bags.iter()
+        .map(|b| {
+            let mut mask = 0u64;
+            for f in 0..3 {
+                for (&t, &v) in &b.tf[f] {
+                    if v > 0.0 {
+                        mask |= bloom_mask64(t);
+                    }
+                }
+            }
+            mask
+        })
+        .collect()
+}
+
+pub(in crate::retrieval) fn collect_posting_candidates(postings: &[Vec<u32>], plan: &QueryPlan, total_docs: usize) -> Vec<usize> {
+    if total_docs == 0 || plan.terms.is_empty() {
+        return Vec::new();
+    }
+    let mut seen = vec![0u8; total_docs];
+    let mut out = Vec::new();
+    for qt in &plan.terms {
+        if let Some(list) = postings.get(qt.id as usize) {
+            for &doc in list {
+                let idx = doc as usize;
+                if seen[idx] == 0 {
+                    seen[idx] = 1;
+                    out.push(idx);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Kernel tokens of `text` for recall-cue matching: the same tokenizer and stemmer as ranking.
+pub(in crate::retrieval) fn cue_tokens(text: &str) -> Vec<String> {
+    raw_tokens(text).into_iter().map(|w| stem(&w)).collect()
+}
+
+pub(in crate::retrieval) fn intern_cues(text: &str, vocab: &mut DetHashMap<String, u32>) -> Vec<u32> {
+    let mut ids: Vec<u32> = cue_tokens(text)
+        .into_iter()
+        .map(|w| {
+            let next = vocab.len() as u32;
+            *vocab.entry(w).or_insert(next)
+        })
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// Ingest-time 1-hop WordNet/ConceptNet bridge postings and Haystack Positive PMI neighbors.
+pub(in crate::retrieval) fn build_bridge_postings_and_ppmi(
+    p: &Params,
+    vocab: &Vocab,
+    turns: &[TurnIx],
+    t_own_stats: &Stats,
+) -> (Vocab, Vec<Vec<u32>>, DetHashMap<u32, Vec<(u32, f32)>>) {
+    // 1-hop ingest WordNet bridge postings in private `bridge_vocab` (`ix.vocab` untouched!).
+    // Memoize WordNet + stem expansion once per unique rare `cid` (0-diff exact parity, ~5x faster).
+    let n_turns_u32 = (t_own_stats.n as u32).max(1);
+    let max_rare_df = (n_turns_u32 / 8).max(4);
+    let mut bridge_vocab = Vocab::default();
+    let mut turn_bridge_sets: Vec<DetHashSet<u32>> = vec![DetHashSet::default(); turns.len()];
+    let bridge_df_cap = max_rare_df.min(24);
+    if p.enable_hypernyms {
+        let mut cid_to_bridge: DetHashMap<u32, Vec<u32>> = DetHashMap::default();
+        for (&cid, &df) in &t_own_stats.df {
+            if df == 0 || df > bridge_df_cap {
+                continue;
+            }
+            let word = &vocab.names[cid as usize];
+            if word.starts_with('\u{1}') {
+                continue;
+            }
+            let mut bids = Vec::new();
+            for lemma in wordnet_lemmas_with_morph(word) {
+                let lid = bridge_vocab.intern(lemma);
+                if !bids.contains(&lid) {
+                    bids.push(lid);
+                }
+                if p.enable_stemming {
+                    let sid = bridge_vocab.intern(&stem_term(&stem(lemma)));
+                    if !bids.contains(&sid) {
+                        bids.push(sid);
+                    }
+                }
+            }
+            // Hovy 3-hop upward-only `@` hypernyms (zero downward explosion)
+            for lemma in crate::wordnet::upward_hypernyms(word, 3) {
+                let lid = bridge_vocab.intern(lemma);
+                if !bids.contains(&lid) {
+                    bids.push(lid);
+                }
+                if p.enable_stemming {
+                    let sid = bridge_vocab.intern(&stem_term(&stem(lemma)));
+                    if !bids.contains(&sid) {
+                        bids.push(sid);
+                    }
+                }
+            }
+            // #817: sha256-pinned ConceptNet 5.7.0 (AtLocation, UsedFor, CapableOf, HasA)
+            for (cn_lemma, _w) in crate::conceptnet::two_hop_neighbors(word, 4) {
+                let lid = bridge_vocab.intern(cn_lemma);
+                if !bids.contains(&lid) {
+                    bids.push(lid);
+                }
+                if p.enable_stemming {
+                    let sid = bridge_vocab.intern(&stem_term(&stem(cn_lemma)));
+                    if !bids.contains(&sid) {
+                        bids.push(sid);
+                    }
+                }
+            }
+            if !bids.is_empty() {
+                cid_to_bridge.insert(cid, bids);
+            }
+        }
+        for ti in 0..turns.len() {
+            if turns[ti].is_backchannel {
+                continue;
+            }
+            for &cid in &turns[ti].content {
+                if let Some(bids) = cid_to_bridge.get(&cid) {
+                    turn_bridge_sets[ti].extend(bids.iter().copied());
+                }
+            }
+        }
+    }
+    let mut turn_bridge_postings = vec![Vec::new(); bridge_vocab.names.len()];
+    for (ti, bset) in turn_bridge_sets.iter().enumerate() {
+        for &bid in bset {
+            if let Some(list) = turn_bridge_postings.get_mut(bid as usize) {
+                list.push(ti as u32);
+            }
+        }
+    }
+
+    // Haystack Positive PMI associations over rare content tokens (`2 <= df <= max_rare_df`).
+    let mut pair_counts: DetHashMap<(u32, u32), u32> = DetHashMap::default();
+    for ti in 0..turns.len() {
+        let mut rare_toks: Vec<u32> = turns[ti]
+            .content
+            .iter()
+            .copied()
+            .filter(|id| {
+                let df = t_own_stats.df.get(id).copied().unwrap_or(0);
+                df >= 2 && df <= max_rare_df
+            })
+            .collect();
+        if let Some(ans_prev) = turns[ti].answers {
+            for &id in &turns[ans_prev].content {
+                let df = t_own_stats.df.get(&id).copied().unwrap_or(0);
+                if df >= 2 && df <= max_rare_df {
+                    rare_toks.push(id);
+                }
+            }
+        }
+        rare_toks.sort_unstable();
+        rare_toks.dedup();
+        if rare_toks.len() > 48 {
+            rare_toks.truncate(48);
+        }
+        if rare_toks.len() <= 24 {
+            for i in 0..rare_toks.len() {
+                for j in (i + 1)..rare_toks.len() {
+                    *pair_counts.entry((rare_toks[i], rare_toks[j])).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    let mut ppmi_neighbors: DetHashMap<u32, Vec<(u32, f32)>> = DetHashMap::default();
+    let n_f = t_own_stats.n.max(1.0);
+    for ((u, v), c_uv) in pair_counts {
+        if c_uv < 2 {
+            continue;
+        }
+        let df_u = t_own_stats.df.get(&u).copied().unwrap_or(1) as f32;
+        let df_v = t_own_stats.df.get(&v).copied().unwrap_or(1) as f32;
+        let ppmi = ((c_uv as f32 * n_f) / (df_u * df_v)).log2();
+        if ppmi >= 2.5 {
+            let w = (ppmi / 10.0).clamp(0.18, 0.45);
+            ppmi_neighbors.entry(u).or_default().push((v, w));
+            ppmi_neighbors.entry(v).or_default().push((u, w));
+        }
+    }
+    for list in ppmi_neighbors.values_mut() {
+        list.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        list.truncate(6);
+    }
+
+    (bridge_vocab, turn_bridge_postings, ppmi_neighbors)
+}

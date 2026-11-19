@@ -17,53 +17,33 @@
 #![allow(clippy::all)]
 
 
-mod ac3;
-mod actr;
-mod bm25l_dfr;
-mod bridge;
-mod causal;
-mod coref;
-mod dph;
-mod focus;
-mod ghostlink_dgs;
-mod hobbs;
+mod fusion;
+mod graph;
 mod index;
-mod locke_ledger;
-mod psl_ilp;
-mod qld;
+mod lexical;
+mod query;
 mod rank;
-mod rbp;
-mod rocchio;
-mod rst;
-mod scoring;
 mod seating;
-mod supersession;
-mod taxa;
-mod temporal_allen;
-mod tokens;
-mod torrens;
-mod viterbi;
-mod wand;
 #[cfg(test)]
 mod tests;
 
-// Flatten every submodule back into `retrieval::` so the public API (and every
-// crate-internal path) is identical to the former single-file module.
-use self::bridge::*;
+// Flatten core pipeline modules into `retrieval::` while preserving exact crate visibility
+// for all 8 stage submodules and their children (`seating::c2`, `rank::stage*`, `index::rsb`, etc.).
+use self::fusion::*;
+use self::graph::*;
 pub use self::index::*;
+use self::lexical::*;
+pub use self::query::*;
 use self::rank::*;
-pub use self::scoring::*;
 use self::seating::*;
-use self::supersession::*;
-pub use self::tokens::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
 // Step 10B: fixed-key SipHash instead of per-process RandomState.
-type DetHasher = std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>;
-type DetHashMap<K, V> = HashMap<K, V, DetHasher>;
-type DetHashSet<K> = HashSet<K, DetHasher>;
+pub(in crate::retrieval) type DetHasher = std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>;
+pub(in crate::retrieval) type DetHashMap<K, V> = HashMap<K, V, DetHasher>;
+pub(in crate::retrieval) type DetHashSet<K> = HashSet<K, DetHasher>;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::OnceLock;
@@ -342,7 +322,7 @@ thread_local! {
     static REPLAY_SNAPS: std::cell::RefCell<Vec<ReplaySnap>> = std::cell::RefCell::new(Vec::new());
 }
 
-fn maybe_dump_replay(
+pub(in crate::retrieval) fn maybe_dump_replay(
     _ix: &Index,
     q: &Query,
     k: usize,

@@ -1,0 +1,176 @@
+//! Seating pass: `w2_standing_register`.
+
+use crate::retrieval::*;
+
+
+/// [W2-028 / W2-031] Constraint Posting & Assistant Echo (`StandingRegister` 64-bit Bloom):
+/// For closed-class planning/recommendation queries, checks the 64-bit `standing_register`
+/// in O(1) and promotes a topic-matched durable user directive (`field == 0`) ahead of
+/// same-session assistant echoes (`field == 1`) or zero-exact-match occupants in Slot 2 or 3.
+pub(in crate::retrieval) fn apply_w2_standing_register_seat(
+    ix: &Index,
+    q_text: &str,
+    plan: &QueryPlan,
+    final_turn_indices: &mut Vec<usize>,
+    t_exact_mask: &[u64],
+) {
+    if ix.standing_register == 0
+        || ix.standing_directive_turns.is_empty()
+        || final_turn_indices.len() < 3
+    {
+        return;
+    }
+    let ql = q_text.to_ascii_lowercase();
+    // hardcode-scan: closed-class (modal recommendation & planning question openings)
+    let is_planning_or_rec = [
+        "what should", "how should", "where should", "which should",
+        "can you", "could you", "would you", "should i", "should we",
+        "do you recommend", "any suggestions", "any recommendations",
+        "suggest", "recommend", "advice", "what can i", "how can i",
+    ]
+    .iter()
+    .any(|cue| ql.contains(cue));
+    if !is_planning_or_rec {
+        return;
+    }
+
+    let n_docs = (ix.t_own_stats.n as u32).max(1);
+    let max_df = (n_docs / 16).clamp(3, 18);
+    let q_domain: Vec<u32> = plan
+        .terms
+        .iter()
+        .filter(|qt| qt.exact_hit)
+        .filter_map(|qt| {
+            let df = ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(0);
+            (df > 0 && df <= max_df).then_some(qt.id)
+        })
+        .collect();
+    if q_domain.is_empty() {
+        return;
+    }
+
+    let mut q_bloom = 0u64;
+    for &id in &q_domain {
+        q_bloom |= 1u64 << (id % 64);
+    }
+    if (ix.standing_register & q_bloom) == 0 {
+        return;
+    }
+
+    // hardcode-scan: closed-class (modal preference consultation, guarded against factual WH-past)
+    let explicit_pref_consult = wh_slots(q_text) == 0
+        && !ql.contains("did i ")
+        && !ql.contains("did we ")
+        && !ql.contains("was my ")
+        && (ql.contains("suggest")
+            || ql.contains("recommend")
+            || ql.contains("advice")
+            || ql.contains("any tips")
+            || ql.contains("which should i")
+            || ql.contains("what should i")
+            || ql.contains("should i ")
+            || ql.contains("would you "));
+
+    let mut best_dir: Option<(usize, usize)> = None;
+    let directive_pool: &[usize] = if explicit_pref_consult && !ix.preference_directive_turns.is_empty() {
+        &ix.preference_directive_turns
+    } else {
+        &ix.standing_directive_turns
+    };
+    let check_already_seated = |dti: usize| -> bool {
+        if explicit_pref_consult {
+            final_turn_indices.first() == Some(&dti)
+        } else {
+            final_turn_indices[..3].contains(&dti)
+        }
+    };
+    for &dti in directive_pool.iter().rev() {
+        if turn_is_superseded(ix, dti) || check_already_seated(dti) {
+            continue;
+        }
+        let turn_body_low = ix.turns[dti].body_for_headers.to_ascii_lowercase();
+        // Guard against instruction echo / assistant restatement framing:
+        if turn_body_low.starts_with("given that i have to")
+            || turn_body_low.starts_with("given that i need")
+            || turn_body_low.starts_with("since i have to")
+            || turn_body_low.starts_with("since i need")
+        {
+            continue;
+        }
+        let mut hits = q_domain
+            .iter()
+            .filter(|id| ix.turns[dti].content.contains(id))
+            .count();
+        if hits == 0 && c2_policy_inflects_query(ix, dti, plan) {
+            hits = 1;
+        }
+        if hits == 0 {
+            continue;
+        }
+        if best_dir.map_or(true, |(bh, _)| hits > bh) {
+            best_dir = Some((hits, dti));
+        }
+    }
+
+    // Fallback to general `standing_directive_turns` when `preference_directive_turns` had 0 domain overlap:
+    if best_dir.is_none() && explicit_pref_consult && !ix.preference_directive_turns.is_empty() {
+        for &dti in ix.standing_directive_turns.iter().rev() {
+            if turn_is_superseded(ix, dti) || final_turn_indices[..3].contains(&dti) {
+                continue;
+            }
+            let hits = q_domain
+                .iter()
+                .filter(|id| ix.turns[dti].content.contains(id))
+                .count();
+            if hits > 0 && best_dir.map_or(true, |(bh, _)| hits > bh) {
+                best_dir = Some((hits, dti));
+            }
+        }
+    }
+
+    let Some((best_hits, dir_ti)) = best_dir else { return };
+    let dir_sess = ix.turns[dir_ti].session;
+
+    // Explicit `"would you suggest"` / `"would you recommend"` preference consultation in long chats:
+    // promote domain-matched compound preference directive (`"I prefer..."`, `"I'd like to..."`) directly to Slot 0!
+    if explicit_pref_consult
+        && ix.turns.len() >= 64
+        && best_hits >= 1
+        && ix.preference_directive_turns.contains(&dir_ti)
+    {
+        let orig_len = final_turn_indices.len();
+        if let Some(existing) = final_turn_indices.iter().position(|&t| t == dir_ti) {
+            final_turn_indices.remove(existing);
+        }
+        final_turn_indices.insert(0, dir_ti);
+        final_turn_indices.truncate(orig_len);
+        return;
+    }
+
+    // Assistant echo swap: if slots 1 or 2 hold a same-session assistant echo (`field == 1`), swap it.
+    if let Some(echo_slot) = (1..3usize).find(|&s| {
+        let vti = final_turn_indices[s];
+        ix.turns[vti].field == 1 && ix.turns[vti].session == dir_sess
+    }) {
+        if let Some(existing) = final_turn_indices.iter().position(|&t| t == dir_ti) {
+            final_turn_indices.swap(echo_slot, existing);
+        } else {
+            final_turn_indices[echo_slot] = dir_ti;
+        }
+        return;
+    }
+
+    // Otherwise admit into Slot 2 (or Slot 1) only if current occupant is an assistant turn
+    // or lacks exact query-term hits.
+    for slot in [2usize, 1usize] {
+        let vti = final_turn_indices[slot];
+        if ix.turns[vti].field == 1 || t_exact_mask.get(vti).copied().unwrap_or(0) == 0 {
+            if let Some(existing) = final_turn_indices.iter().position(|&t| t == dir_ti) {
+                final_turn_indices.swap(slot, existing);
+            } else {
+                final_turn_indices[slot] = dir_ti;
+            }
+            return;
+        }
+    }
+}
