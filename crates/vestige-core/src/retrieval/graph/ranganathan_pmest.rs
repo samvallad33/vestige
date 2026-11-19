@@ -73,9 +73,11 @@ pub(in crate::retrieval) fn compute_ranganathan_pmest_lifts_q16(
     }
 
     let top0_sig = sess_sigs[top0];
+    let top0_mask = s_exact_mask.get(top0).copied().unwrap_or(0);
     let mut raw = vec![0u64; ns];
     for (si, &sig) in sess_sigs.iter().enumerate() {
-        if si != top0 && s_exact_mask[si] != 0 {
+        let m = s_exact_mask.get(si).copied().unwrap_or(0);
+        if si != top0 && m != 0 && ((m & !top0_mask) != 0 || top0_mask == 0) {
             raw[si] = complementary_pmest_gain_q16(q_sig, top0_sig, sig);
         }
     }

@@ -54,10 +54,15 @@ pub(in crate::retrieval) fn compute_lachmann_stemma_lifts_q16(
         return out;
     }
     let arch = compute_archetype_originality_q16(&ix.session_rare_nt);
+    let top0_mask = s_exact_mask.get(top0).copied().unwrap_or(0);
+    let adds_cov = |si: usize| -> bool {
+        let m = s_exact_mask.get(si).copied().unwrap_or(0);
+        m != 0 && ((m & !top0_mask) != 0 || top0_mask == 0)
+    };
     let max_a = arch
         .iter()
         .enumerate()
-        .filter(|&(si, _)| si != top0 && s_exact_mask[si] != 0)
+        .filter(|&(si, _)| si != top0 && adds_cov(si))
         .map(|(_, &v)| v)
         .max()
         .unwrap_or(0);
@@ -65,7 +70,7 @@ pub(in crate::retrieval) fn compute_lachmann_stemma_lifts_q16(
         return out;
     }
     for (si, &a) in arch.iter().enumerate() {
-        if si != top0 && a > 0 && s_exact_mask[si] != 0 {
+        if si != top0 && a > 0 && adds_cov(si) {
             let norm_q16 = (a.saturating_mul(Q16_ONE)) / max_a;
             out[si] = (((smax_q16.saturating_mul(LACHMANN_COEFF_Q16)) >> Q16_SHIFT)
                 .saturating_mul(norm_q16))
