@@ -507,14 +507,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             &s_ord_base,
             smax_q16,
         );
-        apply_rule8_capped_q16_lifts(
-            &ppr_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
-        );
         let tlm_lifts =
             crate::retrieval::lexical::translation_lm::compute_translation_lm_lifts_q16(
                 ix,
@@ -524,28 +516,12 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 top0,
                 smax_q16,
             );
-        apply_rule8_capped_q16_lifts(
-            &tlm_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
-        );
         let tp_lifts = crate::retrieval::lexical::bm25tp::compute_session_bm25tp_lifts_q16(
             ix,
             plan,
             s_exact_mask,
             top0,
             smax_q16,
-        );
-        apply_rule8_capped_q16_lifts(
-            &tp_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
         );
         let swanson_lifts = crate::retrieval::graph::swanson_abc::compute_swanson_abc_lifts_q16(
             ix,
@@ -555,14 +531,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             &s_ord_base,
             smax_q16,
         );
-        apply_rule8_capped_q16_lifts(
-            &swanson_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
-        );
         let fs_lifts =
             crate::retrieval::graph::fellegi_sunter::compute_fellegi_sunter_lifts_q16(
                 ix,
@@ -570,14 +538,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 top0,
                 smax_q16,
             );
-        apply_rule8_capped_q16_lifts(
-            &fs_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
-        );
         let centering_lifts =
             crate::retrieval::query::centering::compute_centering_coherence_lifts_q16(
                 ix,
@@ -585,14 +545,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 top0,
                 smax_q16,
             );
-        apply_rule8_capped_q16_lifts(
-            &centering_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
-        );
         let broker_lifts =
             crate::retrieval::graph::freeman_brokerage::compute_freeman_brokerage_lifts_q16(
                 ix,
@@ -601,14 +553,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 &s_ord_base,
                 smax_q16,
             );
-        apply_rule8_capped_q16_lifts(
-            &broker_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
-        );
         let shepard_lifts =
             crate::retrieval::graph::shepard_citations::compute_shepard_citator_lifts_q16(
                 ix,
@@ -616,14 +560,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 &s_ord_base,
                 smax_q16,
             );
-        apply_rule8_capped_q16_lifts(
-            &shepard_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
-        );
         let lachmann_lifts =
             crate::retrieval::graph::lachmann_stemma::compute_lachmann_stemma_lifts_q16(
                 ix,
@@ -631,14 +567,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 top0,
                 smax_q16,
             );
-        apply_rule8_capped_q16_lifts(
-            &lachmann_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
-        );
         let pmest_lifts =
             crate::retrieval::graph::ranganathan_pmest::compute_ranganathan_pmest_lifts_q16(
                 ix,
@@ -647,14 +575,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 top0,
                 smax_q16,
             );
-        apply_rule8_capped_q16_lifts(
-            &pmest_lifts,
-            top0,
-            top0_ceiling_q16,
-            invariant_crisp_lock,
-            &s_score,
-            &mut bridge_boost,
-        );
         let hist_lifts =
             crate::retrieval::graph::historiography_source::compute_historiography_witness_lifts_q16(
                 ix,
@@ -662,16 +582,40 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 top0,
                 smax_q16,
             );
-        if has_named_speakers_eff {
-            apply_rule8_capped_q16_lifts(
-                &hist_lifts,
-                top0,
-                top0_ceiling_q16,
-                invariant_crisp_lock,
-                &s_score,
-                &mut bridge_boost,
-            );
-        }
+
+        // Unified evidence-scaled budget: modules vote, but only sessions that add a query group
+        // missing from top0 may receive a combined lift capped at 0.30 * sight(top0).
+        let hist_vote: &[u64] = if has_named_speakers_eff { &hist_lifts } else { &[] };
+        let budget_lifts = unified_evidence_lift_budget_q16(
+            &[
+                (true, &tp_lifts),
+                (false, &ppr_lifts),
+                (false, &tlm_lifts),
+                (false, &swanson_lifts),
+                (false, &fs_lifts),
+                (false, &centering_lifts),
+                (false, &broker_lifts),
+                (false, &shepard_lifts),
+                (false, &lachmann_lifts),
+                (false, &pmest_lifts),
+                (false, hist_vote),
+            ],
+            s_exact_mask,
+            q_full_mask,
+            top0,
+            crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                (s_score[top0] + bridge_boost[top0]).to_bits(),
+            ),
+            smax_q16,
+        );
+        apply_rule8_capped_q16_lifts(
+            &budget_lifts,
+            top0,
+            top0_ceiling_q16,
+            invariant_crisp_lock,
+            &s_score,
+            &mut bridge_boost,
+        );
 
         // Pure Q16.16 post-bridge `s_ord_base` refresh when `!invariant_crisp_lock`:
         // Require `27:25` (+8%) integer Q16.16 sight margin and non-decreasing / novel exact coverage.
@@ -811,6 +755,61 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     ctx.s_ord_base = s_ord_base;
 }
 
+
+/// Priority vote weight for pre-cut BM25TP proximity evidence (`2.0`).
+const LIFT_W_PRIORITY_Q16: u64 = 131_072;
+/// Vote weight for each graph/discourse module (`0.5`).
+const LIFT_W_MODULE_Q16: u64 = 32_768;
+/// Shared budget as a fraction of `sight(top0)` (`0.30`).
+const LIFT_BUDGET_Q16: u64 = 19_661;
+
+/// Combines module lift votes into one evidence-scaled `Q16.16` budget.
+/// Votes are measured against `smax`, not each module's local maximum. A session needs BM25TP or
+/// two independent module votes, and must add a query group absent from `top0`.
+pub(in crate::retrieval) fn unified_evidence_lift_budget_q16(
+    modules: &[(bool, &[u64])],
+    s_exact_mask: &[u64],
+    q_full_mask: u64,
+    top0: usize,
+    top0_sight_q16: u64,
+    smax_q16: u64,
+) -> Vec<u64> {
+    const Q16_ONE: u64 = 65_536;
+    let ns = s_exact_mask.len();
+    let mut out = vec![0u64; ns];
+    let top0_mask = s_exact_mask.get(top0).copied().unwrap_or(0) & q_full_mask;
+    if ns == 0 || q_full_mask == 0 || top0_mask == q_full_mask || smax_q16 == 0 || top0_sight_q16 == 0 {
+        return out;
+    }
+    let budget_q16 = top0_sight_q16.saturating_mul(LIFT_BUDGET_Q16) >> 16;
+    for (si, slot) in out.iter_mut().enumerate() {
+        let mask = s_exact_mask[si] & q_full_mask;
+        if si == top0 || (mask & !top0_mask) == 0 {
+            continue;
+        }
+        let mut evidence_q16 = 0u64;
+        let mut priority_vote = false;
+        let mut module_votes = 0u32;
+        for &(is_priority, lifts) in modules {
+            let raw = lifts.get(si).copied().unwrap_or(0);
+            if raw == 0 {
+                continue;
+            }
+            let weight_q16 = if is_priority { LIFT_W_PRIORITY_Q16 } else { LIFT_W_MODULE_Q16 };
+            if is_priority {
+                priority_vote = true;
+            } else {
+                module_votes += 1;
+            }
+            let strength_q16 = (raw.saturating_mul(Q16_ONE) / smax_q16).min(Q16_ONE);
+            evidence_q16 = evidence_q16.saturating_add(weight_q16.saturating_mul(strength_q16) >> 16);
+        }
+        if priority_vote || module_votes >= 2 {
+            *slot = budget_q16.saturating_mul(evidence_q16.min(Q16_ONE)) >> 16;
+        }
+    }
+    out
+}
 
 /// Applies a `Q16.16` lift vector to `bridge_boost` while strictly enforcing the invariant
 /// Rule-8 crisp-peak ceiling (`s_score[si] + bridge_boost[si] <= 0.90 * sight(top0)`).
@@ -1187,5 +1186,35 @@ mod associative_multihop_bridge_q16 {
             // Unrelated session 3 receives zero lift
             assert_eq!(lifts[3], 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod unified_budget_tests {
+    use super::unified_evidence_lift_budget_q16 as budget;
+    const ONE: u64 = 65_536;
+    #[test]
+    fn full_top0_coverage_closes_budget() {
+        let lifts = [0, ONE, ONE];
+        let out = budget(&[(true, &lifts)], &[0b11, 0b10, 0b01], 0b11, 0, 10 * ONE, 10 * ONE);
+        assert!(out.iter().all(|&v| v == 0));
+    }
+    #[test]
+    fn lift_requires_new_group_and_agreement() {
+        let one_vote = [0, ONE, ONE, ONE];
+        let second_vote = [0, ONE, 0, ONE];
+        let out = budget(&[(false, &one_vote), (false, &second_vote)],
+            &[0b01, 0b10, 0b10, 0b01], 0b11, 0, 10 * ONE, 10 * ONE);
+        assert!(out[1] > 0);
+        assert_eq!(out[2], 0, "single non-priority vote must not lift");
+        assert_eq!(out[3], 0, "session repeating top0's only group must not lift");
+    }
+    #[test]
+    fn budget_is_evidence_scaled_and_capped() {
+        let weak = [0, ONE / 10, 0];
+        let strong = [0, 0, 10 * ONE];
+        let out = budget(&[(true, &weak), (true, &strong)], &[0b01, 0b10, 0b10], 0b11, 0, 10 * ONE, 10 * ONE);
+        assert!(out[1] < out[2]);
+        assert!(out[2] <= (10 * ONE * 19_661) >> 16);
     }
 }
