@@ -1514,7 +1514,7 @@ mod petrie_camin_sokal_q16 {
                 }
             }
         }
-        char_df.retain(|_, &(df, _, _)| (CHAR_MIN_SESS_DF..=CHAR_MAX_SESS_DF).contains(&df));
+        char_df.retain(|_, &mut (df, _, _)| (CHAR_MIN_SESS_DF..=CHAR_MAX_SESS_DF).contains(&df));
         if char_df.is_empty() {
             return;
         }

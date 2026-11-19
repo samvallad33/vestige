@@ -4,7 +4,6 @@
 
 use super::context::RankCtx;
 use crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16;
-use crate::retrieval::*;
 
 /// Unit `1.0` in unsigned `Q16.16` fixed-point math (`2^16`).
 const Q16_ONE: u64 = 65_536;
