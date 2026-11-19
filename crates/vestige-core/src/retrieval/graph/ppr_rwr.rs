@@ -35,6 +35,9 @@ pub(in crate::retrieval) fn run_ppr_rwr_q16(
         deg[u] = nbrs.iter().map(|&(_, w)| w).sum();
     }
     let mut p = restart_q16.to_vec();
+    // Truncated PPR series: accumulate visit mass over every step so a
+    // 1-hop neighbour is never outscored by a 2-hop one through walk parity.
+    let mut acc = vec![0u64; ns];
     for _ in 0..PPR_STEPS {
         let mut walked = vec![0u64; ns];
         for (u, nbrs) in adj.iter().enumerate() {
@@ -50,9 +53,10 @@ pub(in crate::retrieval) fn run_ppr_rwr_q16(
             let r_part = restart_q16[s] / PPR_ALPHA_DEN;
             let w_part = (walked[s].saturating_mul(PPR_ALPHA_NUM)) / PPR_ALPHA_DEN;
             *slot = r_part.saturating_add(w_part);
+            acc[s] = acc[s].saturating_add(w_part);
         }
     }
-    p
+    acc
 }
 
 /// Computes `Q16.16` session lift vector from 2-step Bipartite PPR / RWR.
