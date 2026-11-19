@@ -482,17 +482,21 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 && top0_lex.saturating_mul(9) >= top1_lex.saturating_mul(10));
         let multi_or_partial = eff_it.multi_hop || !top0_full_cov || !invariant_crisp_lock;
 
-        associative_multihop_bridge_q16::apply_multihop_open_domain_session_lift(
-            ix,
-            plan,
-            it,
-            eff_it,
-            &s_score,
-            s_exact_mask,
-            &s_ord_base,
-            smax,
-            &mut bridge_boost,
-        );
+        // The ungated associative RSB/PPMI walk is calibrated for named dialogue only; on
+        // user/assistant streams it pulls later RSB neighbours forward (see index_tests RSB guard).
+        if has_named_speakers_eff {
+            associative_multihop_bridge_q16::apply_multihop_open_domain_session_lift(
+                ix,
+                plan,
+                it,
+                eff_it,
+                &s_score,
+                s_exact_mask,
+                &s_ord_base,
+                smax,
+                &mut bridge_boost,
+            );
+        }
         let top0_ceiling_q16 = (crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
             (s_score[top0] + bridge_boost[top0]).to_bits(),
         )
