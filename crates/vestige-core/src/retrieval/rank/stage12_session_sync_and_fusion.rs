@@ -1159,6 +1159,13 @@ mod stratigraphic_mst_engram_q16 {
                 sess_decl_ents[t.session].insert(eid);
             }
         }
+        if deep_pool {
+            for (si, rares) in ix.session_rare_nt.iter().enumerate() {
+                for &rid in rares.iter().take(12) {
+                    sess_decl_ents[si].insert(rid);
+                }
+            }
+        }
         for ents in &sess_decl_ents {
             for &eid in ents {
                 *ent_sess_df.entry(eid).or_insert(0) += 1;
@@ -1465,18 +1472,27 @@ mod petrie_camin_sokal_q16 {
         }
 
         let mut net_wins = vec![0i64; n];
+        let deep_mode = m > SERIATION_POOL_CAP;
         for i in 0..n {
             let si = sub[i];
             let ex_i = s_exact_mask.get(si).copied().unwrap_or(0).count_ones();
-            let state_i = (ex_i as u64)
-                .saturating_mul(Q16_ONE)
-                .saturating_add(u64::from(vec_depth_q16[si] > 0) * (Q16_ONE >> 1));
+            let state_i = if deep_mode {
+                vec_depth_q16[si].saturating_add((ex_i as u64) * (Q16_ONE >> 2))
+            } else {
+                (ex_i as u64)
+                    .saturating_mul(Q16_ONE)
+                    .saturating_add(u64::from(vec_depth_q16[si] > 0) * (Q16_ONE >> 1))
+            };
             for j in (i + 1)..n {
                 let sj = sub[j];
                 let ex_j = s_exact_mask.get(sj).copied().unwrap_or(0).count_ones();
-                let state_j = (ex_j as u64)
-                    .saturating_mul(Q16_ONE)
-                    .saturating_add(u64::from(vec_depth_q16[sj] > 0) * (Q16_ONE >> 1));
+                let state_j = if deep_mode {
+                    vec_depth_q16[sj].saturating_add((ex_j as u64) * (Q16_ONE >> 2))
+                } else {
+                    (ex_j as u64)
+                        .saturating_mul(Q16_ONE)
+                        .saturating_add(u64::from(vec_depth_q16[sj] > 0) * (Q16_ONE >> 1))
+                };
 
                 let mut margin = 0i64;
                 match lexical_q16[si].cmp(&lexical_q16[sj]) {
@@ -1549,7 +1565,16 @@ mod petrie_camin_sokal_q16 {
                 continue;
             }
             let si = t.session;
-            for &eid in &t.entities {
+            let iter_ids: Vec<u32> = if deep_pool {
+                t.entities
+                    .iter()
+                    .copied()
+                    .chain(ix.session_rare_nt[si].iter().copied().take(12))
+                    .collect()
+            } else {
+                t.entities.iter().copied().collect()
+            };
+            for eid in iter_ids {
                 if sess_ents[si].insert(eid) {
                     char_df
                         .entry(eid)
