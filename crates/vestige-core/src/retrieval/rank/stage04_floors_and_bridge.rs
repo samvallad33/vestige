@@ -588,6 +588,22 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             &s_score,
             &mut bridge_boost,
         );
+        let broker_lifts =
+            crate::retrieval::graph::freeman_brokerage::compute_freeman_brokerage_lifts_q16(
+                ix,
+                plan,
+                s_exact_mask,
+                &s_ord_base,
+                smax_q16,
+            );
+        apply_rule8_capped_q16_lifts(
+            &broker_lifts,
+            top0,
+            top0_ceiling_q16,
+            invariant_crisp_lock,
+            &s_score,
+            &mut bridge_boost,
+        );
     }
 
     ctx.s_score = s_score;
