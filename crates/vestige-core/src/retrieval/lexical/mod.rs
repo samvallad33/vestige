@@ -2,6 +2,7 @@
 
 pub(in crate::retrieval) mod bm25f;
 pub(in crate::retrieval) mod bm25l_dfr;
+pub(in crate::retrieval) mod bm25tp;
 pub(in crate::retrieval) mod dph;
 pub(in crate::retrieval) mod qld;
 pub(in crate::retrieval) mod rbp;
