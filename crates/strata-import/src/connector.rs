@@ -49,6 +49,7 @@ pub struct StoreCatalogEntry {
 }
 
 /// Complete Wave 14N catalog covering all 8 protocol families.
+// hardcode-scan: protocol (Wave 14N external database connector catalog)
 pub const STORE_CATALOG: &[StoreCatalogEntry] = &[
     // Family A: Postgres wire
     StoreCatalogEntry { slug: "pgvector", display_name: "pgvector", family: ConnectorFamily::PostgresWire, driver: "postgres-readonly-sql" },
