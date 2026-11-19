@@ -63,10 +63,14 @@ pub(in crate::retrieval) fn compute_centering_coherence_lifts_q16(
     if ns <= 5 || top0 >= ns || smax_q16 == 0 {
         return out;
     }
+    let speakers: BTreeSet<String> = ix.turns.iter().filter(|t| !t.speaker.is_empty())
+        .map(|t| t.speaker.to_lowercase()).collect();
     let focal_ents: BTreeSet<u32> = plan
         .terms
         .iter()
         .filter(|qt| qt.exact_hit && qt.group.is_some())
+        .filter(|qt| ix.vocab.names.get(qt.id as usize).is_some_and(|name|
+            !speakers.contains(name.trim_start_matches("\u{1}ent:"))))
         .map(|qt| qt.id)
         .collect();
     if focal_ents.is_empty() {
@@ -127,5 +131,19 @@ mod tests {
             score_centering_transitions_q16(&cont, &focal)
                 > score_centering_transitions_q16(&pass, &focal)
         );
+    }
+}
+
+#[cfg(test)]
+mod speaker_tests {
+    use super::*;
+    use crate::retrieval::{tests::{ix_of, s, turn}, *};
+    #[test]
+    fn speaker_only_query_has_no_centering_lift() {
+        let sessions: Vec<_> = (0..8).map(|i| s(&i.to_string(), vec![
+            turn("Alice", "Alice paints murals."), turn("Bob", "Alice paints again.")])).collect();
+        let ix = ix_of(&sessions);
+        let plan = crate::retrieval::query::plan::plan_query(&ix, &Query { text: "Alice".into(), date: String::new() }, &Params::default());
+        assert!(compute_centering_coherence_lifts_q16(&ix, &plan, 0, 65536).iter().all(|v| *v == 0));
     }
 }
