@@ -89,8 +89,10 @@ if p.enable_submodular && ns > 1 {
                             .iter()
                             .filter_map(|&s| ochiai_divergence(&ix.session_rare_nt[s], &ix.session_rare_nt[si]))
                             .fold(None::<f32>, |acc, d| Some(acc.map_or(d, |a| a.min(d))));
+                        let distinct_date = ix.session_ts[si] > 0
+                            && selected.iter().all(|&s| ix.session_ts[s] != ix.session_ts[si]);
                         let distinct_episode = min_ochiai.is_some_and(|d| d >= 0.58)
-                            && (ix.session_ts[si] == 0 || selected.iter().all(|&s| ix.session_ts[s] != ix.session_ts[si]));
+                            && (ix.session_ts[si] == 0 || distinct_date);
                         let redundancy = if same_date_seen {
                             0.25
                         } else if topic_seen {
@@ -98,6 +100,7 @@ if p.enable_submodular && ns > 1 {
                         } else if !eff_it.is_event_sequence
                             && !it.sniper_how_many
                             && !distinct_episode
+                            && !distinct_date
                             && uncovered == 0.0
                             && bridge_boost[si] < 0.12 * smax
                             && shared_ent

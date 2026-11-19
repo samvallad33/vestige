@@ -790,6 +790,47 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         &s_exact_mask,
         k,
     );
+    if has_named_speakers_eff
+        && !eff_it.is_event_sequence
+        && !pref_on
+        && !eff_it.task_under_rules
+        && !taxa_promoted
+        && !torrens_locked_head
+    {
+        let sight_all_q16: Vec<u64> = (0..ix.session_turns.len())
+            .map(|si| {
+                crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                    (s_score[si] + bridge_boost[si]).to_bits(),
+                )
+            })
+            .collect();
+        let best_scene_q16: Vec<u64> = (0..ix.session_turns.len())
+            .map(|si| {
+                ix.session_turns[si]
+                    .iter()
+                    .map(|&ti| {
+                        crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                            t_scene[ti].to_bits(),
+                        )
+                    })
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        let rrf_inp = crate::retrieval::fusion::top10_rrf::Top10RrfInputs {
+            ix,
+            q_text: &q.text,
+            plan: &plan,
+            final_turn_indices: &final_turn_indices,
+            best_scene_q16: &best_scene_q16,
+            sight_all_q16: &sight_all_q16,
+            s_exact_mask: &s_exact_mask,
+        };
+        crate::retrieval::fusion::top10_rrf::apply_slot0_locked_top10_rrf(
+            &rrf_inp,
+            &mut final_session_indices,
+        );
+    }
 
     // Named-Dialogue Multi-Session Top-5 Coverage Guarantee (runs AFTER 5-voter Kemeny session fusion):
     // Prevent any single session from hoarding 3+ Top-5 slots when strong Top-4 sessions have zero turns,
