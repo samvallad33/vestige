@@ -27,9 +27,15 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         .iter()
         .take(64)
         .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
+    let s0_dominant = !eff_it.multi_hop
+        && final_session_indices.len() >= 2
+        && (s_score[final_session_indices[0]] + bridge_boost[final_session_indices[0]])
+            >= 1.35 * (s_score[final_session_indices[1]] + bridge_boost[final_session_indices[1]]);
     // Weapon 4: Greedy Submodular Set Cover for Top-K Turn Selection
     let max_per_session_top5 = if eff_it.is_event_sequence {
         1
+    } else if s0_dominant {
+        3
     } else if eff_it.multi_hop
         || (!pref_on && !eff_it.task_under_rules && (strong_top_sessions >= 2 || (has_named_speakers_top && ns >= 5)))
     {
@@ -91,7 +97,15 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     .iter()
                     .filter(|&&t| ix.turns[t].session == vs)
                     .count();
-                cnt >= 2 && t_scene[best_ti] >= eff_q4_turn * t_scene[vti]
+                let min_cnt = if s0_dominant
+                    && Some(vs) == final_session_indices.first().copied()
+                    && (s_score[si] + bridge_boost[si]) < 0.62 * smax
+                {
+                    3
+                } else {
+                    2
+                };
+                cnt >= min_cnt && t_scene[best_ti] >= eff_q4_turn * t_scene[vti]
             });
             if let Some(slot) = victim_slot {
                 if let Some(existing) = final_turn_indices.iter().position(|&t| t == best_ti) {

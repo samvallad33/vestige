@@ -236,15 +236,22 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
             }
             continue;
         }
-        let is_frame = can_demote_framing && frame_token(w);
+        let is_meta_task_framing = can_demote_framing
+            && (crate::retrieval::eff_summary_request(&q.text) || intent.is_event_sequence)
+            && matches!(
+                w.as_str(),
+                "summary" | "summarize" | "comprehensive" | "conversations" | "overview" | "progressed" | "aspects" | "timeline" | "walkthrough"
+            );
+        let is_frame = (can_demote_framing && frame_token(w)) || is_meta_task_framing;
         if is_frame {
+            let fw = if is_meta_task_framing { 0.12 } else { 0.30 };
             if let Some(id) = ix.vocab.get(w) {
-                terms.push(QTerm { id, weight: 0.30, group: None, exact_hit: false });
+                terms.push(QTerm { id, weight: fw, group: None, exact_hit: false });
             }
             if p.enable_stemming {
                 let st = stem(w);
                 if let Some(id) = ix.vocab.get(&stem_term(&st)) {
-                    terms.push(QTerm { id, weight: 0.20, group: None, exact_hit: false });
+                    terms.push(QTerm { id, weight: fw * 0.7, group: None, exact_hit: false });
                 }
             }
             continue;

@@ -20,19 +20,34 @@
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, statSync, readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
-function resetAutopsyLedger(benchName) {
-  const dir = join(resolve('.'), 'benchmarks', 'results');
-  mkdirSync(dir, { recursive: true });
-  const p = join(dir, `misses_${benchName}.jsonl`);
-  writeFileSync(p, '', 'utf8');
-  return p;
+function classifyMissRank(zeroBasedIdx) {
+  if (zeroBasedIdx === 0) return 'HIT_RANK_1';
+  if (zeroBasedIdx >= 1 && zeroBasedIdx < 5) return 'NEAR_MISS_RANKS_2_5';
+  if (zeroBasedIdx >= 5 && zeroBasedIdx < 10) return 'IN_TOP10_RANKS_6_10';
+  return 'NOT_IN_TOP10';
 }
 
-function recordAutopsyMiss(ledgerPath, record) {
-  appendFileSync(ledgerPath, JSON.stringify(record) + '\n', 'utf8');
+function resetAutopsyLedger(benchName, customOut = null) {
+  const dir = join(resolve('.'), 'benchmarks', 'results');
+  mkdirSync(dir, { recursive: true });
+  const finalPath = customOut ? resolve(String(customOut)) : join(dir, `misses_${benchName}.jsonl`);
+  const tmpPath = `${finalPath}.tmp.${process.pid}`;
+  return { finalPath, tmpPath, rows: [] };
+}
+
+function recordAutopsyMiss(ledger, record) {
+  if (!ledger) return;
+  ledger.rows.push(JSON.stringify(record));
+}
+
+function flushAutopsyLedger(ledger) {
+  if (!ledger) return;
+  const payload = ledger.rows.length > 0 ? ledger.rows.join('\n') + '\n' : '';
+  writeFileSync(ledger.tmpPath, payload, 'utf8');
+  renameSync(ledger.tmpPath, ledger.finalPath);
 }
 
 const rootDir = resolve('.');
@@ -118,12 +133,14 @@ function parseArgs() {
     split: '100k',
     limit: null,
     out: null,
+    missOut: null,
   };
   for (const a of process.argv.slice(2)) {
     if (a.startsWith('--bench=')) args.bench = a.split('=')[1].toLowerCase();
     else if (a.startsWith('--split=')) args.split = a.split('=')[1].toLowerCase();
     else if (a.startsWith('--limit=')) args.limit = parseInt(a.split('=')[1], 10);
     else if (a.startsWith('--out=')) args.out = a.split('=')[1];
+    else if (a.startsWith('--miss-out=')) args.missOut = a.split('=')[1];
   }
   return args;
 }
@@ -187,7 +204,7 @@ async function runBeam(args) {
   let pktTurnAny5 = 0, pktTurnAll5 = 0;
 
   const categoryStats = {};
-  const beamLedger = resetAutopsyLedger(`beam_${splitDir.toLowerCase()}`);
+  const beamLedger = resetAutopsyLedger(`beam_${splitDir.toLowerCase()}`, args.missOut);
   const t0 = Date.now();
   const convsToRun = args.limit ? convDirs.slice(0, args.limit) : convDirs;
 
@@ -202,33 +219,41 @@ async function runBeam(args) {
     const sessions = [];
     const turnIdToSessionId = new Map();
     const turnTextMap = new Map();
-    for (let bi = 0; bi < chatData.length; bi++) {
-      const batch = chatData[bi];
-      const batchAnchor = batch.time_anchor || batch.turns?.[0]?.[0]?.time_anchor || '';
-      for (let subIdx = 0; subIdx < batch.turns.length; subIdx++) {
-        const sub = batch.turns[subIdx];
-        if (!Array.isArray(sub) || sub.length === 0) continue;
-        const sId = `conv${cId}_b${bi}_s${subIdx}`;
-        const turns = [];
-        for (let ti = 0; ti < sub.length; ti++) {
-          const t = sub[ti];
-          const tid = String(t.id);
-          turns.push({
-            id: tid,
-            role: t.role || 'user',
-            content: t.content || '',
+    // Normalize both flat batch arrays (100K/500K/1M) and nested plan->batch objects (10M)
+    // with plan-prefixed session IDs so batch indices never collide across plans.
+    const planGroups = (Array.isArray(chatData) && chatData.length > 0 && !Array.isArray(chatData[0]?.turns))
+      ? chatData.map((planObj, pi) => ({ planTag: `p${pi}_`, batches: Object.values(planObj || {})[0] || [] }))
+      : [{ planTag: '', batches: chatData }];
+    for (const { planTag, batches } of planGroups) {
+      for (let bi = 0; bi < batches.length; bi++) {
+        const batch = batches[bi];
+        if (!batch || !Array.isArray(batch.turns)) continue;
+        const batchAnchor = batch.time_anchor || batch.turns?.[0]?.[0]?.time_anchor || '';
+        for (let subIdx = 0; subIdx < batch.turns.length; subIdx++) {
+          const sub = batch.turns[subIdx];
+          if (!Array.isArray(sub) || sub.length === 0) continue;
+          const sId = `conv${cId}_${planTag}b${bi}_s${subIdx}`;
+          const turns = [];
+          for (let ti = 0; ti < sub.length; ti++) {
+            const t = sub[ti];
+            const tid = String(t.id);
+            turns.push({
+              id: tid,
+              role: t.role || 'user',
+              content: t.content || '',
+            });
+            turnIdToSessionId.set(tid, sId);
+            turnTextMap.set(tid, String(t.content || '').slice(0, 180));
+            totalTurns++;
+          }
+          sessions.push({
+            id: sId,
+            date: sub[0]?.time_anchor || batchAnchor || '',
+            timestamp: 0,
+            turns,
           });
-          turnIdToSessionId.set(tid, sId);
-          turnTextMap.set(tid, String(t.content || '').slice(0, 180));
-          totalTurns++;
+          totalSubSessions++;
         }
-        sessions.push({
-          id: sId,
-          date: sub[0]?.time_anchor || batchAnchor || '',
-          timestamp: 0,
-          turns,
-        });
-        totalSubSessions++;
       }
     }
 
@@ -264,8 +289,8 @@ async function runBeam(args) {
       if (!categoryStats[cat]) {
         categoryStats[cat] = {
           total: 0,
-          sessAny5: 0, sessAll5: 0, sessAny10: 0, sessAll10: 0,
-          turnAny5: 0, turnAll5: 0, turnAny10: 0,
+          sessAny1: 0, sessAny5: 0, sessAll5: 0, sessAny10: 0, sessAll10: 0,
+          turnAny1: 0, turnAny5: 0, turnAll5: 0, turnAny10: 0, turnAll10: 0,
           pktSessAny5: 0, pktSessAll5: 0, pktTurnAny5: 0, pktTurnAll5: 0,
         };
       }
@@ -281,7 +306,7 @@ async function runBeam(args) {
       const pTAny5 = goldTurnIds.some(g => pktTurn5.includes(g));
       const pTAll5 = goldTurnIds.length > 0 && goldTurnIds.every(g => pktTurn5.includes(g));
 
-      if (sAny(1)) sessAny1++;
+      if (sAny(1)) { sessAny1++; st.sessAny1++; }
       if (sAny(3)) sessAny3++;
       if (sAny(5)) { sessAny5++; st.sessAny5++; }
       if (sAny(10)) { sessAny10++; st.sessAny10++; }
@@ -292,12 +317,12 @@ async function runBeam(args) {
       const sRank = retSessIds.findIndex(id => goldSessIds.includes(id));
       if (sRank >= 0) sessMrrSum += 1.0 / (sRank + 1);
 
-      if (tAny(1)) turnAny1++;
+      if (tAny(1)) { turnAny1++; st.turnAny1++; }
       if (tAny(3)) turnAny3++;
       if (tAny(5)) { turnAny5++; st.turnAny5++; }
       if (tAny(10)) { turnAny10++; st.turnAny10++; }
       if (tAll(5)) { turnAll5++; st.turnAll5++; }
-      if (tAll(10)) turnAll10++;
+      if (tAll(10)) { turnAll10++; st.turnAll10++; }
       if (pTAny5) { pktTurnAny5++; st.pktTurnAny5++; }
       if (pTAll5) { pktTurnAll5++; st.pktTurnAll5++; }
       const tRank = retTurnIds.findIndex(id => goldTurnIds.includes(id));
@@ -305,13 +330,17 @@ async function runBeam(args) {
       if (!tAny(1) || !tAny(5)) {
         const pred0 = res?.turns?.[0];
         const rank1Pos = tRank >= 0 ? tRank + 1 : 'NOT_IN_TOP10';
+        const sRankPos = sRank >= 0 ? sRank + 1 : 'NOT_IN_TOP10';
         recordAutopsyMiss(beamLedger, {
           query: queryEntries[qi].question,
           category: cat,
-          gold_turns: goldTurnIds.slice(0, 5).map(gid => ({ id: gid, preview: turnTextMap.get(gid) || '' })),
+          gold_turn_count: goldTurnIds.length,
+          gold_session_count: goldSessIds.length,
+          gold_turns: goldTurnIds.map(gid => ({ id: gid, preview: turnTextMap.get(gid) || '' })),
           predicted_rank1: pred0 ? { id: pred0.id, preview: turnTextMap.get(pred0.id) || '' } : null,
           gold_rank: rank1Pos,
-          miss_type: tRank >= 1 && tRank < 5 ? 'NEAR_MISS_RANKS_2_5' : 'NOT_IN_TOP10',
+          gold_session_rank: sRankPos,
+          miss_type: classifyMissRank(tRank),
           winning_tokens: pred0?.matched || [],
         });
       }
@@ -323,6 +352,7 @@ async function runBeam(args) {
       console.log(`[${ci + 1}/${convsToRun.length}] Scored ${scoredQuestions} Qs -> Sess Any@5: ${sR5}% | Turn Any@5: ${tR5}%`);
     }
   }
+  flushAutopsyLedger(beamLedger);
 
   const elapsedSec = ((Date.now() - t0) / 1000).toFixed(2);
   const pct = n => (scoredQuestions > 0 ? parseFloat((n / scoredQuestions * 100).toFixed(2)) : 0);
@@ -330,21 +360,23 @@ async function runBeam(args) {
   console.log(`\n--- BEAM RECALL RESULTS (${splitDir}) ---`);
   console.log(`Conversations: ${convsToRun.length} | Sub-sessions: ${totalSubSessions} | Turns: ${totalTurns}`);
   console.log(`Total Qs: ${totalQuestions} | Scored (non-empty source_chat_ids): ${scoredQuestions}`);
-  console.log(`Session RecallAny@1: ${pct(sessAny1)}% | Any@3: ${pct(sessAny3)}% | Any@5: ${pct(sessAny5)}% | Any@10: ${pct(sessAny10)}% | All@5: ${pct(sessAll5)}% | All@10: ${pct(sessAll10)}% | MRR: ${(sessMrrSum / scoredQuestions).toFixed(4)}`);
-  console.log(`Turn    RecallAny@1: ${pct(turnAny1)}% | Any@3: ${pct(turnAny3)}% | Any@5: ${pct(turnAny5)}% | Any@10: ${pct(turnAny10)}% | All@5: ${pct(turnAll5)}% | All@10: ${pct(turnAll10)}% | MRR: ${(turnMrrSum / scoredQuestions).toFixed(4)}`);
-  console.log(`Stratified Packet (sessions[0..5] + standing_rules[0..2]): Sess Any@5: ${pct(pktSessAny5)}% All@5: ${pct(pktSessAll5)}% | Turn Any@5: ${pct(pktTurnAny5)}% All@5: ${pct(pktTurnAll5)}%`);
+  console.log(`[OFFICIAL BEAM METRIC: sessions[0..k] / turns[0..k]]`);
+  console.log(`  Session RecallAny@1: ${pct(sessAny1)}% | Any@3: ${pct(sessAny3)}% | Any@5: ${pct(sessAny5)}% | Any@10: ${pct(sessAny10)}% | All@5: ${pct(sessAll5)}% | All@10: ${pct(sessAll10)}% | MRR: ${(sessMrrSum / scoredQuestions).toFixed(4)}`);
+  console.log(`  Turn    RecallAny@1: ${pct(turnAny1)}% | Any@3: ${pct(turnAny3)}% | Any@5: ${pct(turnAny5)}% | Any@10: ${pct(turnAny10)}% | All@5: ${pct(turnAll5)}% | All@10: ${pct(turnAll10)}% | MRR: ${(turnMrrSum / scoredQuestions).toFixed(4)}`);
+  console.log(`[AUXILIARY STRATIFIED PACKET (non-official: +standing_rules[0..2])]`);
+  console.log(`  Packet  Sess Any@5: ${pct(pktSessAny5)}% All@5: ${pct(pktSessAll5)}% | Turn Any@5: ${pct(pktTurnAny5)}% All@5: ${pct(pktTurnAll5)}%`);
   console.log(`Time: ${elapsedSec}s | API Cost: $0.00`);
 
-  console.log(`\n--- Category Breakdown ---`);
+  console.log(`\n--- Category Breakdown (Official Metric first, Auxiliary Packet in parens) ---`);
   for (const [c, st] of Object.entries(categoryStats).sort()) {
     if (st.total > 0) {
       const rate = (n) => ((n || 0) / st.total * 100).toFixed(1);
       console.log(
         `  ${c.padEnd(26)} (${String(st.total).padStart(3)}): ` +
-        `Sess Any@5=${rate(st.sessAny5)}% All@5=${rate(st.sessAll5)}% ` +
-        `(Pkt Any ${rate(st.pktSessAny5)}% All ${rate(st.pktSessAll5)}%) Any@10=${rate(st.sessAny10)}% | ` +
-        `Turn Any@5=${rate(st.turnAny5)}% All@5=${rate(st.turnAll5)}% ` +
-        `(Pkt Any ${rate(st.pktTurnAny5)}% All ${rate(st.pktTurnAll5)}%) Any@10=${rate(st.turnAny10)}%`
+        `Sess Any@1=${rate(st.sessAny1)}% Any@5=${rate(st.sessAny5)}% All@5=${rate(st.sessAll5)}% Any@10=${rate(st.sessAny10)}% ` +
+        `(Pkt@5 ${rate(st.pktSessAny5)}%) | ` +
+        `Turn Any@1=${rate(st.turnAny1)}% Any@5=${rate(st.turnAny5)}% All@5=${rate(st.turnAll5)}% Any@10=${rate(st.turnAny10)}% All@10=${rate(st.turnAll10)}% ` +
+        `(Pkt@5 ${rate(st.pktTurnAny5)}%)`
       );
     }
   }
@@ -609,7 +641,7 @@ async function main() {
       await runBeam(args);
     } else if (args.bench === 'hotpotqa') {
       await runHotpotQA(args);
-    } else if (args.bench === 'memoryagentbench') {
+    } else if (args.bench === 'memoryagentbench' || args.bench === 'mab') {
       await runMemoryAgentBench(args);
     } else if (args.bench === 'longmemeval_m') {
       await runLongMemEvalM(args);

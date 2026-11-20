@@ -31,17 +31,23 @@ import urllib.request
 
 
 def find_binary():
-    candidates = [
-        os.path.join('target', 'release', 'retrieval_bench.exe'),
-        os.path.join('target', 'release', 'retrieval_bench'),
-        os.path.join('target', 'debug', 'retrieval_bench.exe'),
-        os.path.join('target', 'debug', 'retrieval_bench'),
+    roots = [
+        os.environ.get('CARGO_TARGET_DIR'),
+        r'C:\cargo-target',
+        'target',
     ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
+    candidates = []
+    for root in [r for r in roots if r]:
+        for profile in ('bench-fast', 'release', 'debug'):
+            for name in ('retrieval_bench.exe', 'retrieval_bench'):
+                path = os.path.join(root, profile, name)
+                if os.path.exists(path):
+                    candidates.append(path)
+    if candidates:
+        candidates.sort(key=os.path.getmtime, reverse=True)
+        return candidates[0]
     raise FileNotFoundError(
-        'retrieval_bench binary not found. Build with: cargo build --release -p vestige-core --bin retrieval_bench'
+        'retrieval_bench binary not found. Build with: cargo build --profile bench-fast -p vestige-core --bin retrieval_bench'
     )
 
 

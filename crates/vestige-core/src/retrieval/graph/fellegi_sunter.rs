@@ -60,6 +60,12 @@ fn explicit_naming_link(words: &[(String, bool)], poss: usize, role: usize, enti
 }
 
 pub(in crate::retrieval) fn discover_fellegi_sunter_aliases(ix: &Index) -> Vec<(u32, u32)> {
+    ix.fellegi_aliases
+        .get_or_init(|| discover_fellegi_sunter_aliases_uncached(ix))
+        .clone()
+}
+
+fn discover_fellegi_sunter_aliases_uncached(ix: &Index) -> Vec<(u32, u32)> {
     // hardcode-scan: closed-class (possessive determiners and copula/naming verbs only)
     let is_poss_det = |w: &str| matches!(w, "my" | "our" | "his" | "her" | "their");
     let is_copula_or_name =

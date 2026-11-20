@@ -73,20 +73,58 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             if !cond_ok {
                 continue;
             }
+            // Prevent standing-rule hijacks on topical user preferences: if an active non-superseded
+            // user preference turn shares direct query-topic overlap, seat the preference at Slot 0
+            // and place the standing rule at Slot 1 instead of displacing the preference out of Top-5.
+            let topical_pref_ti = ix
+                .preference_directive_turns
+                .iter()
+                .copied()
+                .filter(|&pti| {
+                    let pt = &ix.turns[pti];
+                    pt.field == 0
+                        && !pt.is_standing_policy
+                        && !pt.is_backchannel
+                        && !turn_is_superseded(ix, pti)
+                        && t_exact_mask.get(pti).copied().unwrap_or(0) != 0
+                        && crate::retrieval::seating::preference_lattice::is_explicit_stance_directive(
+                            &pt.body_for_headers.to_ascii_lowercase(),
+                            pt.is_personal_constraint,
+                        )
+                })
+                .max_by(|&a, &b| {
+                    t_exact_mask[a]
+                        .count_ones()
+                        .cmp(&t_exact_mask[b].count_ones())
+                        .then_with(|| {
+                            t_scene[a]
+                                .partial_cmp(&t_scene[b])
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .then_with(|| b.cmp(&a))
+                });
             if let Some(pos) = final_turn_indices.iter().position(|&x| x == r_ti) {
                 final_turn_indices.remove(pos);
             }
-            let ins_at = if (allow_chat_task_rule && !head_already_rule && cond_ok)
+            let wants_slot0 = (allow_chat_task_rule && !head_already_rule && cond_ok)
                 || (has_scope_overlap
                     && t_exact_mask[r_ti].count_ones()
                         >= t_exact_mask[final_turn_indices[0]].count_ones()
-                    && !q.text.trim_end().ends_with('?'))
-            {
-                0
+                    && !q.text.trim_end().ends_with('?'));
+            if wants_slot0 && let Some(pti) = topical_pref_ti {
+                if let Some(ppos) = final_turn_indices.iter().position(|&x| x == pti) {
+                    final_turn_indices.remove(ppos);
+                }
+                final_turn_indices.insert(0, pti);
+                final_turn_indices.insert(1.min(final_turn_indices.len()), r_ti);
             } else {
-                1.min(final_turn_indices.len())
-            };
-            final_turn_indices.insert(ins_at, r_ti);
+                let ins_at = if wants_slot0 {
+                    0
+                } else {
+                    1.min(final_turn_indices.len())
+                };
+                final_turn_indices.insert(ins_at, r_ti);
+            }
             if final_turn_indices.len() > k {
                 final_turn_indices.truncate(k);
             }
@@ -94,10 +132,11 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
     }
 
-    // Slot-1 Assertion & Exact-Superset Promotion (same-session user declaratives over openers/fillers)
+    // Slot-1 Assertion & Exact-Superset Promotion (handles both user declaratives & assistant attribution)
     crate::retrieval::seating::apply_assertion_and_superset_slot1_promotion(
         ix,
         &plan,
+        &eff_it,
         &mut final_turn_indices,
         &t_own,
         &t_scene,
@@ -130,6 +169,16 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         &s_mask,
         &s_score,
         k,
+    );
+
+    // Wave 7 S1-071 Informative Turn Priority: short confirmations yield to substantive declaratives
+    crate::retrieval::seating::preference_lattice::apply_informative_turn_priority(
+        ix,
+        &plan,
+        &mut final_turn_indices,
+        &t_scene,
+        &t_own,
+        &t_exact_mask,
     );
 
     // Multi-Hop Session Diversity on Named-Speaker Dialogues:

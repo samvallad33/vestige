@@ -723,9 +723,25 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && q_toks_eff
             .get(1)
             .is_some_and(|w| w.len() >= 5 && w.ends_with("ing"));
-    let is_factual_retro_query = q_trim_low.contains("did i ")
+    // hardcode-scan: closed-class (retrospective assistant-recall & episodic interrogation cues)
+    let has_retro_asst_cue = q_trim_low.contains("did you ")
+        || q_trim_low.contains("have you ")
+        || q_trim_low.contains("remind me")
+        || q_trim_low.contains("last time")
+        || q_trim_low.contains("previous conversation")
+        || q_trim_low.contains("previous chat")
+        || q_trim_low.contains("you recommended")
+        || q_trim_low.contains("you suggested")
+        || q_trim_low.contains("you provided")
+        || q_trim_low.contains("you told me")
+        || q_trim_low.contains("you gave me")
+        || q_trim_low.contains("you mentioned")
+        || q_trim_low.contains("you shared")
+        || q_trim_low.contains("we talked about")
+        || q_trim_low.contains("we discussed");
+    let is_factual_retro_query = has_retro_asst_cue
+        || q_trim_low.contains("did i ")
         || q_trim_low.contains("did we ")
-        || q_trim_low.contains("did you ")
         || q_trim_low.contains("have i ")
         || q_trim_low.contains("was my ")
         || q_trim_low.contains("were my ")
@@ -788,6 +804,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && !it.temporal
         && !seq_mode_eff
         && !eff_summary_request(&q.text)
+        && !is_factual_retro_query
         && (advice_shape_eff
             || (crate::retrieval::step14_is_rec_request(&q.text)
                 && !is_how_what_task_shape
@@ -813,8 +830,13 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     || (p[0] == "which" && p[1] != "session")
                     || (p[0] == "should" && (p[1] == "i" || p[1] == "we"))
             }));
+    let asst_attr_eff = !has_named_speakers_eff
+        && !is_monologue_corpus
+        && ix.turns.len() >= 24
+        && has_retro_asst_cue;
     let eff_it = QueryIntent {
         preference: it.preference || pref_live_eff,
+        assistant_attribution: it.assistant_attribution || asst_attr_eff,
         current_state: it.current_state
             || (!past_cue_eff && !it.temporal && !seq_mode_eff && !it.sniper_how_many),
         is_event_sequence: if large_or_mono { seq_mode_eff } else { it.is_event_sequence },

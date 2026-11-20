@@ -57,7 +57,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             ) {
                 ns.max(k)
             } else {
-                k
+                k.max(30).min(ns)
             };
             if final_session_indices.len() > pool_cap {
                 final_session_indices.truncate(pool_cap);

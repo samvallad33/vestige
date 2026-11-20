@@ -151,7 +151,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     // inside the top 5 already selected, the source takes slot 1 and the reply follows; top-5
     // membership never changes. Position and role
     // only. Skipped when the query asks what the assistant itself said.
-    if !it.assistant_attribution && final_turn_indices.len() > 1 {
+    if !eff_it.assistant_attribution && final_turn_indices.len() > 1 {
         let top = final_turn_indices[0];
         if ix.turns[top].speaker == "assistant" {
             let members = &ix.session_turns[ix.turns[top].session];

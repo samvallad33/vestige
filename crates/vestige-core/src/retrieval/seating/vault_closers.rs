@@ -103,57 +103,134 @@ pub(in crate::retrieval) fn apply_vault_closers(
 
     // 2. `acta_secretary_inversion` + `W2-059` Regesta gather (`BEAM summarization`):
     if is_summary && list.len() >= 2 {
-        let head0 = list[0];
-        let h0_t = &ix.turns[head0];
-        // Summaries are answered by the assistant's synthesis turns: any user-side head
-        // (question, short ask, standing rule or narrative statement) yields to a
-        // comparably scored assistant answer.
-        if h0_t.field == 0 {
-            let head_sc = t_scene.get(head0).copied().unwrap_or(0.0);
-            // A short ask head yields at 0.72; a long user narrative head (even one closing on
-            // a question) yields at 0.60: its own wording inflates its lexical score against a
-            // synthesis question.
-            let yield_frac = if h0_t.content.len() < 24 { 0.72 } else { 0.60 };
-            let mut best_asst: Option<(usize, f32)> = None;
-            for slot in 1..list.len().min(10) {
-                let cand = list[slot];
-                let ct = &ix.turns[cand];
-                let sc = t_scene.get(cand).copied().unwrap_or(0.0);
-                if ct.field == 1
-                    && !ct.is_question
-                    && !ct.is_backchannel
-                    && ct.content.len() >= 10
-                    && sc >= yield_frac * head_sc
-                    && best_asst.is_none_or(|(_, bs)| sc > bs)
-                {
-                    best_asst = Some((slot, sc));
-                }
-            }
-            if let Some((slot, _)) = best_asst {
-                let cand = list.remove(slot);
-                list.insert(0, cand);
-            }
-        }
-        // `W2-059`: Fill tail slots one distinct session per seat in session rank order
-        let mut seen_s: Vec<usize> = list.iter().take(5).map(|&ti| ix.turns[ti].session).collect();
-        for &si in final_session_indices.iter().take(10) {
-            if list.len() >= k || seen_s.contains(&si) {
-                continue;
-            }
-            if let Some(best_ti) = ix.session_turns[si]
+        let pick_summary_turn = |si: usize| -> Option<(usize, Option<usize>)> {
+            let members = ix.session_turns.get(si)?;
+            let best_any = members
                 .iter()
                 .copied()
-                .filter(|&ti| !ix.turns[ti].is_backchannel && t_scene.get(ti).copied().unwrap_or(0.0) > 0.0 && !list.contains(&ti))
-                .max_by(|&a, &b| t_scene[a].partial_cmp(&t_scene[b]).unwrap_or(std::cmp::Ordering::Equal))
-            {
-                if let Some(dup_slot) = (5..list.len()).rev().find(|&idx| {
-                    let s = ix.turns[list[idx]].session;
-                    list[..idx].iter().any(|&p| ix.turns[p].session == s)
-                }) {
-                    list[dup_slot] = best_ti;
-                    seen_s.push(si);
+                .filter(|&ti| !ix.turns[ti].is_backchannel && !ix.turns[ti].is_standing_policy)
+                .max_by(|&a, &b| {
+                    t_scene
+                        .get(a)
+                        .copied()
+                        .unwrap_or(0.0)
+                        .partial_cmp(&t_scene.get(b).copied().unwrap_or(0.0))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| b.cmp(&a))
+                })?;
+            let any_sc = t_scene.get(best_any).copied().unwrap_or(0.0);
+            let best_asst = members
+                .iter()
+                .copied()
+                .filter(|&ti| {
+                    let ct = &ix.turns[ti];
+                    ct.field == 1
+                        && !ct.is_question
+                        && !ct.is_backchannel
+                        && ct.body_for_headers.len() >= 24
+                })
+                .max_by(|&a, &b| {
+                    let pa = u8::from(turn_pos(ix, a) == Some(1));
+                    let pb = u8::from(turn_pos(ix, b) == Some(1));
+                    t_scene
+                        .get(a)
+                        .copied()
+                        .unwrap_or(0.0)
+                        .partial_cmp(&t_scene.get(b).copied().unwrap_or(0.0))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| pa.cmp(&pb))
+                        .then_with(|| b.cmp(&a))
+                });
+            if let Some(asst_ti) = best_asst {
+                let asst_sc = t_scene.get(asst_ti).copied().unwrap_or(0.0);
+                let any_bits = t_exact_mask.get(best_any).copied().unwrap_or(0).count_ones();
+                let asst_bits = t_exact_mask.get(asst_ti).copied().unwrap_or(0).count_ones();
+                let keep_user_primary = ix.turns[best_any].field == 0
+                    && ix.turns[best_any].body_for_headers.len() >= 40
+                    && (any_bits > asst_bits || any_sc > 1.15 * asst_sc);
+                let yield_frac = if ix.turns[best_any].body_for_headers.len() < 24 { 0.50 } else { 0.55 };
+                if !keep_user_primary && asst_sc >= yield_frac * any_sc {
+                    let partner = (asst_ti != best_any && ix.turns[best_any].field == 0).then_some(best_any);
+                    return Some((asst_ti, partner));
                 }
             }
+            let partner = best_asst.filter(|&a| a != best_any);
+            Some((best_any, partner))
+        };
+
+        // Interleaved @5 & @10 Dyad Packing:
+        // Seat primaries of `final_session_indices[0..3]` in Slots 0..3; for Slots 3..5, if
+        // `S[3]` is weak (`< 0.62 * s_max`) and `dyad_partners[0]` is strong (`>= 0.60 * t_scene[gathered[0]]`),
+        // interleave `dyad_partners[0]` into Slot 3/4; then push all remaining `S0..S4` dyad partners
+        // into Slots 5..10 BEFORE `rank_idx >= 5` sessions!
+        let orig_len = list.len().max(k);
+        let mut gathered: Vec<usize> = Vec::with_capacity(orig_len);
+        let mut dyad_partners: Vec<usize> = Vec::new();
+        let s_max = s_score.iter().copied().fold(0.0f32, f32::max);
+        let mut top5_picks: Vec<(usize, Option<usize>)> = Vec::new();
+        for &si in final_session_indices.iter().take(5) {
+            if let Some(pair) = pick_summary_turn(si) {
+                top5_picks.push(pair);
+            }
+        }
+        let mut used_partner0 = false;
+        for (rank_idx, &(primary_ti, partner_opt)) in top5_picks.iter().enumerate() {
+            if rank_idx == 3
+                && !used_partner0
+                && let Some(&(_, Some(p0))) = top5_picks.first()
+                && let Some(&s3) = final_session_indices.get(3)
+                && s_max > 0.0
+                && s_score.get(s3).copied().unwrap_or(0.0) < 0.62 * s_max
+                && !gathered.is_empty()
+                && t_scene.get(p0).copied().unwrap_or(0.0)
+                    >= 0.60 * t_scene.get(gathered[0]).copied().unwrap_or(0.0)
+            {
+                if !gathered.contains(&p0) && gathered.len() < orig_len {
+                    gathered.push(p0);
+                    used_partner0 = true;
+                }
+            }
+            if !gathered.contains(&primary_ti) && gathered.len() < orig_len {
+                gathered.push(primary_ti);
+            }
+            if let Some(pt) = partner_opt
+                && !(rank_idx == 0 && used_partner0)
+            {
+                dyad_partners.push(pt);
+            }
+        }
+        for pt in dyad_partners {
+            if gathered.len() >= orig_len {
+                break;
+            }
+            if !gathered.contains(&pt) {
+                gathered.push(pt);
+            }
+        }
+        for &si in final_session_indices.iter().skip(5).take(5) {
+            if gathered.len() >= orig_len {
+                break;
+            }
+            if s_max > 0.0 && s_score.get(si).copied().unwrap_or(0.0) < 0.48 * s_max {
+                break;
+            }
+            if let Some((primary_ti, _)) = pick_summary_turn(si)
+                && !gathered.contains(&primary_ti)
+            {
+                gathered.push(primary_ti);
+            }
+        }
+        for &ti in list.iter() {
+            if gathered.len() >= orig_len {
+                break;
+            }
+            if !gathered.contains(&ti) {
+                gathered.push(ti);
+            }
+        }
+        if !gathered.is_empty() {
+            gathered.truncate(orig_len);
+            *list = gathered;
         }
         return;
     }

@@ -77,6 +77,7 @@ pub(in crate::retrieval) fn score_bridge(ix: &Index, q: &Query, p: &Params, plan
         let n_turns_u32 = (ix.t_own_stats.n as u32).max(1);
         let max_seed_df = (n_turns_u32 / 8).max(3);
         let max_bridge_hub_df = ((ix.t_own_stats.n as usize) / 16).clamp(2, 12);
+        let max_genus_hub_df = ((ix.t_own_stats.n as usize) / 10).clamp(4, 28);
 
         let mut seeds: Vec<(u32, String)> = raw_tokens(&q.text)
             .into_iter()
@@ -89,14 +90,40 @@ pub(in crate::retrieval) fn score_bridge(ix: &Index, q: &Query, p: &Params, plan
             .collect();
         seeds.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         seeds.dedup_by(|a, b| a.1 == b.1);
-        seeds.truncate(3);
+        seeds.truncate(4);
 
         let exact_q_ids: DetHashSet<u32> = plan.terms.iter().map(|qt| qt.id).collect();
         let mut direct_bridge_terms: DetHashMap<u32, (f32, u8)> = DetHashMap::default();
+        let mut genus_bridge_terms: DetHashMap<u32, (f32, u8)> = DetHashMap::default();
         let mut meet_bridge_terms: DetHashMap<u32, (f32, u8)> = DetHashMap::default();
 
-        for (s_idx, (_, w)) in seeds.iter().enumerate() {
+        for (s_idx, (seed_df, w)) in seeds.iter().enumerate() {
             let bit = 1u8 << (s_idx.min(7));
+            // 0. Direct OOV Genus -> Instance lookup (`*seed_df == 0` zero-overlap gate!):
+            //    When a query genus word `w` ("activities", "career", "hobbies") never occurs verbatim
+            //    in the corpus (`df == 0`), match it directly against upward hypernyms in `ix.bridge_vocab`.
+            if *seed_df == 0 {
+                let mut genus_keys: Vec<String> = vec![w.clone()];
+                if let Some(sing) = w.strip_suffix("ies") {
+                    if sing.len() >= 3 {
+                        genus_keys.push(format!("{sing}y"));
+                    }
+                } else if let Some(sing) = w.strip_suffix("es").or_else(|| w.strip_suffix('s')) {
+                    if sing.len() >= 3 {
+                        genus_keys.push(sing.to_string());
+                    }
+                }
+                if p.enable_stemming {
+                    genus_keys.push(stem_term(&stem(w)));
+                }
+                for gk in &genus_keys {
+                    if let Some(gid) = ix.bridge_vocab.get(gk) {
+                        let entry = genus_bridge_terms.entry(gid).or_insert((0.0, 0));
+                        entry.0 = entry.0.max(1.0);
+                        entry.1 |= bit;
+                    }
+                }
+            }
             if let Some(qid) = ix.vocab.get(w) {
                 if let Some(ppmi_list) = ix.ppmi_neighbors.get(&qid) {
                     for &(pid, pw) in ppmi_list {
@@ -152,6 +179,19 @@ pub(in crate::retrieval) fn score_bridge(ix: &Index, q: &Query, p: &Params, plan
                     for &doc in list {
                         let ti = doc as usize;
                         t_bridge[ti] += bw * idf * damp;
+                        seed_mask_hit[ti] |= s_bit;
+                    }
+                }
+            }
+        }
+        for (&bid, &(bw, s_bit)) in &genus_bridge_terms {
+            if let Some(blist) = ix.turn_bridge_postings.get(bid as usize) {
+                if !blist.is_empty() && blist.len() <= max_genus_hub_df {
+                    let damp = ghostlink_hub_damp(blist.len() as u32, 1);
+                    let idf = ((ix.t_own_stats.n + 1.0) / (blist.len() as f32 + 1.0)).ln().max(0.5);
+                    for &doc in blist {
+                        let ti = doc as usize;
+                        t_bridge[ti] += 0.90 * bw * idf * damp;
                         seed_mask_hit[ti] |= s_bit;
                     }
                 }

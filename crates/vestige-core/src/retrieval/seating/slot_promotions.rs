@@ -11,15 +11,13 @@ use crate::retrieval::*;
 pub(in crate::retrieval) fn apply_assertion_and_superset_slot1_promotion(
     ix: &Index,
     plan: &QueryPlan,
+    eff_it: &QueryIntent,
     list: &mut Vec<usize>,
     t_own: &[f32],
     t_scene: &[f32],
     t_exact_mask: &[u64],
 ) {
-    if list.len() < 2
-        || plan.intent.is_event_sequence
-        || plan.intent.assistant_attribution
-    {
+    if list.len() < 2 || eff_it.is_event_sequence {
         return;
     }
     let head = list[0];
@@ -34,8 +32,57 @@ pub(in crate::retrieval) fn apply_assertion_and_superset_slot1_promotion(
     if head_sc <= 0.0 {
         return;
     }
+    let head_pos = turn_pos(ix, head);
 
     let window = list.len().min(5);
+    // Assistant-attribution mode: when Slot 0 is a `field == 0` user prompt/question and a nearby
+    // same-session substantive `field == 1` assistant answer sits in Slots 1..5 (`|pos| <= 2`),
+    // promote the assistant answer turn to Slot 0 (`0..5` membership invariant).
+    if eff_it.assistant_attribution {
+        if head_t.field == 0 {
+            let mut best_asst: Option<(usize, u32, f32)> = None;
+            for slot in 1..window {
+                let cand = list[slot];
+                let cand_t = &ix.turns[cand];
+                if cand_t.session != head_sess
+                    || cand_t.field != 1
+                    || cand_t.is_question
+                    || cand_t.is_backchannel
+                    || cand_t.body_for_headers.len() < 24
+                    || turn_is_superseded(ix, cand)
+                {
+                    continue;
+                }
+                let near_dyad = match (head_pos, turn_pos(ix, cand)) {
+                    (Some(hp), Some(cp)) => hp.abs_diff(cp) <= 2,
+                    _ => false,
+                };
+                if !near_dyad {
+                    continue;
+                }
+                let cand_exact = t_exact_mask.get(cand).copied().unwrap_or(0);
+                let cand_own = t_own.get(cand).copied().unwrap_or(0.0);
+                let cand_sc = t_scene.get(cand).copied().unwrap_or(0.0);
+                if cand_sc >= 0.65 * head_sc
+                    && (cand_exact != 0 || cand_own > 0.0 || head_t.is_question)
+                {
+                    let bits = cand_exact.count_ones();
+                    let better = match best_asst {
+                        None => true,
+                        Some((_, b_bits, b_sc)) => bits > b_bits || (bits == b_bits && cand_sc > b_sc),
+                    };
+                    if better {
+                        best_asst = Some((slot, bits, cand_sc));
+                    }
+                }
+            }
+            if let Some((slot, _, _)) = best_asst {
+                list.swap(0, slot);
+            }
+        }
+        return;
+    }
+
     let mut best_slot: Option<(usize, u32, f32)> = None;
     for slot in 1..window {
         let cand = list[slot];
@@ -57,6 +104,10 @@ pub(in crate::retrieval) fn apply_assertion_and_superset_slot1_promotion(
         let cand_exact = t_exact_mask.get(cand).copied().unwrap_or(0);
         let cand_own = t_own.get(cand).copied().unwrap_or(0.0);
         let cand_sc = t_scene.get(cand).copied().unwrap_or(0.0);
+        let near_dyad = match (head_pos, turn_pos(ix, cand)) {
+            (Some(hp), Some(cp)) => hp.abs_diff(cp) <= 2,
+            _ => false,
+        };
 
         // 1. Assistant turn at Slot 0 yields to same-session user declarative assertion
         //    covering all exact groups of Slot 0.
@@ -92,12 +143,25 @@ pub(in crate::retrieval) fn apply_assertion_and_superset_slot1_promotion(
                     && turn_pos(ix, head) == Some(0)
                     && turn_pos(ix, cand).is_some_and(|p| p >= 2)
                     && !head_t.is_standing_policy
-                    && !plan.intent.task_under_rules
+                    && !eff_it.task_under_rules
                     && cand_t.content.len() > head_t.content.len()
                     && cand_own >= 0.96 * head_own)
                 || cand_own > 1.03 * head_own);
+        // 5. Self-Payload vs. Carried-Echo Contrast (`|pos(r1) - pos(r2)| <= 2`):
+        //    When Slot 0 won via neighbor carry (`t_own[r1] < 0.85 * t_own[r2]` or 0 clean slot entities
+        //    while nearby declarative `r2` covers `>= r1` exact groups and carries clean slot entities),
+        //    yield Slot 0 to the originating payload turn `r2`.
+        let self_payload_wins = near_dyad
+            && !head_t.is_standing_policy
+            && cand_exact != 0
+            && (cand_exact & head_exact) == head_exact
+            && cand_sc >= 0.75 * head_sc
+            && (head_own < 0.85 * cand_own
+                || (head_t.slot_entities_clean == 0
+                    && cand_t.slot_entities_clean >= 1
+                    && cand_own >= 0.70 * head_own));
 
-        if asst_yields || strict_superset || question_yields || eq_mask_better {
+        if asst_yields || strict_superset || question_yields || eq_mask_better || self_payload_wins {
             let bits = cand_exact.count_ones();
             let better = match best_slot {
                 None => true,

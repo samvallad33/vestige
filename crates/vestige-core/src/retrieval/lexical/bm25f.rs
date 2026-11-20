@@ -211,7 +211,7 @@ pub(in crate::retrieval) fn rank_standing_rules(
     // >= 2 closed-class calendar-unit tokens ("month", "day", "year") govern its formatting.
     let q_is_temporal_when = it.sniper_when || it.temporal;
 
-    let mut latest_by_key: DetHashMap<&str, (usize, i32, i32, i64)> = DetHashMap::default();
+    let mut latest_by_key: DetHashMap<&str, (usize, i32, i32, i64, bool, i32)> = DetHashMap::default();
     for (ri, r) in ix.standing_rules.iter().enumerate() {
         let mut scope_hits = r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
         if scope_hits == 0 && crate::retrieval::seating::c2_policy_inflects_query(ix, r.turn, plan) {
@@ -228,19 +228,25 @@ pub(in crate::retrieval) fn rank_standing_rules(
             .iter()
             .filter(|cw| !morph_word_hit(cw) && lex_word_hit(cw))
             .count() as i32;
+        let cond_total = r.condition_words.len() as i32;
+        let cond_matched = (cond_morph_hits + cond_lex_hits).max(cond_exact_hits).min(cond_total);
+        let all_cond_matched = cond_total > 0 && cond_matched >= cond_total;
+        let unmatched_cond = (cond_total - cond_matched).max(0);
         let cal_unit_hits: i32 = if q_is_temporal_when {
             ix.turns
                 .get(r.turn)
                 .map(|tr| {
                     let body_l = tr.body_for_headers.to_ascii_lowercase();
-                    // hardcode-scan: closed-class (ISO calendar unit words)
+                    // hardcode-scan: closed-class (ISO calendar unit words & date placeholders)
                     let mut cnt = 0i32;
                     for u in ["month", "day", "year"] {
                         if body_l.contains(u) {
                             cnt += 1;
                         }
                     }
-                    if cnt >= 2 { 1 } else { 0 }
+                    let iso_fmt = (body_l.contains("mm/") || body_l.contains("/mm") || body_l.contains("mm-"))
+                        && (body_l.contains("dd") || body_l.contains("yyyy"));
+                    if cnt >= 2 || iso_fmt { 1 } else { 0 }
                 })
                 .unwrap_or(0)
         } else {
@@ -260,7 +266,8 @@ pub(in crate::retrieval) fn rank_standing_rules(
             .unwrap_or(0);
         let asst_hits = r.assistant_nouns.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
         let cond_best = cond_exact_hits.max(cond_morph_hits);
-        let spec = 8 * cond_best + 10 * cal_unit_hits + 5 * scope_hits + 4 * cond_lex_hits + 2 * own_lex_hits + asst_hits;
+        // Condition-clause specificity strictly outranks broad session scope hits.
+        let spec = 10 * cond_best + 10 * cal_unit_hits + 7 * cond_lex_hits + 4 * scope_hits + 2 * own_lex_hits + asst_hits;
         let fires = if r.has_explicit_scope {
             spec > 0 || it.task_under_rules || multi_evidence
         } else {
@@ -270,7 +277,7 @@ pub(in crate::retrieval) fn rank_standing_rules(
             continue;
         }
         let scope_neg_len = -(r.scope.len() as i32);
-        let cand = (ri, spec, scope_neg_len, r.ts);
+        let cand = (ri, spec, scope_neg_len, r.ts, all_cond_matched, unmatched_cond);
         match latest_by_key.get(r.policy_key.as_str()) {
             Some(&cur) if (cur.3, cur.1, cur.2) >= (cand.3, cand.1, cand.2) => {}
             _ => {
@@ -278,10 +285,17 @@ pub(in crate::retrieval) fn rank_standing_rules(
             }
         }
     }
+    let any_full_cond = latest_by_key.values().any(|c| c.4 && c.1 > 0);
     let max_spec = latest_by_key.values().map(|c| c.1).max().unwrap_or(0);
     let mut cands: Vec<(usize, i32, i32, i64)> = latest_by_key
         .into_values()
         .filter(|c| if max_spec > 0 { c.1 > 0 } else { true })
+        .map(|(ri, mut spec, scope_neg_len, ts, all_cond, unmatched)| {
+            if any_full_cond && !all_cond && unmatched > 0 {
+                spec = (spec - 2 * unmatched).max(1);
+            }
+            (ri, spec, scope_neg_len, ts)
+        })
         .collect();
     cands.sort_by(|a, b| {
         b.1.cmp(&a.1)
@@ -388,9 +402,23 @@ pub(in crate::retrieval) fn rule_condition_word_matches(cw: &str, qw: &str) -> b
     lemma_hits(&c_lemmas, qw)
         || lemma_hits(&crate::wordnet::expansion_lemmas(qw), cw)
         || lemma_hits(&crate::wordnet::upward_hypernyms(qw, 2), cw)
+        || lemma_hits(&crate::wordnet::upward_hypernyms(cw, 2), qw)
+        || ((1..=4).contains(&crate::wordnet::senses(cw).len())
+            && lemma_hits(&crate::wordnet::class_to_instances(cw, 1), qw))
+        || lemma_hits(&crate::wordnet::gloss_and_compound_concepts(cw), qw)
+        || crate::wordnet::full_lexicon_neighbors(qw)
+            .into_iter()
+            .take(24)
+            .any(|(lem, _)| morph_eq(lem, cw))
+        || crate::roget::conceptual_neighbors(qw, 24)
+            .into_iter()
+            .any(|(lem, _)| morph_eq(lem, cw))
         || crate::conceptnet::two_hop_neighbors(qw, 10)
             .iter()
             .any(|&(cn, _)| morph_eq(cn, cw))
+        || crate::conceptnet::two_hop_neighbors(cw, 10)
+            .iter()
+            .any(|&(cn, _)| morph_eq(cn, qw))
 }
 
 /// Rule-condition gate: does this standing rule's own "when I ask about X"

@@ -36,7 +36,7 @@ pub(in crate::retrieval) fn select_submodular_sessions(
     let pool_cap = if deep_session_pool_enabled(eff_it, &ctx.q.text) {
         ns.max(k)
     } else {
-        k
+        k.max(30).min(ns)
     };
 
     if p.enable_submodular && ns > 1 && eff_summary_request(&ctx.q.text) {
@@ -131,6 +131,9 @@ pub(in crate::retrieval) fn select_submodular_sessions(
         // quadratically above ambient conversation verbs ("implement", "understand", "project", "app").
         let mut q_term_ic: BTreeMap<u32, u64> = BTreeMap::new();
         let mut q_term_ids: BTreeSet<u32> = BTreeSet::new();
+        let mut q_rare_anchors: BTreeSet<u32> = BTreeSet::new();
+        let mut q_rare_anchor_words: Vec<String> = Vec::new();
+        let rare_anchor_df_cap = (ns_u32 / 5).max(3);
         for qt in &ctx.plan.terms {
             if qt.exact_hit {
                 q_term_ids.insert(qt.id);
@@ -146,17 +149,58 @@ pub(in crate::retrieval) fn select_submodular_sessions(
                     let base_ic = aspect_ic_q16(df, ns_u32);
                     let ic_sq = ((base_ic as u128).saturating_mul(base_ic as u128) >> 16)
                         .max((Q16_ONE >> 3) as u128) as u64;
-                    let in_topic = ix
-                        .vocab
-                        .names
-                        .get(qt.id as usize)
-                        .is_some_and(|nm| {
-                            let bare = nm.strip_prefix("\u{1}stem:").unwrap_or(nm.as_str());
-                            topic_clause_words.contains(bare)
-                        });
-                    let w = if in_topic { ic_sq.saturating_mul(3) } else { base_ic >> 1 };
+                    let nm_opt = ix.vocab.names.get(qt.id as usize).map(String::as_str);
+                    let bare = nm_opt
+                        .map(|nm| nm.strip_prefix("\u{1}stem:").unwrap_or(nm))
+                        .unwrap_or("");
+                    let in_topic = !bare.is_empty() && topic_clause_words.contains(bare);
+                    let is_ent = nm_opt.is_some_and(|nm| nm.starts_with("\u{1}ent:"))
+                        || (!bare.is_empty()
+                            && ix
+                                .vocab
+                                .get(&format!("\u{1}ent:{bare}"))
+                                .is_some_and(|eid| ix.s_stats.df.get(&eid).copied().unwrap_or(0) > 0));
+                    let is_rare_anchor = in_topic && ((1..=rare_anchor_df_cap).contains(&df) || is_ent);
+                    let w = if is_rare_anchor {
+                        q_rare_anchors.insert(qt.id);
+                        if !bare.is_empty()
+                            && !bare.starts_with('\u{1}')
+                            && !q_rare_anchor_words.iter().any(|x| x == bare)
+                        {
+                            q_rare_anchor_words.push(bare.to_string());
+                        }
+                        ic_sq.saturating_mul(6)
+                    } else if in_topic {
+                        ic_sq.saturating_mul(3)
+                    } else {
+                        base_ic >> 1
+                    };
                     q_term_ic.insert(qt.id, w);
                 }
+            }
+        }
+        let mut rare_anchor_lex_ids: BTreeSet<u32> = BTreeSet::new();
+        for aw in &q_rare_anchor_words {
+            let mut add_al = |lem: &str| {
+                let lst = stem(lem);
+                for lid in [ix.vocab.get(lem), ix.vocab.get(&stem_term(&lst))]
+                    .into_iter()
+                    .flatten()
+                {
+                    let df = ix.s_stats.df.get(&lid).copied().unwrap_or(0);
+                    if (1..=(ns_u32 / 3).max(4)).contains(&df) {
+                        rare_anchor_lex_ids.insert(lid);
+                    }
+                }
+            };
+            for (lem, _) in crate::wordnet::full_lexicon_neighbors(aw).into_iter().take(16) {
+                add_al(lem);
+            }
+            for (lem, _) in crate::roget::conceptual_neighbors(aw, 16) {
+                add_al(lem);
+            }
+            for (lem, _) in crate::conceptnet::two_hop_neighbors(aw, 8) {
+                add_al(lem);
             }
         }
         let mut incipit_turn: Vec<Option<usize>> = vec![None; ns];
@@ -221,6 +265,7 @@ pub(in crate::retrieval) fn select_submodular_sessions(
             }
         }
         let max_facet_df = (ns_u32 / 2).max(2);
+        let rare_facet_user_df = (ns_u32 / 4).max(3);
         for clause in raw_clauses {
             let f_words: Vec<String> = raw_tokens(clause)
                 .into_iter()
@@ -241,7 +286,21 @@ pub(in crate::retrieval) fn select_submodular_sessions(
                     df == 0 || df <= max_facet_df
                 })
                 .collect();
-            if !f_words.is_empty() && facets.len() < 6 {
+            let has_distinctive_facet_tok = f_words.iter().any(|w| {
+                let ids = [ix.vocab.get(w), ix.vocab.get(&stem_term(&stem(w)))];
+                let min_udf = ids
+                    .into_iter()
+                    .flatten()
+                    .map(|id| {
+                        (0..ns)
+                            .filter(|&si| !is_rule_only_sess(si) && ix.session_bags[si].tf[0].contains_key(&id))
+                            .count() as u32
+                    })
+                    .min()
+                    .unwrap_or(0);
+                min_udf == 0 || min_udf <= rare_facet_user_df
+            });
+            if !f_words.is_empty() && has_distinctive_facet_tok && facets.len() < 6 {
                 facets.push(f_words);
             }
         }
@@ -463,14 +522,81 @@ pub(in crate::retrieval) fn select_submodular_sessions(
                 }
             }
         }
+        // Rare topic anchor witness flags: damp generic sessions with zero direct/1-hop/RSB/lexicon anchor support.
+        let mut sess_hits_rare_anchor: Vec<bool> = vec![true; ns];
+        if !q_rare_anchors.is_empty() {
+            let direct_anchor: Vec<bool> = (0..ns)
+                .map(|si| {
+                    q_rare_anchors.iter().any(|&aid| {
+                        ix.session_content[si].contains(&aid)
+                            || ix.session_entities[si].contains(&aid)
+                            || ix.session_bags[si].tf[0].contains_key(&aid)
+                    })
+                })
+                .collect();
+            for si in 0..ns {
+                let ppr_ok = ppr_scores.get(&si).copied().unwrap_or(0) >= max_ppr / 6;
+                let rsb_ok = ix
+                    .session_rsb_back
+                    .get(si)
+                    .is_some_and(|backs| {
+                        backs.iter().any(|&(prev_s, _)| {
+                            let ps = prev_s as usize;
+                            ps < ns && direct_anchor[ps]
+                        })
+                    });
+                let lex_ok = !rare_anchor_lex_ids.is_empty()
+                    && rare_anchor_lex_ids.iter().any(|&lid| {
+                        ix.session_content[si].contains(&lid)
+                            || ix.session_bags[si].tf[0].contains_key(&lid)
+                    });
+                sess_hits_rare_anchor[si] = direct_anchor[si] || ppr_ok || rsb_ok || lex_ok;
+            }
+        }
+
+        // Hearst TextTiling Episode Segmentation via adjacent-session rare-term Jaccard drops (`< 0.15`).
+        let mut episode_of: Vec<u32> = vec![0u32; ns];
+        let mut cur_ep: u32 = 0;
+        for si in 1..ns {
+            let a = &ix.session_rare_nt[si - 1];
+            let b = &ix.session_rare_nt[si];
+            let (mut i, mut j, mut inter) = (0usize, 0usize, 0usize);
+            while i < a.len() && j < b.len() {
+                match a[i].cmp(&b[j]) {
+                    std::cmp::Ordering::Equal => {
+                        inter += 1;
+                        i += 1;
+                        j += 1;
+                    }
+                    std::cmp::Ordering::Less => i += 1,
+                    std::cmp::Ordering::Greater => j += 1,
+                }
+            }
+            let uni = a.len().saturating_add(b.len()).saturating_sub(inter);
+            if inter == 0 || inter.saturating_mul(20) < uni.saturating_mul(3) {
+                cur_ep = cur_ep.saturating_add(1);
+            }
+            episode_of[si] = cur_ep;
+        }
+
         let mut fused_q16: Vec<u64> = vec![0u64; ns];
         let mut max_fused: u64 = 1;
         for si in 0..ns {
             if is_rule_only_sess(si) {
                 continue;
             }
-            let w_n = (((sight_q16[si] as u128) << 16) / (max_sight_q16 as u128)).min(Q16_ONE as u128) as u64;
-            let i_n = (((incipit_raw[si] as u128) << 16) / (max_incipit as u128)).min(Q16_ONE as u128) as u64;
+            let s_raw = if sess_hits_rare_anchor[si] {
+                sight_q16[si]
+            } else {
+                sight_q16[si] >> 2
+            };
+            let inc_raw = if sess_hits_rare_anchor[si] {
+                incipit_raw[si]
+            } else {
+                incipit_raw[si] >> 2
+            };
+            let w_n = (((s_raw as u128) << 16) / (max_sight_q16 as u128)).min(Q16_ONE as u128) as u64;
+            let i_n = (((inc_raw as u128) << 16) / (max_incipit as u128)).min(Q16_ONE as u128) as u64;
             let p_n = (((ppr_scores.get(&si).copied().unwrap_or(0) as u128) << 16) / (max_ppr as u128))
                 .min(Q16_ONE as u128) as u64;
             let f_n = if n_facets > 0 {
@@ -647,8 +773,11 @@ pub(in crate::retrieval) fn select_submodular_sessions(
                     cov_map.insert(aid, asp_contrib.min(Q16_ONE));
                 }
             }
-            // Only grant era-diversity credit to sessions that actually match the topic incipit (`incipit_raw > 0`).
-            if !single_era_summary && incipit_raw[si] > 0 && rel_norm >= (Q16_ONE / 3) {
+            // Grant era-diversity credit to sessions matching topic incipit, query groups, or enumeration facets.
+            let has_topic_evidence = incipit_raw[si] > 0
+                || (s_mask[si] & mask_limit) != 0
+                || (n_facets > 0 && (0..n_facets).any(|fi| facet_scores[fi][si] > 0));
+            if !single_era_summary && has_topic_evidence && rel_norm >= (Q16_ONE / 4) {
                 let ek = era_key_of(si);
                 if let Some(&eid) = era_ids.get(&ek) {
                     cov_map.insert(eid, rel_norm.min(Q16_ONE));
@@ -667,7 +796,7 @@ pub(in crate::retrieval) fn select_submodular_sessions(
         // gets its strongest distinct session into the Top-5 cut before general submodular fill.
         let mut selected: Vec<usize> = Vec::with_capacity(pool_cap);
         if n_facets >= 2 {
-            let mut covered_eras: BTreeSet<i64> = BTreeSet::new();
+            let mut era_counts: BTreeMap<i64, usize> = BTreeMap::new();
             for fi in 0..n_facets {
                 if selected.len() >= k.min(4) {
                     break;
@@ -677,8 +806,11 @@ pub(in crate::retrieval) fn select_submodular_sessions(
                     .max_by(|&a, &b| {
                         let fa = facet_scores[fi][a];
                         let fb = facet_scores[fi][b];
-                        let ea = if single_era_summary { 0 } else { u8::from(!covered_eras.contains(&era_key_of(a))) };
-                        let eb = if single_era_summary { 0 } else { u8::from(!covered_eras.contains(&era_key_of(b))) };
+                        // PM2 proportional era representation: prefer unvisited eras first, then high mass
+                        let count_a = era_counts.get(&era_key_of(a)).copied().unwrap_or(0);
+                        let count_b = era_counts.get(&era_key_of(b)).copied().unwrap_or(0);
+                        let ea = if single_era_summary { 0 } else { u8::from(count_a == 0) };
+                        let eb = if single_era_summary { 0 } else { u8::from(count_b == 0) };
                         fa.cmp(&fb)
                             .then_with(|| fused_q16[a].cmp(&fused_q16[b]))
                             .then_with(|| ea.cmp(&eb))
@@ -686,18 +818,39 @@ pub(in crate::retrieval) fn select_submodular_sessions(
                     });
                 if let Some(bsi) = best_f {
                     selected.push(bsi);
-                    covered_eras.insert(era_key_of(bsi));
+                    *era_counts.entry(era_key_of(bsi)).or_insert(0) += 1;
                 }
             }
         }
-        let sub_picks = select_summary_aspect_sessions_q16(&cands, &aspect_weights_q16, k, Q16_ONE.saturating_mul(10));
-        for si in sub_picks {
-            if selected.len() >= k {
-                break;
+        let sub_picks = select_summary_aspect_sessions_q16(&cands, &aspect_weights_q16, k.max(12), Q16_ONE.saturating_mul(10));
+        let mut used_episodes: BTreeSet<u32> = selected.iter().map(|&si| episode_of[si]).collect();
+        let mut ep_pool: Vec<usize> = sub_picks
+            .into_iter()
+            .filter(|si| !selected.contains(si))
+            .collect();
+        while selected.len() < k && !ep_pool.is_empty() {
+            let has_strong_unrep = ep_pool.iter().any(|&si| {
+                !used_episodes.contains(&episode_of[si])
+                    && fused_q16[si].saturating_mul(2) >= max_fused
+            });
+            let mut best_pos = 0usize;
+            let mut best_eff: u64 = 0;
+            for (pos, &si) in ep_pool.iter().enumerate() {
+                let rank_bonus = (ep_pool.len().saturating_sub(pos) as u64).saturating_mul(Q16_ONE >> 4);
+                let base = fused_q16[si].saturating_add(rank_bonus);
+                let eff = if has_strong_unrep && used_episodes.contains(&episode_of[si]) {
+                    (base.saturating_mul(3)) / 5
+                } else {
+                    base
+                };
+                if pos == 0 || eff > best_eff {
+                    best_eff = eff;
+                    best_pos = pos;
+                }
             }
-            if !selected.contains(&si) {
-                selected.push(si);
-            }
+            let chosen = ep_pool.remove(best_pos);
+            used_episodes.insert(episode_of[chosen]);
+            selected.push(chosen);
         }
         // Fill deep pool by fused summary quality (never re-admitting standing-rule sessions into top cut).
         let mut by_fused: Vec<(u64, usize)> = (0..ns)
@@ -715,7 +868,7 @@ pub(in crate::retrieval) fn select_submodular_sessions(
     }
 
 if p.enable_submodular && ns > 1 {
-        let mut selected: Vec<usize> = Vec::with_capacity(k);
+        let mut selected: Vec<usize> = Vec::with_capacity(pool_cap);
         if let Some(&top0) = s_ord_base.first() {
             if s_score[top0] > 0.0 || bridge_boost[top0] > 0.0 {
                 selected.push(top0);
@@ -726,8 +879,21 @@ if p.enable_submodular && ns > 1 {
                 let mut remaining: Vec<usize> = (0..ns)
                     .filter(|&si| si != top0 && (s_score[si] > 0.0 || bridge_boost[si] > 0.0))
                     .collect();
+                // Detect batch-shared timestamps (e.g. multiple sub-sessions inside one batch epoch):
+                // when >= 4 sessions share an identical timestamp, `same_date_seen` must not slash
+                // sibling milestone sub-sessions by 75% (`topic_seen` Jaccard handles true duplicates).
+                let batch_shared_ts = {
+                    let mut ts_counts: std::collections::BTreeMap<i64, usize> =
+                        std::collections::BTreeMap::new();
+                    for &ts in &ix.session_ts {
+                        if ts > 0 {
+                            *ts_counts.entry(ts).or_insert(0) += 1;
+                        }
+                    }
+                    ts_counts.values().any(|&c| c >= 4)
+                };
 
-                while selected.len() < k && !remaining.is_empty() {
+                while selected.len() < pool_cap && !remaining.is_empty() {
                     let mut best_pos = 0usize;
                     let mut best_gain = -1.0f32;
                     let mut found = false;
@@ -755,7 +921,9 @@ if p.enable_submodular && ns > 1 {
                             continue;
                         }
                         let shared_ent = ix.session_entities[si].iter().any(|e| covered_ents.contains(e));
-                        let same_date_seen = eff_it.is_event_sequence && selected.iter().any(|&s| ix.session_ts[s] == ix.session_ts[si] && ix.session_ts[si] > 0);
+                        let same_date_seen = eff_it.is_event_sequence
+                            && !batch_shared_ts
+                            && selected.iter().any(|&s| ix.session_ts[s] == ix.session_ts[si] && ix.session_ts[si] > 0);
                         let topic_seen = eff_it.is_event_sequence
                             && !initiative_content[si].is_empty()
                             && selected.iter().any(|&s| jaccard(&initiative_content[s], &initiative_content[si]) >= 0.45);

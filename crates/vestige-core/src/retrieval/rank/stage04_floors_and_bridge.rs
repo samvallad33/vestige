@@ -709,6 +709,147 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             lifts
         };
 
+        // Co-Witness Cross-Lexical & Bounded Downward Hyponym Voter (`Q16.16`):
+        // Bridges uncovered query groups via WordNet 3.1 (full neighbors + bounded 1-hop hyponyms + gloss),
+        // GeoNames, ConceptNet 5.7, and Roget 1911; fires ONLY when >= 2 distinct query groups are
+        // co-witnessed in `si != top0` with >= 1 newly bridged uncovered group.
+        let mut cw_turn_ids: Vec<(usize, Vec<u32>)> = Vec::new();
+        let cowitness_lifts: Vec<u64> = if ns <= 512 && !plan.groups.is_empty() {
+            let mut lifts = vec![0u64; ns];
+            let ns_u32 = (ns as u32).max(1);
+            let max_cw_df = (ns_u32 / 5).clamp(2, 12);
+            let q_toks_cw = raw_tokens(&q.text);
+            let q_has_us = q_toks_cw
+                .windows(2)
+                .any(|w| w[0] == "united" && w[1] == "states");
+            let senate_id = ix.vocab.get("senate");
+            let congress_id = ix.vocab.get("congress");
+            let mut group_nbrs: Vec<(usize, Vec<(u32, u64)>)> = Vec::new();
+            for (gi, g_word) in plan.groups.iter().take(64).enumerate() {
+                if g_word.starts_with('\u{1}')
+                    || !is_content(g_word)
+                    || crate::retrieval::seating::preference_lattice::is_pref_framing_word(g_word)
+                {
+                    continue;
+                }
+                let mut g_ids: Vec<(u32, u64)> = Vec::new();
+                let mut seen_gid: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+                let mut add_cw = |lem: &str| {
+                    if lem.len() < 3 || lem.eq_ignore_ascii_case(g_word) {
+                        return;
+                    }
+                    let lst = stem(lem);
+                    for lid in [ix.vocab.get(lem), ix.vocab.get(&stem_term(&lst))]
+                        .into_iter()
+                        .flatten()
+                    {
+                        if seen_gid.insert(lid) {
+                            let df = ix.s_stats.df.get(&lid).copied().unwrap_or(0);
+                            if (1..=max_cw_df).contains(&df) {
+                                let ic = crate::retrieval::fusion::aspect_coverage_q16::aspect_ic_q16(df, ns_u32);
+                                g_ids.push((lid, ic));
+                            }
+                        }
+                    }
+                };
+                for (lem, _) in crate::wordnet::full_lexicon_neighbors(g_word).into_iter().take(24) {
+                    add_cw(lem);
+                }
+                let s_cnt = crate::wordnet::senses(g_word).len();
+                if (1..=5).contains(&s_cnt) {
+                    for inst in crate::wordnet::class_to_instances(g_word, 1) {
+                        add_cw(inst);
+                    }
+                }
+                for gc in crate::wordnet::gloss_and_compound_concepts(g_word).into_iter().take(20) {
+                    add_cw(gc);
+                }
+                for (glem, _) in crate::geonames::geo_neighbors(g_word) {
+                    add_cw(glem);
+                }
+                if q_has_us && g_word == "states" {
+                    for st_tok in crate::geonames::geo_class_instances("state") {
+                        add_cw(st_tok.as_str());
+                    }
+                }
+                for (cn_lem, _) in crate::conceptnet::two_hop_neighbors(g_word, 14) {
+                    add_cw(cn_lem);
+                }
+                for (rg_lem, _) in crate::roget::conceptual_neighbors(g_word, 16) {
+                    add_cw(rg_lem);
+                }
+                if !g_ids.is_empty() {
+                    group_nbrs.push((gi, g_ids));
+                }
+            }
+            if !group_nbrs.is_empty() {
+                let mut raw_cw = vec![0u64; ns];
+                let mut max_raw = 0u64;
+                for si in 0..ns {
+                    if si == top0 {
+                        continue;
+                    }
+                    let is_us_politics = q_has_us
+                        && (senate_id.is_some_and(|id| ix.session_content[si].contains(&id))
+                            || congress_id.is_some_and(|id| ix.session_content[si].contains(&id)));
+                    let exact_m = s_exact_mask[si] & q_full_mask;
+                    let mut bridged_m = 0u64;
+                    let mut ic_sum = 0u64;
+                    let mut matched_ids: Vec<u32> = Vec::new();
+                    for (gi, g_ids) in &group_nbrs {
+                        if (exact_m & (1u64 << gi)) != 0 {
+                            continue;
+                        }
+                        if is_us_politics && plan.groups.get(*gi).is_some_and(|g| g == "states") {
+                            continue;
+                        }
+                        let mut best_g_ic = 0u64;
+                        let mut best_lid = None;
+                        for &(lid, ic) in g_ids {
+                            if ix.session_content[si].contains(&lid)
+                                || ix.session_bags[si].tf[0].contains_key(&lid)
+                            {
+                                if ic > best_g_ic {
+                                    best_g_ic = ic;
+                                    best_lid = Some(lid);
+                                }
+                            }
+                        }
+                        if best_g_ic > 0 {
+                            bridged_m |= 1u64 << gi;
+                            ic_sum = ic_sum.saturating_add(best_g_ic);
+                            if let Some(lid) = best_lid {
+                                matched_ids.push(lid);
+                            }
+                        }
+                    }
+                    if bridged_m != 0 && (exact_m | bridged_m).count_ones() >= 2 {
+                        let mult = (bridged_m.count_ones() as u64).min(3);
+                        let sc = ic_sum.saturating_mul(mult);
+                        raw_cw[si] = sc;
+                        if sc > max_raw {
+                            max_raw = sc;
+                        }
+                        if !matched_ids.is_empty() {
+                            cw_turn_ids.push((si, matched_ids));
+                        }
+                    }
+                }
+                if max_raw > 0 {
+                    let cap_cw = ((top0_ceiling_q16 as u128).saturating_mul(22) / 100).max(1) as u64;
+                    for si in 0..ns {
+                        if raw_cw[si] > 0 {
+                            lifts[si] = ((raw_cw[si] as u128).saturating_mul(cap_cw as u128)
+                                / (max_raw as u128)) as u64;
+                        }
+                    }
+                }
+            }
+            lifts
+        } else {
+            vec![0u64; ns]
+        };
+
         // Unified evidence-scaled budget: modules vote, but only sessions that add a query group
         // missing from top0 may receive a combined lift capped at 0.30 * sight(top0).
         let hist_vote: &[u64] = if has_named_speakers_eff { &hist_lifts } else { &[] };
@@ -725,6 +866,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 (false, &shepard_lifts),
                 (false, &lachmann_lifts),
                 (false, &pmest_lifts),
+                (false, &cowitness_lifts),
                 (false, hist_vote),
             ],
             s_exact_mask,
@@ -743,6 +885,51 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             &s_score,
             &mut bridge_boost,
         );
+        if !invariant_crisp_lock
+            && !top0_full_cov
+            && !eff_it.sniper_how_many
+            && (has_named_speakers_eff || eff_it.preference)
+        {
+            apply_rule8_capped_q16_lifts(
+                &cowitness_lifts,
+                top0,
+                top0_ceiling_q16,
+                true,
+                &s_score,
+                &mut bridge_boost,
+            );
+            let lex_tmax = t_scene.iter().cloned().fold(0.0f32, f32::max);
+            if lex_tmax > 0.0 && !cw_turn_ids.is_empty() {
+                for (si, lids) in &cw_turn_ids {
+                    if cowitness_lifts[*si] == 0 {
+                        continue;
+                    }
+                    let best_ti = ix.session_turns[*si]
+                        .iter()
+                        .copied()
+                        .filter(|&ti| {
+                            let tr = &ix.turns[ti];
+                            !tr.is_question
+                                && !tr.is_backchannel
+                                && !tr.is_standing_policy
+                                && lids.iter().any(|id| tr.content.contains(id) || tr.feats.iter().any(|f| f.id == *id))
+                        })
+                        .max_by(|&a, &b| {
+                            t_scene[a]
+                                .partial_cmp(&t_scene[b])
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                                .then_with(|| b.cmp(&a))
+                        });
+                    if let Some(ti) = best_ti {
+                        let lift_f = 0.20 * lex_tmax * (cowitness_lifts[*si] as f32 / (top0_ceiling_q16.max(1) as f32)).min(1.0);
+                        t_scene[ti] += lift_f;
+                        if t_scene[ti] > t_scene_sess[*si] {
+                            t_scene_sess[*si] = t_scene[ti];
+                        }
+                    }
+                }
+            }
+        }
         // On partial-coverage / multi-hop queries (`!invariant_crisp_lock`), also let strong 2-hop RM3
         // bridge sessions without direct missing-group overlap enter Top-5..10 (bounded at <= 0.16 * top0).
         if !invariant_crisp_lock && (eff_it.multi_hop || !top0_full_cov) {
@@ -912,6 +1099,14 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     };
                     for (lemma, rel_w) in crate::wordnet::full_lexicon_neighbors(w) {
                         push_nbr(lemma, rel_w);
+                    }
+                    if (1..=4).contains(&crate::wordnet::senses(w).len()) {
+                        for inst in crate::wordnet::class_to_instances(w, 1) {
+                            push_nbr(inst, 78);
+                        }
+                    }
+                    for glem in crate::wordnet::gloss_and_compound_concepts(w).into_iter().take(16) {
+                        push_nbr(glem, 68);
                     }
                     for (lemma, rel_w) in crate::roget::conceptual_neighbors(w, 64) {
                         push_nbr(lemma, rel_w);

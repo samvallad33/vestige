@@ -20,10 +20,34 @@ pub fn utterance_is_standing_policy(text: &str) -> bool {
     }
     let lower = prose.to_lowercase();
     let trimmed = lower.trim_start();
-    let trimmed = trimmed.strip_prefix("please ").map(str::trim_start).unwrap_or(trimmed);
-    let rest = ["always ", "never ", "don't ", "don\u{2019}t ", "do not "]
-        .iter()
-        .find_map(|lead| trimmed.strip_prefix(lead));
+    fn strip_directive(s: &str) -> Option<&str> {
+        let s = s.trim_start();
+        let s = s.strip_prefix("please ").map(str::trim_start).unwrap_or(s);
+        ["always ", "never ", "don't ", "don\u{2019}t ", "do not "]
+            .iter()
+            .find_map(|lead| s.strip_prefix(lead))
+    }
+    let rest = strip_directive(trimmed).or_else(|| {
+        // Also recognize comma-fronted prepositional conditions ("For API errors, always include...").
+        let (lead, after_comma) = trimmed.split_once(',')?;
+        let lead_toks = raw_tokens(lead);
+        // hardcode-scan: closed-class (prepositional condition leads)
+        const PREP_LEAD: &[&str] = &["for", "in", "on", "during", "regarding", "about", "with", "under"];
+        let is_discourse = lead_toks.get(1).is_some_and(|w| {
+            matches!(
+                w.as_str(),
+                "example" | "instance" | "addition" | "fact" | "general" | "summary" | "conclusion" | "short" | "particular" | "contrast"
+            )
+        });
+        if (2..=10).contains(&lead_toks.len())
+            && !is_discourse
+            && lead_toks.first().is_some_and(|w| PREP_LEAD.contains(&w.as_str()))
+        {
+            strip_directive(after_comma)
+        } else {
+            None
+        }
+    });
     let Some(rest) = rest else { return false };
     let clause = rest.split(['.', '!', ';', ',', '\n']).next().unwrap_or(rest);
     let words: Vec<String> = raw_tokens(clause);
@@ -63,6 +87,7 @@ pub(in crate::retrieval) fn has_compound_preference_frame(text: &str) -> bool {
         "i'm trying to keep ", "i\u{2019}m trying to keep ",
         "i'm looking for ", "i\u{2019}m looking for ",
         "i want to keep ", "i want to avoid ", "i try to avoid ",
+        "i wanna ", "i aim to ", "i aim for ", "i tend to ",
         "i've chosen to ", "i\u{2019}ve chosen to ",
         "my favorite ", "i really like ", "i enjoy ",
     ]
@@ -179,22 +204,61 @@ pub(in crate::retrieval) fn extract_rule_scope(text: &str) -> (bool, Vec<String>
 /// Rules with no subordinate condition return an empty list (unconditional).
 pub(in crate::retrieval) fn extract_rule_condition(text: &str) -> Vec<String> {
     let (prose, _) = split_blip_caption(text);
-    let first = prose.split("->").next().unwrap_or(prose);
-    let first = first.split(['.', '!', ';', '\n']).next().unwrap_or(first);
-    let toks = raw_tokens(first);
+    let clean = prose.split("->").next().unwrap_or(prose);
     // hardcode-scan: closed-class (subordinating conjunctions)
-    const SUBORD: &[&str] = &["when", "whenever", "if", "while", "during", "once"];
+    const SUBORD: &[&str] = &["when", "whenever", "if", "while", "during", "once", "anytime", "unless", "until"];
     // hardcode-scan: closed-class (topic prepositions)
     const TOPIC_PREP: &[&str] = &["about", "regarding", "on", "for", "with", "of", "concerning", "involving"];
-    let Some(sp) = toks.iter().position(|w| SUBORD.contains(&w.as_str())) else {
-        return Vec::new();
-    };
-    let cond = &toks[sp + 1..];
-    let cond = match cond.iter().position(|w| TOPIC_PREP.contains(&w.as_str())) {
-        Some(pp) if pp + 1 < cond.len() => &cond[pp + 1..],
-        _ => cond,
-    };
-    cond.iter().filter(|w| is_content(w)).cloned().collect()
+    // hardcode-scan: closed-class (prepositional condition leads)
+    const PREP_LEAD: &[&str] = &["for", "in", "on", "during", "regarding", "about", "with", "under"];
+    // hardcode-scan: closed-class (deontic directive heads)
+    const DEONTIC_HEAD: &[&str] = &["always", "never", "please", "avoid", "ensure", "prefer", "must", "should"];
+    let mut out = Vec::new();
+    for sent in clean.split(['.', '!', ';', '\n']) {
+        let toks = raw_tokens(sent);
+        if let Some(sp) = toks.iter().position(|w| SUBORD.contains(&w.as_str())) {
+            let cond = &toks[sp + 1..];
+            let cond = match cond.iter().position(|w| TOPIC_PREP.contains(&w.as_str())) {
+                Some(pp) if pp + 1 < cond.len() => &cond[pp + 1..],
+                _ => cond,
+            };
+            for w in cond.iter().filter(|w| is_content(w)) {
+                if !out.contains(w) {
+                    out.push(w.clone());
+                }
+            }
+            continue;
+        }
+        // Fronted prepositional condition clause before comma ("For API errors, always include status codes.")
+        if let Some((lead, rest)) = sent.split_once(',') {
+            let lead_toks = raw_tokens(lead);
+            let rest_low = rest.trim_start().to_ascii_lowercase();
+            let rest_toks = raw_tokens(rest);
+            let is_discourse_lead = lead_toks.get(1).is_some_and(|w| {
+                matches!(
+                    w.as_str(),
+                    "example" | "instance" | "addition" | "fact" | "general" | "summary" | "conclusion" | "short" | "particular" | "contrast"
+                )
+            });
+            let has_directive_rest = rest_toks.iter().take(4).any(|w| DEONTIC_HEAD.contains(&w.as_str()))
+                || rest_low.starts_with("don't ")
+                || rest_low.starts_with("do not ")
+                || rest_low.starts_with("make sure ")
+                || rest_low.starts_with("be sure ");
+            if (2..=10).contains(&lead_toks.len())
+                && !is_discourse_lead
+                && lead_toks.first().is_some_and(|w| PREP_LEAD.contains(&w.as_str()))
+                && has_directive_rest
+            {
+                for w in lead_toks[1..].iter().filter(|w| is_content(w)) {
+                    if !out.contains(w) {
+                        out.push(w.clone());
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 

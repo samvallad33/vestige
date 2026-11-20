@@ -212,7 +212,7 @@ struct SearchArgs {
     source_status: Option<String>,
 }
 
-fn parse_valid_at(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, String> {
+pub(super) fn parse_valid_at(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, String> {
     let Some(raw) = raw else { return Ok(None) };
     if raw == "now" {
         return Ok(Some(Utc::now()));
@@ -455,13 +455,20 @@ fn attach_source_record(value: &mut Value, node: &vestige_core::KnowledgeNode) {
 }
 
 pub fn format_node(node: &vestige_core::KnowledgeNode, detail_level: &str) -> Value {
+    let currently_valid = node.is_currently_valid();
     match detail_level {
-        "brief" => serde_json::json!({
-            "id": node.id,
-            "nodeType": node.node_type,
-            "tags": node.tags,
-            "retentionStrength": node.retention_strength,
-        }),
+        "brief" => {
+            let mut v = serde_json::json!({
+                "id": node.id,
+                "nodeType": node.node_type,
+                "tags": node.tags,
+                "retentionStrength": node.retention_strength,
+            });
+            if !currently_valid && let Value::Object(map) = &mut v {
+                map.insert("currentlyValid".to_string(), Value::Bool(false));
+            }
+            v
+        }
         "full" => {
             let mut v = serde_json::json!({
                 "id": node.id,
@@ -484,6 +491,7 @@ pub fn format_node(node: &vestige_core::KnowledgeNode, detail_level: &str) -> Va
                 "lapses": node.lapses,
                 "validFrom": node.valid_from.map(|dt| dt.to_rfc3339()),
                 "validUntil": node.valid_until.map(|dt| dt.to_rfc3339()),
+                "currentlyValid": currently_valid,
             });
             attach_source_record(&mut v, node);
             v
@@ -496,6 +504,9 @@ pub fn format_node(node: &vestige_core::KnowledgeNode, detail_level: &str) -> Va
                 "tags": node.tags,
                 "retentionStrength": node.retention_strength,
             });
+            if !currently_valid && let Value::Object(map) = &mut v {
+                map.insert("currentlyValid".to_string(), Value::Bool(false));
+            }
             attach_source_record(&mut v, node);
             v
         }

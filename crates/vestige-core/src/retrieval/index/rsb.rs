@@ -110,6 +110,10 @@ pub(in crate::retrieval) fn build_rsb_and_supersession_edges(
                 || lat_low.contains("instead of ")
                 || lat_low.contains("no longer ")
                 || lat_low.contains("rather than ")
+                || lat_low.contains("switched to ")
+                || lat_low.contains("switched from ")
+                || lat_low.contains("moved from ")
+                || lat_low.contains("changed from ")
                 || lat_low.contains("anymore");
             let has_rev_cue = explicit_replacement || digit_shift;
             let contradicts = torrens_pair_key_match == Some(true)
@@ -124,6 +128,69 @@ pub(in crate::retrieval) fn build_rsb_and_supersession_edges(
                 if !turns[later].supersedes_turns.contains(&prev) {
                     turns[later].supersedes_turns.push(prev);
                 }
+                if !session_supersedes_back[s_lat].contains(&s_prev) {
+                    session_supersedes_back[s_lat].push(s_prev);
+                }
+            }
+        }
+    }
+
+    // 2b. Role-Object State-Update Supersession (`2 <= df <= 6`), strictly gated on explicit
+    //     replacement cues or `appears_contradictory` (NEVER bare `digit_shift`).
+    let mut role_obj_postings: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
+    for (ti, t) in turns.iter().enumerate() {
+        if t.field != 0 || t.is_pure_info_question || t.is_backchannel {
+            continue;
+        }
+        for &rid in &t.role_objs {
+            role_obj_postings.entry(rid).or_default().push(ti);
+        }
+    }
+    for (_, mut list) in role_obj_postings {
+        list.dedup();
+        if !(2..=6).contains(&list.len()) {
+            continue;
+        }
+        for idx in 1..list.len() {
+            let later = list[idx];
+            let prev = list[idx - 1];
+            let s_lat = turns[later].session;
+            let s_prev = turns[prev].session;
+            if s_lat <= s_prev || turns[later].supersedes_turns.contains(&prev) {
+                continue;
+            }
+            let lat_prose = crate::retrieval::graph::torrens::strip_leading_ordinal(&turn_prose_cache[later]);
+            let prev_prose = crate::retrieval::graph::torrens::strip_leading_ordinal(&turn_prose_cache[prev]);
+            let torrens_pair_key_match = match (
+                crate::retrieval::graph::torrens::parse_torrens_sentence(prev_prose, prev),
+                crate::retrieval::graph::torrens::parse_torrens_sentence(lat_prose, later),
+            ) {
+                (Some(rp), Some(rl)) => Some(rp.key_hash == rl.key_hash && rp.val_phrase != rl.val_phrase),
+                _ => None,
+            };
+            if torrens_pair_key_match == Some(false) {
+                continue;
+            }
+            let lat_low = lat_prose.to_ascii_lowercase();
+            // hardcode-scan: closed-class (explicit state-replacement adverbs)
+            let explicit_replacement = lat_low.contains("instead of ")
+                || lat_low.contains("no longer ")
+                || lat_low.contains("rather than ")
+                || lat_low.contains("switched to ")
+                || lat_low.contains("switched from ")
+                || lat_low.contains("moved from ")
+                || lat_low.contains("changed from ")
+                || lat_low.contains("anymore");
+            let contradicts = torrens_pair_key_match == Some(true)
+                || (lat_prose.len() <= 420
+                    && prev_prose.len() <= 420
+                    && crate::advanced::contradiction::appears_contradictory(
+                        prev_prose,
+                        lat_prose,
+                        crate::advanced::contradiction::SubjectIdentity::AlreadyEstablished,
+                    ));
+            if contradicts || explicit_replacement {
+                turns[later].supersedes_turns.push(prev);
                 if !session_supersedes_back[s_lat].contains(&s_prev) {
                     session_supersedes_back[s_lat].push(s_prev);
                 }

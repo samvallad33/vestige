@@ -38,10 +38,10 @@ pub fn harden_process() -> HardeningStatus {
         // PR_SET_DUMPABLE = 4, value = 0
         // Prevents ptrace attach and /proc/$PID/mem scraping.
         let rc = unsafe { libc::prctl(4, 0, 0, 0, 0) };
-        return HardeningStatus {
+        HardeningStatus {
             anti_dump_applied: rc == 0,
             platform: "linux",
-        };
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -125,11 +125,7 @@ impl HydraWatchdog {
                 Some(_status) => true,
                 None => {
                     if let Some(stdin) = child.stdin.as_mut() {
-                        if writeln!(stdin, "PING").is_err() || stdin.flush().is_err() {
-                            true
-                        } else {
-                            false
-                        }
+                        writeln!(stdin, "PING").is_err() || stdin.flush().is_err()
                     } else {
                         false
                     }

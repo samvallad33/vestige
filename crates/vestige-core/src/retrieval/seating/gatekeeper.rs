@@ -2,6 +2,8 @@
 
 use crate::retrieval::*;
 
+pub(in crate::retrieval) use super::at1_scorer_q16::apply_at1_gatekeeper_q16;
+
 
 /// Rank-1 gatekeeper. Runs after RSB. Reorders the RSB window. It does not
 /// grow the window. The pool is that window, so its size is the caller's k.

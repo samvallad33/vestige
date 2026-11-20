@@ -435,3 +435,178 @@ fn rank_is_identical_across_repeated_calls() {
     let tb: Vec<String> = b.results[0].turns.iter().map(|x| x.id.clone()).collect();
     assert_eq!(ta, tb);
 }
+
+#[test]
+fn retrospective_assistant_reminder_routes_to_assistant_while_classify_stays_false() {
+    let q_text = "I'm planning a trip to Kyoto; remind me what you recommended for day two?";
+    let raw_it = classify(q_text);
+    assert!(
+        !raw_it.assistant_attribution,
+        "query::intent::classify() must remain unmodified: {raw_it:?}"
+    );
+    let mut sessions = Vec::new();
+    for i in 0..16 {
+        sessions.push(Session {
+            id: format!("noise-{i}"),
+            date: String::new(),
+            timestamp: 100 + i as i64,
+            turns: vec![
+                turn("user", &format!("General planning note {i} about packing luggage and checking weather.")),
+                turn("assistant", &format!("Sure, note {i} about standard travel checklists.")),
+            ],
+        });
+    }
+    sessions.push(Session {
+        id: "kyoto-rec".into(),
+        date: String::new(),
+        timestamp: 500,
+        turns: vec![
+            turn("user", "Can you suggest a Kyoto itinerary for my upcoming trip?"),
+            turn("assistant", "For day two in Kyoto, visit Arashiyama Bamboo Grove early, then Tenryu-ji Temple and Philosopher's Path."),
+        ],
+    });
+    let ranked = rank(&RankRequest {
+        sessions,
+        queries: vec![Query { text: q_text.into(), date: String::new() }],
+        top_k: 5,
+        params: Params::default(),
+    });
+    assert_eq!(ranked.results[0].sessions[0].id, "kyoto-rec");
+    assert!(
+        ranked.results[0].turns[0].id.contains("t1") || ranked.results[0].turns[0].session_id == "kyoto-rec",
+        "expected assistant Kyoto recommendation turn at rank 1: {:?}",
+        ranked.results[0].turns
+    );
+}
+
+#[test]
+fn topical_preference_beats_unrelated_standing_rule_without_hobby_flood() {
+    let mut sessions = Vec::new();
+    for i in 0..15 {
+        sessions.push(Session {
+            id: format!("hobby-{i}"),
+            date: String::new(),
+            timestamp: 100 + i as i64,
+            turns: vec![
+                turn("user", &format!("I enjoy hiking trail {i} and love outdoor photography on weekends.")),
+                turn("assistant", "Sounds like a wonderful outdoor hobby!"),
+            ],
+        });
+    }
+    sessions.push(Session {
+        id: "rule-date".into(),
+        date: String::new(),
+        timestamp: 200,
+        turns: vec![
+            turn("user", "Always use YYYY-MM-DD when writing calendar dates."),
+            turn("assistant", "Understood, I will use ISO date format."),
+        ],
+    });
+    sessions.push(Session {
+        id: "coffee-pref".into(),
+        date: String::new(),
+        timestamp: 300,
+        turns: vec![
+            turn("user", "I prefer single-origin Ethiopian light roast pour-over coffee and dislike dark roast espresso. What beans should I try?"),
+            turn("assistant", "Try washed Yirgacheffe or Guji light roasts."),
+        ],
+    });
+    let ranked = rank(&RankRequest {
+        sessions,
+        queries: vec![Query {
+            text: "Can you recommend a coffee roaster for my morning pour-over?".into(),
+            date: String::new(),
+        }],
+        top_k: 5,
+        params: Params::default(),
+    });
+    assert_eq!(
+        ranked.results[0].sessions[0].id,
+        "coffee-pref",
+        "topical coffee preference must take Slot 0 ahead of unrelated standing rule & hobbies: {:?}",
+        ranked.results[0].sessions
+    );
+}
+
+#[test]
+fn self_payload_turn_beats_carried_echo_opener_at_slot0() {
+    let req = RankRequest {
+        sessions: vec![
+            Session {
+                id: "s-echo".into(),
+                date: "2024-03-10".into(),
+                timestamp: 100,
+                turns: vec![
+                    Turn {
+                        id: "s-echo:t0".into(),
+                        ..turn("user", "Do you remember the museum we talked about earlier?")
+                    },
+                    Turn {
+                        id: "s-echo:t1".into(),
+                        ..turn("user", "I visited the Rijksmuseum in Amsterdam on March 10 and saw Rembrandt's Night Watch.")
+                    },
+                    Turn {
+                        id: "s-echo:t2".into(),
+                        ..turn("assistant", "The Night Watch at the Rijksmuseum is iconic!")
+                    },
+                ],
+            },
+            Session {
+                id: "s-other".into(),
+                date: "2024-03-12".into(),
+                timestamp: 200,
+                turns: vec![turn("user", "I bought groceries at the corner market today.")],
+            },
+        ],
+        queries: vec![Query {
+            text: "Which museum in Amsterdam did I visit?".into(),
+            date: "2024-03-20".into(),
+        }],
+        top_k: 5,
+        params: Params::default(),
+    };
+    let ranked = rank(&req);
+    assert_eq!(
+        ranked.results[0].turns[0].id, "s-echo:t1",
+        "originating self-payload turn must win Slot 0 over echo question opener: {:?}",
+        ranked.results[0].turns
+    );
+}
+
+#[test]
+fn prepositional_condition_standing_rule_extracts_condition_and_ranks_first() {
+    let cond = crate::retrieval::extract_rule_condition("For API errors, always include HTTP status codes.");
+    assert!(
+        cond.iter().any(|w| w == "api") && cond.iter().any(|w| w == "errors"),
+        "expected fronted prepositional condition tokens, got: {cond:?}"
+    );
+    let req = RankRequest {
+        sessions: vec![
+            Session {
+                id: "rule-api".into(),
+                date: String::new(),
+                timestamp: 100,
+                turns: vec![turn("user", "For API errors, always include HTTP status codes.")],
+            },
+            Session {
+                id: "rule-other".into(),
+                date: String::new(),
+                timestamp: 200,
+                turns: vec![turn("user", "For meeting notes, always use bullet lists.")],
+            },
+        ],
+        queries: vec![Query {
+            text: "How should I document API errors?".into(),
+            date: String::new(),
+        }],
+        top_k: 2,
+        params: Params::default(),
+    };
+    let ranked = rank(&req);
+    assert_eq!(
+        ranked.results[0].standing_rules.first().map(|r| r.session_id.as_str()),
+        Some("rule-api"),
+        "prepositional condition rule must rank #1: {:?}",
+        ranked.results[0].standing_rules
+    );
+}

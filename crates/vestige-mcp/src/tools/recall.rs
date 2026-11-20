@@ -271,15 +271,49 @@ pub fn rank_nodes_lexical_scoped(
     if !include_superseded && let Ok(retired) = storage.superseded_node_ids() {
         nodes.retain(|n| !retired.contains(&n.id));
     }
-    let check_ts = valid_at.unwrap_or_else(chrono::Utc::now);
-    nodes.retain(|n| {
-        n.valid_from.is_none_or(|t| t <= check_ts)
-            && n.valid_until.is_none_or(|t| t > check_ts)
-    });
-    if nodes.is_empty() {
-        return Vec::new();
+    if let Some(check_ts) = valid_at {
+        nodes.retain(|n| {
+            n.valid_from.is_none_or(|t| t <= check_ts)
+                && n.valid_until.is_none_or(|t| t > check_ts)
+        });
+        if nodes.is_empty() {
+            return Vec::new();
+        }
+        return rank_loaded_nodes_total_recall(storage, &nodes, query, top_k);
     }
-    rank_loaded_nodes_total_recall(storage, &nodes, query, top_k)
+    let (active_nodes, inactive_nodes): (Vec<KnowledgeNode>, Vec<KnowledgeNode>) =
+        nodes.into_iter().partition(KnowledgeNode::is_currently_valid);
+    let mut out = if active_nodes.is_empty() {
+        Vec::new()
+    } else {
+        rank_loaded_nodes_total_recall(storage, &active_nodes, query, top_k)
+    };
+    if out.len() < top_k && !inactive_nodes.is_empty() {
+        let rem = top_k - out.len();
+        let min_active = out
+            .iter()
+            .map(|&(_, sc)| sc)
+            .fold(f32::INFINITY, f32::min);
+        let cap = if min_active.is_finite() {
+            (min_active * 0.5).max(1e-6)
+        } else {
+            0.01
+        };
+        let expired_hits = rank_loaded_nodes_total_recall(storage, &inactive_nodes, query, rem);
+        let max_exp = expired_hits
+            .iter()
+            .map(|&(_, sc)| sc)
+            .fold(0.0f32, f32::max)
+            .max(1.0);
+        for (id, sc) in expired_hits {
+            if out.len() >= top_k {
+                break;
+            }
+            let demoted = ((sc / max_exp) * cap * 0.5).max(1e-7);
+            out.push((id, demoted));
+        }
+    }
+    out
 }
 
 /// Core Total-Recall bridge shared by `recall` (`rank_nodes_lexical`) and the live
@@ -447,24 +481,68 @@ pub(crate) fn rank_loaded_nodes_total_recall(
     };
 
     let resp = vestige_core::retrieval::rank(&req);
+    let has_penalties = !penalty_by_id.is_empty();
     let mut scored: Vec<(String, f32)> = resp
         .results
         .into_iter()
         .next()
         .map(|q_res| {
+            let top_raw = q_res
+                .turns
+                .iter()
+                .map(|h| h.score)
+                .fold(0.0f32, f32::max)
+                .max(1e-4);
             q_res
                 .turns
                 .into_iter()
-                .filter_map(|hit| {
+                .enumerate()
+                .filter_map(|(rk, hit)| {
+                    if hit.score <= 0.0 {
+                        return None;
+                    }
+                    let rank_preserving = top_raw / (1.0 + 0.05 * (rk as f32));
                     let mult = 1.0 - penalty_by_id.get(hit.id.as_str()).copied().unwrap_or(0.0);
-                    let adj = hit.score * mult;
+                    let adj = rank_preserving * mult;
                     (adj > 0.0).then_some((hit.id, adj))
                 })
                 .collect()
         })
         .unwrap_or_default();
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    if has_penalties {
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    }
+    scored.truncate(top_k);
     scored
+}
+
+fn filter_resolution_scope(
+    storage: &Storage,
+    mut res: HandleResolution,
+    scope: Option<&str>,
+) -> HandleResolution {
+    let Some(sc) = scope else {
+        return res;
+    };
+    res.ids
+        .retain(|id| storage.node_is_in_scope(id, sc).unwrap_or(false));
+    res.candidates
+        .retain(|(id, _)| storage.node_is_in_scope(id, sc).unwrap_or(false));
+    if res.ids.is_empty() && res.candidates.len() == 1 {
+        let (id, kind) = res.candidates.remove(0);
+        res.kind = kind;
+        res.ids.push(id);
+    }
+    res
+}
+
+#[derive(Clone, Copy)]
+struct ResolutionOptions<'a> {
+    limit: Option<usize>,
+    detail_level: Option<&'a str>,
+    offset: usize,
+    scope: Option<&'a str>,
+    valid_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Value, String>> {
@@ -481,20 +559,51 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         .get("offset")
         .and_then(|v| v.as_u64())
         .map_or(0, |n| n as usize);
+    let include_cross_scope = object
+        .get("includeCrossScope")
+        .or_else(|| object.get("include_cross_scope"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let explicit_scope: Option<&str> = if include_cross_scope {
+        None
+    } else if let Some(raw_sc_val) = object.get("scope") {
+        let Some(raw_sc) = raw_sc_val.as_str() else {
+            return Some(Err("Invalid scope: expected a string".to_string()));
+        };
+        let trimmed = raw_sc.trim();
+        if trimmed.is_empty() || trimmed.len() > 200 || trimmed.chars().any(char::is_control) {
+            return Some(Err(
+                "Invalid scope: expected a non-empty identifier of at most 200 visible characters"
+                    .to_string(),
+            ));
+        }
+        Some(trimmed)
+    } else {
+        None
+    };
+    let raw_valid_at = object
+        .get("validAt")
+        .or_else(|| object.get("valid_at"))
+        .and_then(Value::as_str);
+    let valid_at = match super::search_unified::parse_valid_at(raw_valid_at) {
+        Ok(ts) => ts,
+        Err(e) => return Some(Err(e)),
+    };
+    let opts = ResolutionOptions {
+        limit,
+        detail_level,
+        offset,
+        scope: explicit_scope,
+        valid_at,
+    };
     if !object.contains_key("handle") {
         // Check if an id was passed directly (absorbing memory(action="get", id=...))
         if let Some(id) = object.get("id").and_then(|v| v.as_str()).map(str::trim)
             && !id.is_empty()
         {
-            let resolution = storage.resolve_handle(id);
-            return Some(Ok(handle_resolution_payload(
-                storage,
-                id,
-                resolution,
-                limit,
-                detail_level,
-                offset,
-            )));
+            let resolution =
+                filter_resolution_scope(storage.as_ref(), storage.resolve_handle(id), explicit_scope);
+            return Some(Ok(handle_resolution_payload(storage, id, resolution, opts)));
         }
         // A Strata log has no free-text search, so a `query` there can only be
         // an exact handle. Resolve it as one instead of refusing an id or a tag
@@ -507,18 +616,12 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         if query.is_empty() || !crate::strata_memory::is_strata_backend(storage.as_ref()) {
             return None;
         }
-        let resolution = storage.resolve_handle(query);
+        let resolution =
+            filter_resolution_scope(storage.as_ref(), storage.resolve_handle(query), explicit_scope);
         if resolution.ids.is_empty() && resolution.candidates.is_empty() {
-            return Some(Ok(handle_required_payload(storage, query)));
+            return Some(Ok(handle_required_payload(storage, query, explicit_scope)));
         }
-        return Some(Ok(handle_resolution_payload(
-            storage,
-            query,
-            resolution,
-            limit,
-            detail_level,
-            offset,
-        )));
+        return Some(Ok(handle_resolution_payload(storage, query, resolution, opts)));
     }
     let handle = object
         .get("handle")
@@ -526,15 +629,12 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         .map(str::trim)
         .unwrap_or("");
     if !handle.is_empty() {
-        let resolution = storage.resolve_handle(handle);
-        return Some(Ok(handle_resolution_payload(
-            storage,
-            handle,
-            resolution,
-            limit,
-            detail_level,
-            offset,
-        )));
+        let resolution = filter_resolution_scope(
+            storage.as_ref(),
+            storage.resolve_handle(handle),
+            explicit_scope,
+        );
+        return Some(Ok(handle_resolution_payload(storage, handle, resolution, opts)));
     }
     // `handle` present but empty/non-string: free text with no handle — the
     // handle_required payload, with candidates mined from the free text.
@@ -542,7 +642,7 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         .get("query")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    Some(Ok(handle_required_payload(storage, free_text)))
+    Some(Ok(handle_required_payload(storage, free_text, explicit_scope)))
 }
 
 /// Response payload for a resolved (or ambiguous, or unresolved) handle.
@@ -550,15 +650,18 @@ fn handle_resolution_payload(
     storage: &Arc<Storage>,
     handle: &str,
     resolution: HandleResolution,
-    limit: Option<usize>,
-    detail_level: Option<&str>,
-    offset: usize,
+    opts: ResolutionOptions<'_>,
 ) -> Value {
     // One memory asked for by id comes back whole; a tag comes back as a
     // page of summaries unless the caller asks for more.
     let single = resolution.ids.len() == 1;
-    let detail_level = detail_level.unwrap_or(if single { "full" } else { "summary" });
-    let limit = limit.or((!single).then_some(DEFAULT_TAG_LIMIT));
+    let detail_level = opts
+        .detail_level
+        .unwrap_or(if single { "full" } else { "summary" });
+    let limit = opts.limit.or((!single).then_some(DEFAULT_TAG_LIMIT));
+    let offset = opts.offset;
+    let scope = opts.scope;
+    let valid_at = opts.valid_at;
     if !resolution.ids.is_empty() {
         let mut indexed_nodes: Vec<(usize, String, KnowledgeNode)> = resolution
             .ids
@@ -569,14 +672,23 @@ fn handle_resolution_payload(
                     .get_node(id)
                     .ok()
                     .flatten()
+                    .filter(|n| {
+                        valid_at.is_none_or(|ts| {
+                            n.valid_from.is_none_or(|t| t <= ts)
+                                && n.valid_until.is_none_or(|t| t > ts)
+                        })
+                    })
                     .map(|node| (idx, id.clone(), node))
             })
             .collect();
         let total_nodes = indexed_nodes.len();
         if indexed_nodes.len() > 1 {
             let salience = super::memory_packet::scores(storage.as_ref());
-            indexed_nodes
-                .sort_by(|(_, _, a), (_, _, b)| super::memory_packet::compare(a, b, &salience));
+            indexed_nodes.sort_by(|(_, _, a), (_, _, b)| {
+                b.is_currently_valid()
+                    .cmp(&a.is_currently_valid())
+                    .then_with(|| super::memory_packet::compare(a, b, &salience))
+            });
         }
         if offset > 0 {
             indexed_nodes.drain(..offset.min(indexed_nodes.len()));
@@ -589,7 +701,7 @@ fn handle_resolution_payload(
             .into_iter()
             .map(|(_, _, n)| node_payload_with_detail(n, detail_level))
             .collect();
-        let neighbors = one_hop_neighbors(storage, &active_ids, detail_level);
+        let neighbors = one_hop_neighbors(storage, &active_ids, detail_level, scope);
         let mut out = serde_json::json!({
             "handle": handle,
             "kind": resolution.kind.as_str(),
@@ -649,7 +761,7 @@ fn handle_resolution_payload(
 /// tag or an id inside it, because a word that happens to equal a tag is a
 /// keyword match, not a handle the caller declared. The legacy engine also
 /// tries each identifier-shaped token through its resolver.
-fn handle_required_payload(storage: &Arc<Storage>, free_text: &str) -> Value {
+fn handle_required_payload(storage: &Arc<Storage>, free_text: &str, scope: Option<&str>) -> Value {
     let mut candidates: Vec<(String, HandleKind)> = Vec::new();
     let text = free_text.trim();
     if !text.is_empty() {
@@ -665,7 +777,7 @@ fn handle_required_payload(storage: &Arc<Storage>, free_text: &str) -> Value {
             );
         }
         for q in queries {
-            let r = storage.resolve_handle(q);
+            let r = filter_resolution_scope(storage.as_ref(), storage.resolve_handle(q), scope);
             for id in &r.ids {
                 push_candidate(&mut candidates, id.clone(), r.kind);
             }
@@ -726,7 +838,8 @@ fn truncate_content(text: &str, max_chars: usize) -> String {
 /// Lean node payload for handle responses. `createdAt` lets a caller order
 /// what one tag returns (the SessionStart rules hook lists newest first).
 fn node_payload_with_detail(node: KnowledgeNode, detail_level: &str) -> Value {
-    match detail_level {
+    let currently_valid = node.is_currently_valid();
+    let mut v = match detail_level {
         "brief" => serde_json::json!({
             "id": node.id,
             "stability": node.stability,
@@ -750,21 +863,30 @@ fn node_payload_with_detail(node: KnowledgeNode, detail_level: &str) -> Value {
             "tags": node.tags,
             "createdAt": node.created_at.to_rfc3339(),
         }),
+    };
+    if !currently_valid && let Value::Object(map) = &mut v {
+        map.insert("currentlyValid".to_string(), Value::Bool(false));
     }
+    v
 }
 
 fn neighbor_node_payload(node: KnowledgeNode, max_chars: Option<usize>) -> Value {
+    let currently_valid = node.is_currently_valid();
     let content = match max_chars {
         Some(limit) => truncate_content(&node.content, limit),
         None => node.content,
     };
-    serde_json::json!({
+    let mut v = serde_json::json!({
         "id": node.id,
         "type": node.node_type,
         "content": content,
         "tags": node.tags,
         "createdAt": node.created_at.to_rfc3339(),
-    })
+    });
+    if !currently_valid && let Value::Object(map) = &mut v {
+        map.insert("currentlyValid".to_string(), Value::Bool(false));
+    }
+    v
 }
 
 /// One hop over `memory_connections` typed edges, strongest first, deduped,
@@ -772,7 +894,12 @@ fn neighbor_node_payload(node: KnowledgeNode, max_chars: Option<usize>) -> Value
 /// direction) and a bounded neighbor node preview (unless `detail_level` is
 /// `"full_neighbors"`) so multi-KB bodies are not duplicated across up to 20
 /// edges.
-fn one_hop_neighbors(storage: &Arc<Storage>, ids: &[String], detail_level: &str) -> Vec<Value> {
+fn one_hop_neighbors(
+    storage: &Arc<Storage>,
+    ids: &[String],
+    detail_level: &str,
+    scope: Option<&str>,
+) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     let mut seen_edges: Vec<(String, String)> = Vec::new();
     let mut seen_nodes: std::collections::HashSet<String> = ids.iter().cloned().collect();
@@ -786,16 +913,21 @@ fn one_hop_neighbors(storage: &Arc<Storage>, ids: &[String], detail_level: &str)
             if out.len() >= MAX_NEIGHBOR_EDGES {
                 return out;
             }
-            let key = (edge.source_id.clone(), edge.target_id.clone());
-            if seen_edges.contains(&key) {
-                continue;
-            }
-            seen_edges.push(key);
             let other = if edge.source_id == *id {
                 edge.target_id.clone()
             } else {
                 edge.source_id.clone()
             };
+            if let Some(sc) = scope
+                && !storage.node_is_in_scope(&other, sc).unwrap_or(false)
+            {
+                continue;
+            }
+            let key = (edge.source_id.clone(), edge.target_id.clone());
+            if seen_edges.contains(&key) {
+                continue;
+            }
+            seen_edges.push(key);
             let first_seen = seen_nodes.insert(other.clone());
             let max_chars = if full_neighbors {
                 None
@@ -849,6 +981,11 @@ fn one_hop_neighbors(storage: &Arc<Storage>, ids: &[String], detail_level: &str)
             } else {
                 continue;
             };
+            if let Some(sc) = scope
+                && !storage.node_is_in_scope(other, sc).unwrap_or(false)
+            {
+                continue;
+            }
             let key = (trig.to_string(), mem.to_string());
             if seen_edges.contains(&key) {
                 continue;
@@ -1176,5 +1313,195 @@ mod strata_query {
         );
         let january = ranked.iter().filter(|(id, _)| id == &jan_a || id == &jan_b).count();
         assert_eq!(january, 1, "same-day pair both survived top-3: {ranked:?}");
+    }
+
+    #[tokio::test]
+    async fn scoped_handle_recall_isolates_nodes_and_neighbors_across_scopes() {
+        let dir = tempfile::tempdir().unwrap();
+        let id_alpha;
+        let id_beta;
+        {
+            let mut raw = strata_store::StrataStore::open(dir.path()).unwrap();
+            id_alpha = raw
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "Alpha tenant secret key".into(),
+                        source: None,
+                        source_updated_at_ms: None,
+                        node_type: "fact".into(),
+                        tags: vec!["shared-tag".into()],
+                        created_at_ms: Some(1_000),
+                        valid_from_ms: None,
+                        valid_until_ms: None,
+                    },
+                    "tenant-alpha",
+                )
+                .unwrap();
+            id_beta = raw
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "Beta tenant secret key".into(),
+                        source: None,
+                        source_updated_at_ms: None,
+                        node_type: "fact".into(),
+                        tags: vec!["shared-tag".into()],
+                        created_at_ms: Some(2_000),
+                        valid_from_ms: None,
+                        valid_until_ms: None,
+                    },
+                    "tenant-beta",
+                )
+                .unwrap();
+        }
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let now = chrono::Utc::now();
+        storage
+            .save_connection(&vestige_core::ConnectionRecord {
+                source_id: id_alpha.clone(),
+                target_id: id_beta.clone(),
+                strength: 0.9,
+                link_type: "derived_from".to_string(),
+                created_at: now,
+                last_activated: now,
+                activation_count: 1,
+            })
+            .unwrap();
+
+        // Scoped tag lookup must only return tenant-alpha's memory and hide cross-scope neighbor.
+        let alpha_tag = recall(
+            &storage,
+            serde_json::json!({ "handle": "shared-tag", "scope": "tenant-alpha" }),
+        )
+        .await
+        .unwrap();
+        let nodes = alpha_tag["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1, "{alpha_tag}");
+        assert_eq!(nodes[0]["id"], id_alpha, "{alpha_tag}");
+        assert_eq!(alpha_tag["neighbors"], serde_json::json!([]), "{alpha_tag}");
+
+        // Direct ID lookup for tenant-beta's ID under tenant-alpha scope must refuse.
+        let blocked = recall(
+            &storage,
+            serde_json::json!({ "handle": id_beta, "scope": "tenant-alpha" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(blocked["error"], "handle_required", "{blocked}");
+    }
+
+    #[tokio::test]
+    async fn expired_facts_demote_behind_valid_facts_with_currently_valid_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let expired_id;
+        let current_id;
+        {
+            let mut raw = strata_store::StrataStore::open(dir.path()).unwrap();
+            current_id = raw
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "I moved to Austin and live in Austin now.".into(),
+                        source: None,
+                        source_updated_at_ms: None,
+                        node_type: "fact".into(),
+                        tags: vec!["residence".into()],
+                        created_at_ms: Some(1_000),
+                        valid_from_ms: None,
+                        valid_until_ms: None,
+                    },
+                    "user",
+                )
+                .unwrap();
+            expired_id = raw
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "I live in Seattle near Pike Place.".into(),
+                        source: None,
+                        source_updated_at_ms: None,
+                        node_type: "fact".into(),
+                        tags: vec!["residence".into()],
+                        created_at_ms: Some(5_000),
+                        valid_from_ms: Some(1_000),
+                        valid_until_ms: Some(2_000),
+                    },
+                    "user",
+                )
+                .unwrap();
+        }
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let tag_out = recall(&storage, serde_json::json!({ "handle": "residence" }))
+            .await
+            .unwrap();
+        let nodes = tag_out["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2, "{tag_out}");
+        assert_eq!(
+            nodes[0]["id"], current_id,
+            "currently valid residence must rank ahead of newer-timestamp expired residence: {tag_out}"
+        );
+        assert_eq!(nodes[1]["id"], expired_id, "{tag_out}");
+        assert_eq!(nodes[1]["currentlyValid"], false, "{tag_out}");
+
+        let ranked = rank_nodes_lexical_scoped(storage.as_ref(), Some("user"), false, None, "live", 5);
+        assert_eq!(ranked.first().map(|(id, _)| id.as_str()), Some(current_id.as_str()), "{ranked:?}");
+        assert_eq!(ranked.get(1).map(|(id, _)| id.as_str()), Some(expired_id.as_str()), "{ranked:?}");
+    }
+
+    #[tokio::test]
+    async fn resolution_options_preserves_offset_and_valid_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let (first_id, second_id);
+        {
+            let mut raw = strata_store::StrataStore::open(dir.path()).unwrap();
+            first_id = raw
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "Alpha rollout phase one.".into(),
+                        source: None,
+                        source_updated_at_ms: None,
+                        node_type: "fact".into(),
+                        tags: vec!["rollout".into()],
+                        created_at_ms: Some(1_000),
+                        valid_from_ms: Some(1_000),
+                        valid_until_ms: Some(3_000),
+                    },
+                    "user",
+                )
+                .unwrap();
+            second_id = raw
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "Alpha rollout phase two.".into(),
+                        source: None,
+                        source_updated_at_ms: None,
+                        node_type: "fact".into(),
+                        tags: vec!["rollout".into()],
+                        created_at_ms: Some(4_000),
+                        valid_from_ms: Some(4_000),
+                        valid_until_ms: None,
+                    },
+                    "user",
+                )
+                .unwrap();
+        }
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let paged = recall(
+            &storage,
+            serde_json::json!({ "handle": "rollout", "limit": 1, "offset": 1 }),
+        )
+        .await
+        .unwrap();
+        let paged_nodes = paged["nodes"].as_array().unwrap();
+        assert_eq!(paged_nodes.len(), 1, "{paged}");
+        assert_ne!(paged_nodes[0]["id"], second_id, "offset=1 must skip top valid node: {paged}");
+        assert_eq!(paged_nodes[0]["id"], first_id, "{paged}");
+
+        let at_2000 = recall(
+            &storage,
+            serde_json::json!({ "handle": "rollout", "valid_at": "1970-01-01T00:00:02Z" }),
+        )
+        .await
+        .unwrap();
+        let valid_nodes = at_2000["nodes"].as_array().unwrap();
+        assert_eq!(valid_nodes.len(), 1, "{at_2000}");
+        assert_eq!(valid_nodes[0]["id"], first_id, "valid_at must filter to historical window: {at_2000}");
     }
 }

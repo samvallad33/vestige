@@ -489,21 +489,25 @@ fn dump_pool_structural_degree(ix: &Index, pool: &[usize], include_rsb_anteceden
 fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufWriter<std::fs::File>) {
     let n_docs = ix.turns.len();
     let turn_ts: Vec<i64> = ix.turns.iter().map(|t| ix.session_ts[t.session]).collect();
-    let mut pool: Vec<usize> = snap.seated.clone();
+    let mut pre_pool: Vec<usize> = Vec::with_capacity(50);
     for ti in order(&snap.t_scene, &turn_ts) {
-        if pool.len() >= 50 {
+        if pre_pool.len() >= 50 {
             break;
         }
         if snap.t_scene.get(ti).copied().unwrap_or(0.0) <= 0.0 {
             continue;
         }
+        pre_pool.push(ti);
+    }
+    let mut pre_rank: DetHashMap<usize, usize> = DetHashMap::with_capacity_and_hasher(pre_pool.len(), Default::default());
+    for (i, &ti) in pre_pool.iter().enumerate() {
+        pre_rank.insert(ti, i);
+    }
+    let mut pool: Vec<usize> = pre_pool.clone();
+    for &ti in &snap.seated {
         if !pool.contains(&ti) {
             pool.push(ti);
         }
-    }
-    let mut pre_rank: DetHashMap<usize, usize> = DetHashMap::with_capacity_and_hasher(pool.len(), Default::default());
-    for (i, &ti) in pool.iter().enumerate() {
-        pre_rank.insert(ti, i);
     }
     let mut final_rank: DetHashMap<usize, usize> = DetHashMap::default();
     for (i, &ti) in snap.seated.iter().enumerate() {
@@ -629,8 +633,8 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
     };
 
     let mut cands: Vec<Value> = Vec::with_capacity(pool.len());
-    for (rank, &ti) in pool.iter().enumerate() {
-        cands.push(emit_turn(ti, Some(rank)));
+    for &ti in &pool {
+        cands.push(emit_turn(ti, pre_rank.get(&ti).copied()));
     }
 
     // Sessions in official turn top-10 or official session top-10: every turn.
@@ -728,8 +732,8 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
         "temporal": snap.temporal,
         "preference": snap.preference,
         "assistant_attribution": snap.assistant_attribution,
-        "pool_size": pool.len(),
-        "pre_ids": pool.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
+        "pool_size": pre_pool.len(),
+        "pre_ids": pre_pool.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
         "seated_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
         "final_ids": snap.seated.iter().map(|&ti| ix.turns[ti].id.clone()).collect::<Vec<_>>(),
         "final_session_ids": snap.final_session_indices.iter().map(|&si| ix.session_ids[si].clone()).collect::<Vec<_>>(),

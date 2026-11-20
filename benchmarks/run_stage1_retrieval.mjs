@@ -20,20 +20,35 @@
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { existsSync, statSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import os from 'node:os';
 
-function resetAutopsyLedger(benchName) {
-  const dir = join(resolve('.'), 'benchmarks', 'results');
-  mkdirSync(dir, { recursive: true });
-  const p = join(dir, `misses_${benchName}.jsonl`);
-  writeFileSync(p, '', 'utf8');
-  return p;
+function classifyMissRank(zeroBasedIdx) {
+  if (zeroBasedIdx === 0) return 'HIT_RANK_1';
+  if (zeroBasedIdx >= 1 && zeroBasedIdx < 5) return 'NEAR_MISS_RANKS_2_5';
+  if (zeroBasedIdx >= 5 && zeroBasedIdx < 10) return 'IN_TOP10_RANKS_6_10';
+  return 'NOT_IN_TOP10';
 }
 
-function recordAutopsyMiss(ledgerPath, record) {
-  appendFileSync(ledgerPath, JSON.stringify(record) + '\n', 'utf8');
+function resetAutopsyLedger(benchName, customOut = null) {
+  const dir = join(resolve('.'), 'benchmarks', 'results');
+  mkdirSync(dir, { recursive: true });
+  const finalPath = customOut ? resolve(String(customOut)) : join(dir, `misses_${benchName}.jsonl`);
+  const tmpPath = `${finalPath}.tmp.${process.pid}`;
+  return { finalPath, tmpPath, rows: [] };
+}
+
+function recordAutopsyMiss(ledger, record) {
+  if (!ledger) return;
+  ledger.rows.push(JSON.stringify(record));
+}
+
+function flushAutopsyLedger(ledger) {
+  if (!ledger) return;
+  const payload = ledger.rows.length > 0 ? ledger.rows.join('\n') + '\n' : '';
+  writeFileSync(ledger.tmpPath, payload, 'utf8');
+  renameSync(ledger.tmpPath, ledger.finalPath);
 }
 
 const rootDir = resolve('.');
@@ -169,7 +184,7 @@ function ingestLoCoMo(conv) {
       id: `D${s}`,
       date: String(c[`session_${s}_date_time`] || ''),
       turns: c[`session_${s}`].filter(t => t.text && t.dia_id).map(t => {
-        let blip = t.blip_caption ? `\n[BLIP caption] ${t.blip_caption}` : '';
+        let blip = t.blip_caption ? `\n[caption] ${t.blip_caption}` : '';
         return {
           id: String(t.dia_id),
           role: String(t.speaker || ''),
@@ -234,7 +249,7 @@ async function runLongMemEval(params, quiet = false) {
   const all = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, cappedAll5: 0, all10: 0, ndcg10: 0 };
   const nonAbs = { n: 0, r1: 0, r5: 0, r10: 0, all5: 0, cappedAll5: 0, all10: 0, ndcg10: 0 };
   const lat = [];
-  const lmeLedger = !quiet ? resetAutopsyLedger('longmemeval_s') : null;
+  const lmeLedger = !quiet ? resetAutopsyLedger('longmemeval_s', args['miss-out']) : null;
   let sessionsSeen = 0, turnsSeen = 0;
   for (const item of data) {
     const { sessions, query } = ingestLongMemEval(item);
@@ -267,7 +282,7 @@ async function runLongMemEval(params, quiet = false) {
         gold_turns: [...gold].slice(0, 5).map(gid => ({ id: gid, preview: sMap.get(gid) || '' })),
         predicted_rank1: pred0 ? { id: pred0.id, preview: sMap.get(pred0.id) || '' } : null,
         gold_rank: firstGoldIdx >= 0 ? firstGoldIdx + 1 : 'NOT_IN_TOP10',
-        miss_type: firstGoldIdx >= 1 && firstGoldIdx < 5 ? 'NEAR_MISS_RANKS_2_5' : 'NOT_IN_TOP10',
+        miss_type: classifyMissRank(firstGoldIdx),
         winning_tokens: pred0?.matched || [],
       });
     }
@@ -276,6 +291,7 @@ async function runLongMemEval(params, quiet = false) {
       acc.n++; acc.r1 += m.r1; acc.r5 += m.r5; acc.r10 += m.r10; acc.all5 += m.all5; acc.cappedAll5 += m.cappedAll5; acc.all10 += m.all10; acc.ndcg10 += m.ndcg10;
     }
   }
+  flushAutopsyLedger(lmeLedger);
   if (!quiet) {
     console.log('--- LongMemEval_S (longmemeval_s_cleaned.json) | ranking 100% in Rust kernel ---');
     console.log(`Questions: ${all.n} total (${nonAbs.n} non-abstention) | avg haystack: ${(sessionsSeen / all.n).toFixed(1)} sessions, ${(turnsSeen / all.n).toFixed(0)} turns per question`);
@@ -327,10 +343,13 @@ async function runLoCoMo(params, quiet = false, convList = null) {
   const names = { 1: 'Multi-Hop', 2: 'Temporal', 3: 'Open-Domain', 4: 'Single-Hop', 5: 'Adversarial' };
   const blank = () => ({ n: 0, noEvidence: 0, sR1: 0, sR5: 0, tR1: 0, tR5: 0, tR10: 0, softR1: 0, softR5: 0, fracR5: 0 });
   const cats = {}; const core = blank(); const total = blank();
-  const locomoLedger = !quiet ? resetAutopsyLedger('locomo10') : null;
+  const locomoLedger = !quiet ? resetAutopsyLedger('locomo10', args['miss-out']) : null;
   const lat = [];
   let qCount = 0;
-  for (const conv of convs) {
+  for (let convIdx = 0; convIdx < convs.length; convIdx++) {
+    const conv = convs[convIdx];
+    const globalConvIdx = LOCOMO_DATA ? LOCOMO_DATA.indexOf(conv) : convIdx;
+    const splitFold = globalConvIdx >= 0 && globalConvIdx < 5 ? 'tune_1_5' : 'test_6_10';
     const { sessions, queries } = ingestLoCoMo(conv);
     const turnPreviewMap = new Map();
     for (const sess of sessions) {
@@ -379,23 +398,33 @@ async function runLoCoMo(params, quiet = false, convList = null) {
         a.n++;
         for (const k of ['sR1', 'sR5', 'tR1', 'tR5', 'tR10', 'softR1', 'softR5', 'fracR5']) a[k] += m[k];
       }
-      if (locomoLedger && cat !== 5 && (!m.tR1 || !m.tR5)) {
+      if (locomoLedger && (!m.tR1 || !m.tR5)) {
         const firstIdx = t.findIndex(id => goldTurns.has(id));
+        const firstSessIdx = s.findIndex(id => goldSess.has(id));
         const pred0 = r.turns[0];
         recordAutopsyMiss(locomoLedger, {
           query: qa.question,
           category: names[cat] || String(cat),
-          gold_turns: [...goldTurns].slice(0, 5).map(gid => ({ id: gid, preview: turnPreviewMap.get(gid) || '' })),
+          split_fold: splitFold,
+          gold_turn_count: goldTurns.size,
+          gold_session_count: goldSess.size,
+          gold_turns: [...goldTurns].map(gid => ({ id: gid, preview: turnPreviewMap.get(gid) || '' })),
           predicted_rank1: pred0 ? { id: pred0.id, preview: turnPreviewMap.get(pred0.id) || '' } : null,
           gold_rank: firstIdx >= 0 ? firstIdx + 1 : 'NOT_IN_TOP10',
-          miss_type: firstIdx >= 1 && firstIdx < 5 ? 'NEAR_MISS_RANKS_2_5' : 'NOT_IN_TOP10',
+          gold_session_rank: firstSessIdx >= 0 ? firstSessIdx + 1 : 'NOT_IN_TOP10',
+          miss_type: classifyMissRank(firstIdx),
           winning_tokens: pred0?.matched || [],
         });
       }
     });
   }
+  flushAutopsyLedger(locomoLedger);
   if (!quiet) {
-    const splitLabel = args.split && args.split !== 'all' ? ` (split: ${args.split})` : '';
+    const splitLabel = args.split === 'test'
+      ? ' [BLIND OUT-OF-SAMPLE TEST SPLIT: Convs 6-10]'
+      : args.split === 'tune'
+        ? ' [IN-SAMPLE GBDT TUNE SPLIT: Convs 1-5]'
+        : ' [COMBINED 10-DIALOGUE AGGREGATE (Convs 1-5 GBDT tune + Convs 6-10 blind test)]';
     console.log(`\n--- LoCoMo-10 (locomo10.json) | ${convs.length} dialogues${splitLabel} | ranking 100% in Rust kernel ---`);
     console.log('Note: "Soft" turn retrieval defines a match as the gold turn or ±1 adjacent turn in the same exchange.');
     console.log('Note: Cat 5 (Adversarial) measures finding the source passage for the adversarial question, not resisting the false premise.');
@@ -453,16 +482,23 @@ async function main() {
     if (args.only !== 'locomo') out.lme = await runLongMemEval(params);
     if (args.only !== 'lme') out.locomo = await runLoCoMo(params);
 
-    if (args['held-out']) {
-      console.log('\n--- HELD-OUT EVALUATION: LoCoMo Convs 1-5 vs Convs 6-10 ---');
+    if (args['held-out'] || (args.only !== 'lme' && (!args.split || args.split === 'all') && LIMIT === Infinity)) {
+      console.log('\n--- PUBLISHABLE DISJOINT EVALUATION: LoCoMo Convs 6-10 [BLIND OUT-OF-SAMPLE TEST] vs Convs 1-5 [IN-SAMPLE GBDT TUNE] ---');
       if (!LOCOMO_DATA) LOCOMO_DATA = JSON.parse(readFileSync('benchmarks/data/locomo10.json', 'utf8'));
       const part1 = LOCOMO_DATA.slice(0, 5);
       const part2 = LOCOMO_DATA.slice(5, 10);
       const res1 = await runLoCoMo(params, true, part1);
       const res2 = await runLoCoMo(params, true, part2);
-      out.held_out = { convs_1_to_5: res1, convs_6_to_10: res2 };
-      console.log(`LoCoMo Convs 1-5  (${res1.core.n} core q) | Session R@5: ${res1.core.session_r5.toFixed(2)}% | Turn Exact R@1: ${res1.core.turn_exact_r1.toFixed(2)}% | Turn Exact R@5: ${res1.core.turn_exact_r5.toFixed(2)}% | Turn Soft R@5: ${res1.core.turn_soft_r5.toFixed(2)}%`);
-      console.log(`LoCoMo Convs 6-10 (${res2.core.n} core q) | Session R@5: ${res2.core.session_r5.toFixed(2)}% | Turn Exact R@1: ${res2.core.turn_exact_r1.toFixed(2)}% | Turn Exact R@5: ${res2.core.turn_exact_r5.toFixed(2)}% | Turn Soft R@5: ${res2.core.turn_soft_r5.toFixed(2)}%`);
+      out.held_out = { convs_1_to_5_tune: res1, convs_6_to_10_blind_test: res2 };
+      const fmtRow = (tag, r) => console.log(`${tag.padEnd(36)} | ALL (${r.total.n} q): Sess [R@1 ${r.total.session_r1.toFixed(2)}%, R@5 ${r.total.session_r5.toFixed(2)}%] | Turn Exact [R@1 ${r.total.turn_exact_r1.toFixed(2)}%, R@5 ${r.total.turn_exact_r5.toFixed(2)}%, R@10 ${r.total.turn_exact_r10.toFixed(2)}%] | Soft R@5 ${r.total.turn_soft_r5.toFixed(2)}%`);
+      fmtRow('Convs 6-10 [BLIND TEST HEADLINE]', res2);
+      for (const cname of ['Multi-Hop', 'Temporal', 'Open-Domain', 'Single-Hop', 'Adversarial']) {
+        const ca = res2.categories[cname];
+        if (ca) {
+          console.log(`  [Blind Test] ${cname.padEnd(21)} | (${String(ca.n).padStart(3)} q): Sess [R@1 ${ca.session_r1.toFixed(2)}%, R@5 ${ca.session_r5.toFixed(2)}%] | Turn Exact [R@1 ${ca.turn_exact_r1.toFixed(2)}%, R@5 ${ca.turn_exact_r5.toFixed(2)}%, R@10 ${ca.turn_exact_r10.toFixed(2)}%] | Soft R@5 ${ca.turn_soft_r5.toFixed(2)}%`);
+        }
+      }
+      fmtRow('Convs 1-5  [IN-SAMPLE GBDT TUNE]', res1);
     }
 
     if (args.ablations) {

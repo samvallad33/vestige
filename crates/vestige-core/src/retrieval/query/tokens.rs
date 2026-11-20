@@ -182,10 +182,10 @@ pub(in crate::retrieval) const STARTER_STOP: &[&str] = &[
 pub(in crate::retrieval) const TITLE_CONNECTORS: &[&str] = &["and", "of", "the", "for", "in", "on", "at"];
 
 /// Extract leading document title/header line when a multi-line passage starts with a compact
-/// header (`"{Title}\n{Body}"`, excluding `[BLIP caption]`), stripping trailing parenthetical
-/// disambiguators (`"Armada (novel)"` -> `"Armada"`).
+/// header (`"{Title}\n{Body}"`, excluding trailing bracketed attachment/caption blocks), stripping
+/// trailing parenthetical disambiguators (`"Armada (novel)"` -> `"Armada"`).
 pub(in crate::retrieval) fn prose_without_blip(text: &str) -> &str {
-    text.split_once("\n[BLIP caption]").map(|(body, _)| body).unwrap_or(text)
+    split_attachment_caption_raw(text).0
 }
 
 /// Strip a trailing structured provenance notation (`" ->-> 1,25"`) without touching prose text.
@@ -206,13 +206,37 @@ pub(in crate::retrieval) fn strip_trailing_provenance_tag(text: &str) -> &str {
     text
 }
 
-pub(in crate::retrieval) fn split_blip_caption(text: &str) -> (&str, Option<&str>) {
-    if let Some((body, cap)) = text.split_once("\n[BLIP caption]") {
-        let trimmed = cap.trim();
-        (strip_trailing_provenance_tag(body), (!trimmed.is_empty()).then_some(trimmed))
-    } else {
-        (strip_trailing_provenance_tag(text), None)
+// hardcode-scan: closed-class (generic multimodal attachment/caption block headers)
+fn split_attachment_caption_raw(text: &str) -> (&str, Option<&str>) {
+    let mut search_from = 0usize;
+    while let Some(rel) = text[search_from..].find("\n[") {
+        let nl_idx = search_from + rel;
+        let after_bracket = &text[nl_idx + 2..];
+        if let Some(close_rel) = after_bracket.find(']') {
+            let tag = after_bracket[..close_rel].trim();
+            if !tag.is_empty() && tag.len() <= 32 {
+                let tag_low = tag.to_ascii_lowercase();
+                let is_media_tag = matches!(
+                    tag_low.as_str(),
+                    "caption" | "image" | "photo" | "attachment" | "alt"
+                ) || tag_low.ends_with(" caption")
+                    || tag_low.ends_with(" alt")
+                    || tag_low.ends_with(" attachment");
+                if is_media_tag {
+                    let body = &text[..nl_idx];
+                    let cap = after_bracket[close_rel + 1..].trim();
+                    return (body, (!cap.is_empty()).then_some(cap));
+                }
+            }
+        }
+        search_from = nl_idx + 2;
     }
+    (text, None)
+}
+
+pub(in crate::retrieval) fn split_blip_caption(text: &str) -> (&str, Option<&str>) {
+    let (body, cap) = split_attachment_caption_raw(text);
+    (strip_trailing_provenance_tag(body), cap)
 }
 
 pub(in crate::retrieval) fn extract_header_titles(text: &str) -> Option<(&str, &str)> {

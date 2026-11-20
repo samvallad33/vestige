@@ -8,7 +8,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let q = ctx.q;
     let k = ctx.k;
     let plan = &ctx.plan;
-    let it = &plan.intent;
+    let _it = &plan.intent;
     let eff_it = &ctx.eff_it;
     let standing_rules = &ctx.standing_rules;
     let s_score = &ctx.s_score;
@@ -30,7 +30,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         // Pool-fill reallocation: user source with a strict group superset takes a
         // same-session assistant's top-5 seat. Skipped on assistant-attribution so
         // the assistant's own words stay in place.
-        if !it.assistant_attribution {
+        if !eff_it.assistant_attribution {
             apply_c2_source_superset_realloc(ix, &plan, &mut final_turn_indices, &t_scene);
             apply_c2_unique_group_realloc(ix, &plan, &mut final_turn_indices, &t_scene);
             apply_c2_subsequent_answer_seat(ix, &plan, &mut final_turn_indices, &t_scene);
@@ -100,7 +100,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     // may still run after this pass.
     // Same preference / event-sequence / assistant-attribution cuts.
     // Does not touch rsb_seat_behind and adds no WH-slot ballot.
-    if !eff_it.is_event_sequence && !it.assistant_attribution && !c2_text_preference(&q.text) {
+    if !eff_it.is_event_sequence && !eff_it.assistant_attribution && !c2_text_preference(&q.text) {
         apply_c2_queried_speaker_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
         // Same-session user T@5 entry: a user opener or later turn from
         // a session already in the top 5, already in official k, swaps
@@ -143,7 +143,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     // at the call site; the function still skips temporal and
     // named-speaker sessions. Does not skip preference (same as #10).
     // Does not run the gatekeeper again and adds no WH-slot ballot.
-    if !eff_it.is_event_sequence && !it.assistant_attribution {
+    if !eff_it.is_event_sequence && !eff_it.assistant_attribution {
         apply_c2_subsequent_answer_seat(ix, &plan, &mut final_turn_indices, &t_scene);
     }
     // Cross-session opener-pair seat: a user opener at slot 1 yields to
@@ -153,7 +153,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     // after #26. Later post-gatekeeper C2 seats may still run after
     // this pass. Skipped on preference. Does not run the gatekeeper
     // again and adds no WH-slot ballot.
-    if !eff_it.is_event_sequence && !it.assistant_attribution && !c2_text_preference(&q.text) {
+    if !eff_it.is_event_sequence && !eff_it.assistant_attribution && !c2_text_preference(&q.text) {
         apply_c2_cross_opener_pair_seat(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
         // Answered-opener declarative seat: a user question opener at
         // slot 1 whose assistant reply is already in the top 5 yields
@@ -251,7 +251,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     // user turn swaps with the least on-scene other top-5 user turn (at most
     // as on-scene, never from an earlier session, S@5 kept). Last ranking
     // change.
-    if !eff_it.is_event_sequence && it.assistant_attribution {
+    if !eff_it.is_event_sequence && eff_it.assistant_attribution {
         apply_c2_assistant_reply_t5_entry(ix, &plan, &q.text, &mut final_turn_indices, &t_scene);
         // Unseated-session opener T@10 entry (assistant-attribution only):
         // the most on-scene declarative opener of a session with no official-k

@@ -1006,10 +1006,17 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 final_session_indices[..pool_len].copy_from_slice(&rest[..pool_len]);
             }
 
-            // Wave 6 `S8-004` Session-Level Rhumb-Union Bridge Seat (LoCoMo Multi-Hop):
-            // If `S_a` and `S_b` cover disjoint non-empty query groups (`Q_1`, `Q_2`) and `S_c` covers `Q_1 U Q_2`
-            // with solid sight (>= 84% of `S[0]`), promote the union bridge session `S_c` to Slot 0!
-            if eff_it.multi_hop && q_group_cnt >= 2 && final_session_indices.len() >= 3 {
+            // Wave 6 `S8-004` Session-Level Rhumb-Union Bridge Seat + M3 2-Hop Bridge-Entity Triangle Closure:
+            // Triggered on explicit `multi_hop` OR any coverage deficit where none of top-3 sessions covers all query groups.
+            let deficit_b = q_group_cnt >= 2
+                && final_session_indices
+                    .iter()
+                    .take(3)
+                    .map(|&s| (s_exact_mask.get(s).copied().unwrap_or(0) & q_group_mask).count_ones())
+                    .max()
+                    .unwrap_or(0)
+                    < (q_group_cnt as u32);
+            if (eff_it.multi_hop || deficit_b) && q_group_cnt >= 2 && final_session_indices.len() >= 3 {
                 let s0 = final_session_indices[0];
                 let m0 = s_exact_mask.get(s0).copied().unwrap_or(0) & q_group_mask;
                 if m0 != 0 && m0 != q_group_mask {
@@ -1024,7 +1031,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                             let mb = s_exact_mask.get(final_session_indices[j]).copied().unwrap_or(0) & q_group_mask;
                             if mb != 0 && (ma & mb) == 0 {
                                 let target_u = ma | mb;
-                                if let Some(pos_u) = (1..top_check).find(|& idx_u| {
+                                if let Some(pos_u) = (1..top_check).find(|&idx_u| {
                                     let su = final_session_indices[idx_u];
                                     let mu = s_exact_mask.get(su).copied().unwrap_or(0) & q_group_mask;
                                     (mu & target_u) == target_u
@@ -1039,7 +1046,113 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     }
                     if let Some(pos_u) = union_win {
                         let moved = final_session_indices.remove(pos_u);
-                        final_session_indices.insert(0, moved);
+                        if eff_it.multi_hop || !full_lex_lock {
+                            final_session_indices.insert(0, moved);
+                        } else {
+                            let dst = 1.min(final_session_indices.len());
+                            final_session_indices.insert(dst, moved);
+                        }
+                    }
+
+                    // M3 2-Hop Bridge-Entity Triangle Closure (Slots 2..4; never disturbs crisp Slot 0):
+                    // Scan top-16 sessions for `(s_a in 0..3, s_b in 5..16)` sharing a rare non-query
+                    // entity `e_bridge` (`2 <= s_df <= (ns / 4).max(3)`) where `s_b` strictly expands `m0`.
+                    let s0_now = final_session_indices[0];
+                    let m0_now = s_exact_mask.get(s0_now).copied().unwrap_or(0) & q_group_mask;
+                    let top16_len = final_session_indices.len().min(16);
+                    if m0_now != 0 && m0_now != q_group_mask && top16_len > 5 {
+                        let max_bridge_df = (ix.session_turns.len() / 4).max(3) as u32;
+                        let mut head_rare_ents: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+                        for &sa in final_session_indices.iter().take(3) {
+                            for &eid in &ix.session_entities[sa] {
+                                if plan.focal_ids.contains(&eid) {
+                                    continue;
+                                }
+                                let sdf = ix.s_stats.df.get(&eid).copied().unwrap_or(0);
+                                if (2..=max_bridge_df).contains(&sdf) {
+                                    head_rare_ents.insert(eid);
+                                }
+                            }
+                        }
+                        if !head_rare_ents.is_empty() {
+                            let mut best_tri: Option<(u32, usize, u64, usize, u32)> = None;
+                            for pos_b in 5..top16_len {
+                                let sb = final_session_indices[pos_b];
+                                let mb = s_exact_mask.get(sb).copied().unwrap_or(0) & q_group_mask;
+                                let extra_bits = (mb & !m0_now).count_ones();
+                                if extra_bits == 0 {
+                                    continue;
+                                }
+                                if sight_all_q16[sb].saturating_mul(100) < sight_all_q16[s0_now].saturating_mul(45) {
+                                    continue;
+                                }
+                                let mut shared_cnt = 0usize;
+                                let mut first_bridge = 0u32;
+                                for &eid in &head_rare_ents {
+                                    if ix.session_entities[sb].contains(&eid) {
+                                        if shared_cnt == 0 {
+                                            first_bridge = eid;
+                                        }
+                                        shared_cnt += 1;
+                                    }
+                                }
+                                if shared_cnt == 0 {
+                                    continue;
+                                }
+                                let cand = (extra_bits, shared_cnt, sight_all_q16[sb], pos_b, first_bridge);
+                                let better = best_tri.is_none_or(|cur| {
+                                    (cand.0, cand.1, cand.2, std::cmp::Reverse(cand.3))
+                                        > (cur.0, cur.1, cur.2, std::cmp::Reverse(cur.3))
+                                });
+                                if better {
+                                    best_tri = Some(cand);
+                                }
+                            }
+                            if let Some((_, _, _, pos_b, bridge_eid)) = best_tri {
+                                let sb = final_session_indices.remove(pos_b);
+                                let dst_s = if final_session_indices.len() >= 4
+                                    && ((s_exact_mask.get(final_session_indices[3]).copied().unwrap_or(0)
+                                        & q_group_mask
+                                        & !m0_now)
+                                        != 0)
+                                {
+                                    4.min(final_session_indices.len())
+                                } else {
+                                    3.min(final_session_indices.len())
+                                };
+                                final_session_indices.insert(dst_s, sb);
+                                if !final_turn_indices.iter().take(5).any(|&ti| ix.turns[ti].session == sb) {
+                                    if let Some(bt) = ix.session_turns[sb]
+                                        .iter()
+                                        .copied()
+                                        .filter(|&ti| {
+                                            !ix.turns[ti].is_backchannel
+                                                && !ix.turns[ti].is_question
+                                                && !turn_is_superseded(ix, ti)
+                                                && ix.turns[ti].entities.contains(&bridge_eid)
+                                        })
+                                        .max_by(|&a, &b| {
+                                            t_scene[a]
+                                                .partial_cmp(&t_scene[b])
+                                                .unwrap_or(std::cmp::Ordering::Equal)
+                                                .then_with(|| b.cmp(&a))
+                                        })
+                                    {
+                                        if let Some(ex) = final_turn_indices.iter().position(|&x| x == bt) {
+                                            if ex >= 5 {
+                                                final_turn_indices.remove(ex);
+                                                let ins_t = 4.min(final_turn_indices.len());
+                                                final_turn_indices.insert(ins_t, bt);
+                                            }
+                                        } else {
+                                            let ins_t = 4.min(final_turn_indices.len());
+                                            final_turn_indices.insert(ins_t, bt);
+                                            final_turn_indices.truncate(k);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1171,8 +1284,26 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 q_sp_t64.push(sp);
             }
         }
+        let high_df_cut = ((ix.turns.len() / 20).max(4)) as u32;
+        let is_generic_only = |ti: usize| -> bool {
+            if t_scene[ti] > t_raw[ti] + 1e-4 || ix.turns[ti].slot_entities_clean >= 1 {
+                return false;
+            }
+            let mut hits = 0usize;
+            let mut has_rare = false;
+            for &fid in &plan.focal_ids {
+                if ix.turns[ti].content.contains(&fid) {
+                    hits += 1;
+                    if ix.t_own_stats.df.get(&fid).copied().unwrap_or(0) < high_df_cut {
+                        has_rare = true;
+                    }
+                }
+            }
+            hits <= 1 && !has_rare
+        };
         for &si in final_session_indices.iter().take(5) {
-            if s_score[si] + bridge_boost[si] < cov_floor_ratio * smax {
+            let si_sight = s_score[si] + bridge_boost[si];
+            if si_sight < cov_floor_ratio * smax {
                 continue;
             }
             if final_turn_indices[..5].iter().any(|&ti| ix.turns[ti].session == si) {
@@ -1189,6 +1320,8 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 .max_by(|&a, &b| {
                     let qa = !ix.turns[a].is_question;
                     let qb = !ix.turns[b].is_question;
+                    let nga = !is_generic_only(a);
+                    let ngb = !is_generic_only(b);
                     let spa = q_sp_t64.len() == 1
                         && ix.turns[a].speaker.eq_ignore_ascii_case(&q_sp_t64[0])
                         && t_own[a] > 0.0;
@@ -1196,6 +1329,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         && ix.turns[b].speaker.eq_ignore_ascii_case(&q_sp_t64[0])
                         && t_own[b] > 0.0;
                     qa.cmp(&qb)
+                        .then_with(|| nga.cmp(&ngb))
                         .then_with(|| {
                             let sa = t_scene[a] * if spa { 1.15 } else { 1.0 };
                             let sb = t_scene[b] * if spb { 1.15 } else { 1.0 };
@@ -1216,6 +1350,15 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 let cnt = final_turn_indices[..5].iter().filter(|&&t| ix.turns[t].session == vs).count();
                 let min_cnt = if head_dominant && head_s == Some(vs) { 3 } else { 2 };
                 if cnt < min_cnt {
+                    continue;
+                }
+                // Protect dominant Session #1's 3rd turn on single-hop unless incoming session >= 0.52 * smax.
+                if head_dominant
+                    && !eff_it.multi_hop
+                    && head_s == Some(vs)
+                    && cnt == 3
+                    && si_sight < 0.52 * smax
+                {
                     continue;
                 }
                 let is_q = ix.turns[vti].is_question;
@@ -1286,17 +1429,39 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             || q_low_pc.starts_with("do i usually ")
             || q_low_pc.starts_with("do i ever ");
         let is_did_i = q_low_pc.contains("did i ") || q_low_pc.contains("did we ");
-        let is_did_you = q_low_pc.contains("did you ") || q_low_pc.contains("have you ");
+        // hardcode-scan: closed-class (retrospective assistant-recall & episodic cues)
+        let is_did_you = q_low_pc.contains("did you ")
+            || q_low_pc.contains("have you ")
+            || q_low_pc.contains("remind me")
+            || q_low_pc.contains("last time")
+            || q_low_pc.contains("previous conversation")
+            || q_low_pc.contains("previous chat")
+            || q_low_pc.contains("you recommended")
+            || q_low_pc.contains("you suggested")
+            || q_low_pc.contains("you provided")
+            || q_low_pc.contains("you told me")
+            || q_low_pc.contains("you gave me")
+            || q_low_pc.contains("you mentioned")
+            || q_low_pc.contains("you shared")
+            || q_low_pc.contains("we talked about")
+            || q_low_pc.contains("we discussed");
         // Match `"What <singular-slot-noun> should I aim for..."` (`c10 #2`) and `"What <NP> have I set..."` (`c20`),
         // while keeping plural `"What steps/precautions/options should I..."` on the advice/rule path!
         let is_what_sing_should_ku = q_toks_pc.first().is_some_and(|w| w == "what")
             && q_toks_pc.get(1).is_some_and(|w1| w1.len() >= 4 && !w1.ends_with('s') && w1 != "approach")
             && q_toks_pc.get(2).is_some_and(|w2| w2 == "should")
             && q_toks_pc.get(3).is_some_and(|w3| w3 == "i");
+        // Token-level recommendation ask check (never match past-tense "recommended"/"suggested" or `is_did_you`).
+        // hardcode-scan: closed-class (modal recommendation & advice tokens)
         let is_rec_ask = !is_what_sing_should_ku
-            && (q_low_pc.contains("recommend")
-                || q_low_pc.contains("suggest")
-                || q_low_pc.contains("should i ")
+            && !is_did_you
+            && (q_toks_pc.iter().any(|w| {
+                matches!(
+                    w.as_str(),
+                    "recommend" | "recommends" | "recommendation" | "recommendations"
+                        | "suggest" | "suggests" | "suggestion" | "suggestions"
+                )
+            }) || q_low_pc.contains("should i ")
                 || q_low_pc.contains("i should "));
         let is_wh_np_aux_ku = is_what_sing_should_ku
             || (q_toks_pc.first().is_some_and(|w| w == "what")
@@ -1382,15 +1547,16 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 || q_low_pc.contains("how would you suggest"));
         let is_explicit_pref_q = is_pure_pref_stmt;
         // Only treat `eff_it.temporal` as a pair/temporal query when the query actually asks about time/span
-        // (never `"What are some common responses when something goes wrong with an API?"`!).
+        // (never `"What are some common responses when something goes wrong with an API?"` or pure preference asks!).
         let is_real_temporal_q = eff_it.temporal && !is_when_participial && (q_low_pc.starts_with("when ") || q_low_pc.starts_with("how long ") || q_low_pc.starts_with("how many "));
-        let is_temp_or_comp = is_real_temporal_q
-            || q_toks_pc.iter().any(|w| {
-                matches!(
-                    w.as_str(),
-                    "between" | "compared" | "compare" | "than" | "across" | "before" | "after"
-                )
-            });
+        let is_temp_or_comp = !is_pure_pref_stmt
+            && (is_real_temporal_q
+                || q_toks_pc.iter().any(|w| {
+                    matches!(
+                        w.as_str(),
+                        "between" | "compared" | "compare" | "than" | "across" | "before" | "after"
+                    )
+                }));
         let is_pair_query = is_have_i || is_ku_shape || is_temp_or_comp;
 
         let is_rule_only_sess = |si: usize| -> bool {
@@ -1424,7 +1590,11 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 return;
             }
             if let Some(pti) = preferred_ti {
-                if final_turns[..5].contains(&pti) {
+                if let Some(existing_top5) = final_turns[..5].iter().position(|&t| t == pti) {
+                    if target_slot == 0 && existing_top5 > 0 {
+                        final_turns.remove(existing_top5);
+                        final_turns.insert(0, pti);
+                    }
                     return;
                 }
                 if let Some(pos) = final_turns.iter().position(|&t| t == pti) {
@@ -1463,8 +1633,9 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         // Preserve a standing rule ONLY on `"When is/was..."` temporal-WH queries (`c9`/`c10`) or
         // unique-rule `"What is the ..."` (`standing_rules.len() == 1 && score >= 12.0`, e.g. `c8`),
         // NEVER letting standing rules pollute `"How many "` / `"What is my "` / `"When is my "` KU or TR queries!
+        let has_cal_rule_top = standing_rules.first().is_some_and(|sr| sr.score >= 10.0);
         let is_when_date_q = (q_low_pc.starts_with("when is ") || q_low_pc.starts_with("when was "))
-            && !q_low_pc.starts_with("when is my ");
+            && (!q_low_pc.starts_with("when is my ") || has_cal_rule_top);
         let keep_high_spec_rule_sess: Option<usize> = if is_when_date_q && !is_between && !is_have_i {
             standing_rules
                 .first()
@@ -1650,8 +1821,20 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                                 || b.starts_with("never ")
                                 || b.contains("i've never")
                                 || b.contains("i\u{2019}ve never")
-                                || b.contains("still haven't")
-                                || b.contains("still havent")
+                                || b.contains("haven't")
+                                || b.contains("havent")
+                                || b.contains("have not")
+                                || b.contains("hasn't")
+                                || b.contains("hasnt")
+                                || b.contains("has not")
+                                || b.contains("didn't")
+                                || b.contains("did not")
+                                || b.contains("don't")
+                                || b.contains("do not")
+                                || b.contains("not yet")
+                                || b.contains("decided not to")
+                                || b.contains("no longer")
+                                || b.contains("stopped using")
                         })
                 };
                 let q_hits_of = |si: usize| -> (u64, u64) {
@@ -2565,6 +2748,8 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             && !ix.preference_directive_turns.is_empty()
             && (is_pure_pref_stmt
                 || is_coexist_advice_q
+                || eff_it.preference
+                || is_rec_ask
                 || eff_it.task_under_rules
                 || q_toks_pc.windows(2).any(|p| {
                     ((p[0] == "can" || p[0] == "could" || p[0] == "would") && p[1] == "you")
@@ -2573,14 +2758,27 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         || (p[0] == "where" && p[1] == "do")
                 }));
         if pref_seat_eligible {
+            use crate::retrieval::seating::preference_lattice::{
+                is_explicit_stance_directive, is_pref_framing_word,
+            };
             let hi_df_cap = (ns_u32 / 4).clamp(4, 24);
+            let max_pref_df = (ns_u32 / 3).max(4);
             let mut q_wide_ic: BTreeMap<u32, u64> = BTreeMap::new();
             for qt in &plan.terms {
                 if !qt.exact_hit {
                     continue;
                 }
+                let raw_nm = ix
+                    .vocab
+                    .names
+                    .get(qt.id as usize)
+                    .map(|nm| nm.strip_prefix("\u{1}stem:").unwrap_or(nm.as_str()))
+                    .unwrap_or("");
+                if raw_nm.is_empty() || is_pref_framing_word(raw_nm) {
+                    continue;
+                }
                 let df = ix.s_stats.df.get(&qt.id).copied().unwrap_or(0);
-                if df > 0 {
+                if (1..=max_pref_df).contains(&df) {
                     let ic = aspect_ic_q16(df, ns_u32).max(Q16_ONE >> 3);
                     q_wide_ic.insert(qt.id, ic);
                 }
@@ -2613,7 +2811,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             prf_scored.truncate(18);
             let prf_ic_map: BTreeMap<u32, u64> = prf_scored.iter().map(|&(ic, id)| (id, ic)).collect();
             let mut q_lex_ic: BTreeMap<u32, u64> = BTreeMap::new();
-            for qw in q_toks_pc.iter().filter(|w| is_content(w) || w.as_str() == "day") {
+            for qw in q_toks_pc
+                .iter()
+                .filter(|w| (is_content(w) || w.as_str() == "day") && !is_pref_framing_word(w))
+            {
                 let mut add_qlex = |lem: &str| {
                     let lst = stem(lem);
                     for lid in [ix.vocab.get(lem), ix.vocab.get(&stem_term(&lst))]
@@ -2622,7 +2823,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     {
                         if !q_wide_ic.contains_key(&lid) {
                             let df = ix.s_stats.df.get(&lid).copied().unwrap_or(0);
-                            if df > 0 && df <= (ns_u32 * 3 / 4).max(4) {
+                            if (1..=max_pref_df).contains(&df) {
                                 q_lex_ic.entry(lid).or_insert_with(|| aspect_ic_q16(df, ns_u32));
                             }
                         }
@@ -2645,7 +2846,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 let ic_sq = ((ic as u128).saturating_mul(ic as u128) >> 16).max((Q16_ONE >> 4) as u128) as u64;
                 q_pref_ic.insert(qid, ic_sq);
             }
-            let mut scored_prefs: Vec<(u64, u64, usize, usize)> = Vec::new();
+            let mut scored_prefs: Vec<(u64, u64, usize, usize, bool)> = Vec::new();
             for &pti in &ix.preference_directive_turns {
                 // Do NOT skip `turn_is_superseded(ix, pti)` here: `rsb.rs` `digit_shift` falsely flags
                 // earlier durable preferences containing numbers ("7-9 AM", "30 minutes", "Bootstrap 5.3.0", "100KB")!
@@ -2659,6 +2860,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     || body_low.starts_with("since i have to")
                     || body_low.starts_with("since i need")
                 {
+                    continue;
+                }
+                let is_stance_pref = is_explicit_stance_directive(&body_low, tr.is_personal_constraint);
+                if tr.content.len() > 80 && !is_stance_pref {
                     continue;
                 }
                 let mut turn_ents: BTreeSet<u32> = BTreeSet::new();
@@ -2677,17 +2882,26 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     .saturating_mul(5)
                     .saturating_add(prf_ic >> 1)
                     .saturating_add(lex_ic.saturating_mul(2));
-                if is_compound_pref {
-                    total_sc = total_sc.saturating_mul(3).saturating_add(Q16_ONE >> 2);
-                } else if is_comparative_pref && total_sc > 0 {
-                    total_sc = total_sc.saturating_add(total_sc >> 1);
-                }
-                let qualifies = is_compound_pref
-                    || direct_ic > 0
+                let has_topic_ev = direct_ic > 0
                     || lex_ic > 0
                     || ((is_pure_pref_stmt || is_coexist_advice_q) && prf_ic >= (Q16_ONE >> 1));
+                let compact_pref_reg = ix.preference_directive_turns.len() <= 6;
+                if is_stance_pref && is_compound_pref && (has_topic_ev || compact_pref_reg) {
+                    total_sc = total_sc
+                        .saturating_mul(3)
+                        .saturating_add(if has_topic_ev { Q16_ONE >> 2 } else { Q16_ONE >> 4 });
+                } else if is_comparative_pref && total_sc > 0 {
+                    total_sc = total_sc.saturating_add(total_sc >> 1);
+                } else if is_compound_pref && direct_ic > 0 {
+                    total_sc = total_sc.saturating_add(total_sc >> 2);
+                }
+                let qualifies = if is_stance_pref {
+                    has_topic_ev || compact_pref_reg
+                } else {
+                    direct_ic > 0 || lex_ic > 0
+                };
                 if qualifies {
-                    scored_prefs.push((total_sc, direct_ic, tr.session, pti));
+                    scored_prefs.push((total_sc, direct_ic, tr.session, pti, is_stance_pref));
                 }
             }
             scored_prefs.sort_by(|a, b| {
@@ -2696,19 +2910,29 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     .then_with(|| a.3.cmp(&b.3))
             });
             // 5-Slot Coexistence Partition:
-            // On `is_pure_pref_stmt` (or `is_coexist_advice_q` without a dominant rule), Preferences take up to 3 seats (Slots 1, 2, 0)
-            // while Standing Rules take up to 2 seats (Slots 4, 3) -> `3 + 2 = 5` with zero mutual eviction!
+            // Preferences take up to 3 seats while Standing Rules take up to 2 seats -> `3 + 2 = 5`,
+            // awarding Slot 0 to the top topical preference whenever no high-spec condition-matched rule dominates!
+            let dom_cond_rule = standing_rules.first().is_some_and(|sr| {
+                sr.score >= 8.0 && cond_rule_turns.iter().any(|&rt| ix.turns[rt].id == sr.id)
+            });
             let sr0_sc = standing_rules.first().map(|sr| sr.score).unwrap_or(0.0);
-            let max_pref_seats = if is_pure_pref_stmt || (is_coexist_advice_q && sr0_sc < 8.0) {
+            let max_pref_seats = if is_pure_pref_stmt || (is_coexist_advice_q && !dom_cond_rule && sr0_sc < 8.0) {
                 3usize
-            } else if is_coexist_advice_q {
+            } else if is_coexist_advice_q || ((eff_it.preference || is_rec_ask) && !dom_cond_rule) {
                 2usize
             } else {
                 1usize
             };
-            let pref_slot_order: [usize; 3] = [1, 2, 0];
+            let lead_pref_slot0 = (is_pure_pref_stmt || eff_it.preference || is_coexist_advice_q || is_rec_ask)
+                && !is_did_you
+                && !dom_cond_rule
+                && sr0_sc < 8.0
+                && scored_prefs
+                    .first()
+                    .is_some_and(|&(tot, dir, _, _, _)| dir > 0 || tot >= (Q16_ONE >> 1));
+            let pref_slot_order: [usize; 3] = if lead_pref_slot0 { [0, 1, 2] } else { [1, 2, 0] };
             let mut placed_p = 0usize;
-            for (_, _, pref_sess, pref_ti) in scored_prefs {
+            for (_, direct_ic, pref_sess, pref_ti, is_stance_pref) in scored_prefs {
                 if placed_p >= max_pref_seats {
                     break;
                 }
@@ -2719,8 +2943,27 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 if desired_slot == 0 && is_rule_only_sess(final_session_indices[0]) {
                     continue;
                 }
+                let existing_top5 = final_session_indices[..5].iter().position(|&s| s == pref_sess);
+                if desired_slot < final_session_indices.len() && !is_stance_pref {
+                    let inc_s = final_session_indices[desired_slot];
+                    if inc_s != pref_sess && (existing_top5.is_none() || desired_slot == 0) {
+                        let mut inc_ents: BTreeSet<u32> = ix.session_content[inc_s].iter().copied().collect();
+                        for (&cid, _) in &ix.session_bags[inc_s].tf[0] {
+                            inc_ents.insert(cid);
+                        }
+                        let inc_dir_ic = score_standing_constraint_q16(true, true, &inc_ents, &q_pref_ic, Q16_ONE >> 5);
+                        if inc_dir_ic > direct_ic {
+                            continue;
+                        }
+                    }
+                }
                 protected_pref_sessions.push(pref_sess);
-                if !final_session_indices[..5].contains(&pref_sess) {
+                if let Some(et5) = existing_top5 {
+                    if desired_slot == 0 && et5 > 0 {
+                        final_session_indices.remove(et5);
+                        final_session_indices.insert(0, pref_sess);
+                    }
+                } else {
                     if let Some(pos) = final_session_indices.iter().position(|&s| s == pref_sess) {
                         final_session_indices.remove(pos);
                     }
@@ -2756,7 +2999,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             && !is_have_i
             && !is_did_i
             && !is_did_you
-            && !is_considering_q
+            && (!is_considering_q || !cond_rule_turns.is_empty())
             && !is_agg_multi
             && !is_between
             && (!is_pair_query || is_when_date_q || ku_unique_rule)
@@ -2787,24 +3030,50 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             } else {
                 2usize
             };
-            let mut to_place: Vec<(usize, usize)> = Vec::new();
-            // Directly trust `standing_rules[0..max_rules]` (already policy_key-deduped & ranked with
-            // exact + stem + DL-1 + WordNet 3.1 + Roget + ConceptNet + temporal-WH calendar triggers!).
+            // hardcode-scan: closed-class (1st-person possessive pronouns gating episodic state lookups)
+            let has_personal_episodic = q_toks_pc
+                .iter()
+                .any(|w| matches!(w.as_str(), "my" | "our" | "we" | "mine" | "ours"));
+            let mut placed_rule_sessions: Vec<usize> = Vec::new();
             for &(st_turn, st_sc) in &strat_top_turns {
-                if to_place.len() >= max_rules {
+                if placed_rule_sessions.len() >= max_rules {
                     break;
                 }
-                if st_sc >= 1.5 || eff_it.task_under_rules || is_coexist_advice_q || is_rec_ask {
-                    let st_sess = ix.turns[st_turn].session;
-                    if !to_place.iter().any(|&(s, _)| s == st_sess) {
-                        to_place.push((st_sess, st_turn));
-                    }
+                if !(st_sc >= 1.5 || eff_it.task_under_rules || is_coexist_advice_q || is_rec_ask) {
+                    continue;
                 }
-            }
-            let mut placed_rule_sessions: Vec<usize> = Vec::new();
-            for (rsess, rturn) in to_place {
-                let target_slot = if placed_rule_sessions.is_empty() { 4usize } else { 3usize };
-                if !final_session_indices[..5].contains(&rsess) {
+                let rsess = ix.turns[st_turn].session;
+                if placed_rule_sessions.contains(&rsess) {
+                    continue;
+                }
+                let rturn = st_turn;
+                let slot0_is_topical_pref = protected_pref_sessions.contains(&final_session_indices[0])
+                    && !is_rule_only_sess(final_session_indices[0]);
+                let pref_protects_slot0 = slot0_is_topical_pref
+                    && !(eff_it.task_under_rules && !eff_it.preference && !is_rec_ask && st_sc >= 14.0);
+                let promote_slot0 = placed_rule_sessions.is_empty()
+                    && !pref_protects_slot0
+                    && !has_personal_episodic
+                    && !eff_it.preference
+                    && !is_ku_shape
+                    && !is_real_temporal_q
+                    && cond_rule_turns.contains(&rturn)
+                    && st_sc >= 5.0;
+                let target_slot = if promote_slot0 {
+                    0usize
+                } else if placed_rule_sessions.is_empty() && slot0_is_topical_pref {
+                    1usize
+                } else if placed_rule_sessions.is_empty() {
+                    4usize
+                } else {
+                    3usize
+                };
+                if let Some(existing_top5) = final_session_indices[..5].iter().position(|&s| s == rsess) {
+                    if target_slot == 0 && existing_top5 > 0 {
+                        final_session_indices.remove(existing_top5);
+                        final_session_indices.insert(0, rsess);
+                    }
+                } else {
                     if let Some(pos) = final_session_indices.iter().position(|&s| s == rsess) {
                         final_session_indices.remove(pos);
                     }
@@ -2829,6 +3098,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                             final_session_indices.insert(ins5, evicted);
                         }
                         final_session_indices.truncate(k.max(5));
+                        if target_slot == 0 && victim > 0 {
+                            final_session_indices.remove(victim);
+                            final_session_indices.insert(0, rsess);
+                        }
                     }
                 }
                 placed_rule_sessions.push(rsess);
@@ -2887,16 +3160,21 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         // Closed-class syntactic topic-clause extraction: extract the focused topic after
         // "aspects of "/" of "/" about "/" how " and before " across"/" throughout"/" in order"/"?".
         let q_eo_low = q.text.to_ascii_lowercase();
+        let q_eo_core = q_eo_low
+            .split(['?', '.'])
+            .next()
+            .unwrap_or(q_eo_low.as_str())
+            .trim();
         let eo_topic_slice = {
-            let after_pre = q_eo_low
+            let after_pre = q_eo_core
                 .split_once(" of ")
-                .or_else(|| q_eo_low.split_once(" about "))
-                .or_else(|| q_eo_low.split_once(" how "))
+                .or_else(|| q_eo_core.split_once(" about "))
+                .or_else(|| q_eo_core.split_once(" how "))
                 .map(|(_, tail)| {
                     // If a nested " of " follows ("order in which ... aspects of X"), take the innermost tail.
                     tail.split_once(" of ").map(|(_, t2)| t2).unwrap_or(tail)
                 })
-                .unwrap_or(q_eo_low.as_str());
+                .unwrap_or(q_eo_core);
             let mut cut = after_pre;
             for stop in [" across ", " throughout ", " during ", " in order", "?"] {
                 if let Some((head, _)) = cut.split_once(stop) {
@@ -2971,7 +3249,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             } else if is_poss {
                 ic_sq.saturating_mul(2)
             } else {
-                ic >> 1
+                ic >> 3
             };
             q_ic_map.insert(qt.id, w);
             if in_topic && df <= max_hub_df {
@@ -3174,11 +3452,11 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             if ns >= 20 && sc > 0 {
                 let off = epoch_offset[n.session_idx];
                 if off <= 7 {
-                    sc = (sc.saturating_mul(135)) / 100;
-                } else if off <= 12 {
                     sc = (sc.saturating_mul(115)) / 100;
-                } else if off >= 17 {
-                    sc = (sc.saturating_mul(40)) / 100;
+                } else if off <= 12 {
+                    sc = (sc.saturating_mul(108)) / 100;
+                } else if off >= 24 {
+                    sc = (sc.saturating_mul(90)) / 100;
                 }
             }
             eo_scores.insert(n.session_idx, sc);
@@ -3218,23 +3496,34 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 }
             });
         }
-        // Order eras by their #1 session's score descending, then round-robin (Pass 1: #1 per era; Pass 2: #2 per era).
-        let mut era_order: Vec<(u64, i64)> = era_ranked
-            .iter()
-            .filter_map(|(&day, list)| list.first().map(|&(sc, _, _)| (sc, day)))
-            .collect();
-        era_order.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        // D'Hondt Submodular Era Allocation across `era_ranked`:
+        // Instead of unconditionally taking 1 session from 5 different batches (which starves real
+        // sibling milestone sub-sessions inside the same batch epoch!), allocate seats greedily by
+        // marginal D'Hondt gain `sc * 4 / (4 + same_era_seated)` so strong same-batch milestones
+        // (`0.75 * top_eo_sc`) beat weak `0.22 * top_eo_sc` noise batches while multi-era timelines spread!
+        let mut era_cursor: BTreeMap<i64, usize> = BTreeMap::new();
         let mut top5_pairs: Vec<(i64, usize)> = Vec::new();
-        for pass in 0..2usize {
-            for &(_, day) in &era_order {
-                if top5_pairs.len() >= 5 {
-                    break;
+        while top5_pairs.len() < 5 {
+            let mut best_pick: Option<(u64, i64, i64, usize)> = None;
+            for (&day, list) in &era_ranked {
+                let cur = era_cursor.get(&day).copied().unwrap_or(0);
+                let Some(&(sc, ts, si)) = list.get(cur) else {
+                    continue;
+                };
+                let dhondt_gain = sc.saturating_mul(4) / (4 + cur as u64);
+                let is_better = best_pick.is_none_or(|(bg, _, _, bsi)| {
+                    dhondt_gain > bg || (dhondt_gain == bg && si < bsi)
+                });
+                if is_better {
+                    best_pick = Some((dhondt_gain, day, ts, si));
                 }
-                if let Some(&(_, ts, si)) = era_ranked.get(&day).and_then(|l| l.get(pass)) {
-                    if !top5_pairs.iter().any(|&(_, s)| s == si) {
-                        top5_pairs.push((ts, si));
-                    }
-                }
+            }
+            let Some((_, day, ts, si)) = best_pick else {
+                break;
+            };
+            *era_cursor.entry(day).or_insert(0) += 1;
+            if !top5_pairs.iter().any(|&(_, s)| s == si) {
+                top5_pairs.push((ts, si));
             }
         }
         // Fill any remaining slots up to 5 by highest `eo_scores` across all sessions.
@@ -3273,38 +3562,157 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
     }
 
-    // Sync `final_turn_indices[0..5]` directly from `final_session_indices[0..5]` on BEAM-style
-    // `summarization` and `event_ordering` queries so Turn All@5 tracks Session All@5 1-for-1.
+    // Sync `final_turn_indices` directly from `final_session_indices` on BEAM-style
+    // `summarization` (applying per-session `acta_secretary_inversion` for assistant synthesis!)
+    // and `event_ordering` (prioritizing opening `field == 0` user initiative turns!).
     if !has_named_speakers_eff
         && !is_monologue_corpus
         && crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled(eff_it, &q.text)
         && !final_session_indices.is_empty()
     {
-        let mut synced_turns: Vec<usize> = Vec::with_capacity(k.max(5));
-        for &si in final_session_indices.iter().take(k.max(5)) {
-            let pick = ix.session_turns[si]
-                .iter()
-                .copied()
-                .find(|&ti| ix.turns[ti].field == 0 && !ix.turns[ti].is_backchannel && !ix.turns[ti].is_standing_policy)
-                .or_else(|| {
-                    ix.session_turns[si]
-                        .iter()
-                        .copied()
-                        .max_by(|&a, &b| {
-                            t_scene[a]
-                                .partial_cmp(&t_scene[b])
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                                .then_with(|| b.cmp(&a))
-                        })
-                });
-            if let Some(ti) = pick {
-                if !synced_turns.contains(&ti) {
+        let is_sum_sync = eff_summary_request(&q.text);
+        let target_k = k.max(5);
+        let mut synced_turns: Vec<usize> = Vec::with_capacity(target_k);
+        let mut dyad_partners: Vec<usize> = Vec::new();
+        let n_qg = plan.groups.len().min(64);
+        let qg_mask = if n_qg == 64 { u64::MAX } else if n_qg == 0 { 0 } else { (1u64 << n_qg) - 1 };
+        let smax_sync_d = s_score.iter().copied().fold(0.0f32, f32::max);
+        if is_sum_sync {
+            let pick_sum_turn = |si: usize| -> Option<(usize, Option<usize>)> {
+                let members = &ix.session_turns[si];
+                let best_any = members
+                    .iter()
+                    .copied()
+                    .filter(|&ti| !ix.turns[ti].is_backchannel && !ix.turns[ti].is_standing_policy)
+                    .max_by(|&a, &b| {
+                        t_scene
+                            .get(a)
+                            .copied()
+                            .unwrap_or(0.0)
+                            .partial_cmp(&t_scene.get(b).copied().unwrap_or(0.0))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| b.cmp(&a))
+                    })?;
+                let best_asst = members
+                    .iter()
+                    .copied()
+                    .filter(|&ti| {
+                        let ct = &ix.turns[ti];
+                        ct.field == 1
+                            && !ct.is_question
+                            && !ct.is_backchannel
+                            && ct.body_for_headers.len() >= 24
+                    })
+                    .max_by(|&a, &b| {
+                        let pa = u8::from(turn_pos(ix, a) == Some(1));
+                        let pb = u8::from(turn_pos(ix, b) == Some(1));
+                        t_scene
+                            .get(a)
+                            .copied()
+                            .unwrap_or(0.0)
+                            .partial_cmp(&t_scene.get(b).copied().unwrap_or(0.0))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| pa.cmp(&pb))
+                            .then_with(|| b.cmp(&a))
+                    });
+                let any_sc = t_scene.get(best_any).copied().unwrap_or(0.0);
+                if let Some(asst_ti) = best_asst {
+                    let asst_sc = t_scene.get(asst_ti).copied().unwrap_or(0.0);
+                    let any_bits = (t_exact_mask.get(best_any).copied().unwrap_or(0) & qg_mask).count_ones();
+                    let asst_bits = (t_exact_mask.get(asst_ti).copied().unwrap_or(0) & qg_mask).count_ones();
+                    let keep_user_primary = ix.turns[best_any].field == 0
+                        && ix.turns[best_any].body_for_headers.len() >= 40
+                        && (any_bits > asst_bits || any_sc > 1.15 * asst_sc);
+                    if !keep_user_primary && asst_sc >= 0.55 * any_sc {
+                        let pt = (asst_ti != best_any && ix.turns[best_any].field == 0).then_some(best_any);
+                        return Some((asst_ti, pt));
+                    }
+                }
+                Some((best_any, best_asst.filter(|&a| a != best_any)))
+            };
+            let mut top5_picks: Vec<(usize, Option<usize>)> = Vec::new();
+            for &si in final_session_indices.iter().take(5) {
+                if let Some(pair) = pick_sum_turn(si) {
+                    top5_picks.push(pair);
+                }
+            }
+            let mut used_p0 = false;
+            for (rank_i, &(chosen, partner)) in top5_picks.iter().enumerate() {
+                if rank_i == 3
+                    && !used_p0
+                    && let Some(&(_, Some(p0))) = top5_picks.first()
+                    && let Some(&s3) = final_session_indices.get(3)
+                    && smax_sync_d > 0.0
+                    && s_score.get(s3).copied().unwrap_or(0.0) < 0.62 * smax_sync_d
+                    && !synced_turns.is_empty()
+                    && t_scene.get(p0).copied().unwrap_or(0.0)
+                        >= 0.60 * t_scene.get(synced_turns[0]).copied().unwrap_or(0.0)
+                {
+                    if !synced_turns.contains(&p0) && synced_turns.len() < target_k {
+                        synced_turns.push(p0);
+                        used_p0 = true;
+                    }
+                }
+                if !synced_turns.contains(&chosen) && synced_turns.len() < target_k {
+                    synced_turns.push(chosen);
+                }
+                if let Some(pt) = partner
+                    && !(rank_i == 0 && used_p0)
+                {
+                    dyad_partners.push(pt);
+                }
+            }
+            for pt in dyad_partners {
+                if synced_turns.len() >= target_k {
+                    break;
+                }
+                if !synced_turns.contains(&pt) {
+                    synced_turns.push(pt);
+                }
+            }
+            for &si in final_session_indices.iter().skip(5).take(target_k.saturating_sub(5)) {
+                if synced_turns.len() >= target_k {
+                    break;
+                }
+                if smax_sync_d > 0.0 && s_score.get(si).copied().unwrap_or(0.0) < 0.45 * smax_sync_d {
+                    break;
+                }
+                if let Some((chosen, _)) = pick_sum_turn(si)
+                    && !synced_turns.contains(&chosen)
+                {
+                    synced_turns.push(chosen);
+                }
+            }
+        } else {
+            for (rank_i, &si) in final_session_indices.iter().take(target_k).enumerate() {
+                if rank_i >= 5 && smax_sync_d > 0.0 && s_score.get(si).copied().unwrap_or(0.0) < 0.45 * smax_sync_d {
+                    break;
+                }
+                let pick = ix.session_turns[si]
+                    .iter()
+                    .copied()
+                    .filter(|&ti| !ix.turns[ti].is_backchannel && !ix.turns[ti].is_standing_policy)
+                    .max_by(|&a, &b| {
+                        let a_user = u8::from(ix.turns[a].field == 0);
+                        let b_user = u8::from(ix.turns[b].field == 0);
+                        let a_exact = (t_exact_mask.get(a).copied().unwrap_or(0) & qg_mask).count_ones();
+                        let b_exact = (t_exact_mask.get(b).copied().unwrap_or(0) & qg_mask).count_ones();
+                        let a_sc = t_scene.get(a).copied().unwrap_or(0.0);
+                        let b_sc = t_scene.get(b).copied().unwrap_or(0.0);
+                        a_user.cmp(&b_user)
+                            .then_with(|| a_exact.cmp(&b_exact))
+                            .then_with(|| a_sc.partial_cmp(&b_sc).unwrap_or(std::cmp::Ordering::Equal))
+                            .then_with(|| b.cmp(&a))
+                    });
+                if let Some(ti) = pick
+                    && !synced_turns.contains(&ti)
+                {
                     synced_turns.push(ti);
                 }
             }
         }
         for &ti in &final_turn_indices {
-            if synced_turns.len() >= k.max(5) {
+            if synced_turns.len() >= target_k {
                 break;
             }
             if !synced_turns.contains(&ti) {
@@ -3312,17 +3720,66 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             }
         }
         if !synced_turns.is_empty() {
-            synced_turns.truncate(k.max(5));
+            synced_turns.truncate(target_k);
             final_turn_indices = synced_turns;
         }
     }
 
+    // Wave 7 Persistent User Preference Lattice: dedicated floor and seating for active constraints
+    let has_dominant_cond_rule = eff_it.task_under_rules
+        && !cond_rule_turns.is_empty()
+        && standing_rules.first().is_some_and(|sr| {
+            sr.score >= 6.0 && cond_rule_turns.iter().any(|&rt| ix.turns[rt].id == sr.id)
+        });
+    crate::retrieval::seating::preference_lattice::apply_persistent_preference_lattice(
+        ix,
+        &plan,
+        &eff_it,
+        &q.text,
+        has_dominant_cond_rule,
+        &mut final_turn_indices,
+        &mut final_session_indices,
+        &t_scene,
+        &t_own,
+        &t_exact_mask,
+        &s_score,
+        k,
+    );
+
+    // Wave 7 T44 Condorcet Coverage Density Duel for Multi-Hop Slot-0
+    crate::retrieval::seating::preference_lattice::apply_t44_condorcet_coverage_density_duel(
+        ix,
+        &plan,
+        &mut final_session_indices,
+        &s_score,
+        &s_exact_mask,
+        k,
+    );
+
+    // Unified Q16.16 GBDT/LambdaMART + Condorcet @1 & @5 Gatekeeper Scorer over deep pool
+    crate::retrieval::seating::gatekeeper::apply_at1_gatekeeper_q16(
+        ix,
+        &plan,
+        &eff_it,
+        q,
+        has_named_speakers_eff,
+        is_monologue_corpus,
+        pref_on,
+        &mut final_turn_indices,
+        &mut final_session_indices,
+        &t_scene,
+        &t_own,
+        &ctx.t_turn_raw,
+        &ctx.t_bridge,
+        &s_score,
+        &bridge_boost,
+        k,
+    );
+
     ctx.final_session_indices = final_session_indices;
     ctx.final_turn_indices = final_turn_indices;
     crate::retrieval::event_ordering::apply_event_ordering_stack(ctx);
-    if crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled(&ctx.eff_it, &ctx.q.text)
-        && ctx.final_session_indices.len() > ctx.k
-    {
+    if ctx.final_session_indices.len() > ctx.k {
         ctx.final_session_indices.truncate(ctx.k);
     }
 }

@@ -262,6 +262,8 @@ pub(in crate::retrieval) struct Index {
     pub(in crate::retrieval) torrens_records: Vec<crate::retrieval::graph::torrens::TorrensRecord>,
     pub(in crate::retrieval) torrens_superseded: Vec<bool>,
     pub(in crate::retrieval) spatial_events: Vec<crate::retrieval::graph::torrens::SpatialEvent>,
+    /// Lazy cache for corpus-wide Fellegi-Sunter role-entity aliases.
+    pub(in crate::retrieval) fellegi_aliases: OnceLock<Vec<(u32, u32)>>,
 }
 
 /// Compact cache-aligned turn metadata (`<= 24 bytes`) for L3-resident linear scans.
@@ -1047,5 +1049,6 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
         torrens_records,
         torrens_superseded,
         spatial_events,
+        fellegi_aliases: OnceLock::new(),
     }
 }

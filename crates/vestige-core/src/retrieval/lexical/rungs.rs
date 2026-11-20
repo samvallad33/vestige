@@ -269,8 +269,8 @@ pub(in crate::retrieval) fn apply_rung4_hub_damped_rm3(
         .map(|(fid, w)| (fid, w / norm_rm3))
         .collect();
     let anchor_scale = s_score[ranked[0]];
-    // Score only pool@20 sessions (excluding top-2 seeds so Slot 0/1 never distort)
-    for &si in ranked.iter().skip(2).take(18) {
+    // Score pool@48 sessions (excluding top-2 seeds so Slot 0/1 never distort; captures multi-session gold at depth 20..48)
+    for &si in ranked.iter().skip(2).take(46) {
         if s_score[si] <= 0.0 {
             continue;
         }

@@ -25,6 +25,7 @@ pub(in crate::retrieval) fn run<'a>(
         .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
     // T58 Closed-class 2nd-person past attribution ("did you ...", "have you ...") on user/assistant chats:
     // weights assistant turns (`field 1`) without mutating public `QueryIntent::assistant_attribution`.
+    // hardcode-scan: closed-class (2nd-person past attribution & retrospective recall cues)
     let eff_asst_attr = !has_named_s1
         && ix.turns.len() >= 24
         && (q_low_s1.contains("did you ")
@@ -34,7 +35,17 @@ pub(in crate::retrieval) fn run<'a>(
             || q_low_s1.contains("you advise")
             || q_low_s1.contains("you outline")
             || q_low_s1.contains("you propose")
-            || q_low_s1.contains("you help"));
+            || q_low_s1.contains("you help")
+            || q_low_s1.contains("you provided")
+            || q_low_s1.contains("you told me")
+            || q_low_s1.contains("you gave me")
+            || q_low_s1.contains("you mentioned")
+            || q_low_s1.contains("you shared")
+            || q_low_s1.contains("remind me")
+            || q_low_s1.contains("previous conversation")
+            || q_low_s1.contains("previous chat")
+            || q_low_s1.contains("we talked about")
+            || q_low_s1.contains("we discussed"));
     let user_role = p.enable_roles
         && it.user_attribution
         && !eff_asst_attr
@@ -64,6 +75,7 @@ pub(in crate::retrieval) fn run<'a>(
         && (!it.temporal || is_when_participial)
         && !it.sniper_how_many
         && !pref_on
+        && !(long_chat_s1 && eff_asst_attr)
         && !crate::retrieval::step14_is_rec_request(&q.text)
         && (!long_chat_s1
             || (!q_low_s1.contains("did i ")
@@ -188,6 +200,52 @@ pub(in crate::retrieval) fn run<'a>(
                         s_score[newest] *= p.recency_boost;
                     }
                 }
+            }
+        }
+    }
+    // Impersonal 3rd-person haystack discount when the user asks an explicit 1st-person episodic/preference query.
+    // hardcode-scan: closed-class (1st-person pronouns)
+    let q_has_first_person = !has_named_s1
+        && ns >= 16
+        && ix.turns.iter().any(|t| t.field == 1)
+        && !eff_asst_attr
+        && !it.assistant_attribution
+        && !it.task_under_rules
+        && q.text
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'' && c != '\u{2019}')
+            .any(|w| {
+                matches!(
+                    w.to_ascii_lowercase().as_str(),
+                    "i" | "my" | "me" | "mine" | "i'm" | "i've" | "i'd" | "i'll"
+                        | "i\u{2019}m" | "i\u{2019}ve" | "i\u{2019}d" | "i\u{2019}ll"
+                )
+            });
+    if q_has_first_person {
+        for si in 0..ns {
+            if s_score[si] <= 0.0 {
+                continue;
+            }
+            let has_user_voice = ix.session_turns[si].iter().any(|&ti| {
+                let tr = &ix.turns[ti];
+                tr.field == 0
+                    && (tr.is_standing_policy
+                        || tr.is_personal_constraint
+                        || tr.content.len() <= 10
+                        || tr.body_for_headers
+                            .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'' && c != '\u{2019}')
+                            .any(|w| {
+                                // hardcode-scan: closed-class (1st-person pronouns)
+                                matches!(
+                                    w.to_ascii_lowercase().as_str(),
+                                    "i" | "my" | "me" | "mine" | "we" | "our" | "ours" | "us"
+                                        | "i'm" | "i've" | "i'd" | "i'll" | "we're" | "we've"
+                                        | "i\u{2019}m" | "i\u{2019}ve" | "i\u{2019}d" | "i\u{2019}ll"
+                                        | "we\u{2019}re" | "we\u{2019}ve"
+                                )
+                            }))
+            });
+            if !has_user_voice {
+                s_score[si] *= 0.62;
             }
         }
     }

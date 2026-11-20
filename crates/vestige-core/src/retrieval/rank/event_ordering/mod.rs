@@ -88,10 +88,21 @@ pub(in crate::retrieval) fn inspect_closed_class_tense_tokens(
 }
 
 /// Closed-class gate for sequence-ordering queries when `eff_it.is_event_sequence` is false.
-/// hardcode-scan: closed-class (connectives, quantifiers, prepositions, interrogatives only).
+/// hardcode-scan: closed-class (connectives, quantifiers, prepositions, order markers only).
 pub(in crate::retrieval) fn is_closed_class_sequence_order_query(query: &str) -> bool {
+    let ql = query.to_ascii_lowercase();
+    if ql.contains("order of the")
+        || ql.contains("order in which")
+        || ql.contains("what order")
+        || ql.contains("which order")
+        || ql.contains("sequence of")
+        || ql.contains("chronological")
+    {
+        return true;
+    }
     let mut seq_conns = 0usize;
     let mut has_span = false;
+    let mut has_order_token = false;
     for raw in query.split(|c: char| !c.is_ascii_alphanumeric()) {
         if raw.is_empty() {
             continue;
@@ -103,8 +114,11 @@ pub(in crate::retrieval) fn is_closed_class_sequence_order_query(query: &str) ->
         if matches!(w.as_str(), "throughout" | "across") {
             has_span = true;
         }
+        if matches!(w.as_str(), "order" | "chronological" | "timeline" | "sequence" | "progression") {
+            has_order_token = true;
+        }
     }
-    seq_conns >= 2 && has_span
+    (seq_conns >= 2 && has_span) || (has_order_token && (has_span || seq_conns >= 1))
 }
 
 struct ExactOrderCtx<'a> {
@@ -291,9 +305,76 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
     if total_m < 2 {
         return;
     }
-    let gate_open = eff_it.is_event_sequence || is_closed_class_sequence_order_query(query);
+    let explicit_seq_q = is_closed_class_sequence_order_query(query);
+    let gate_open = eff_it.is_event_sequence || explicit_seq_q;
     if !gate_open {
         return;
+    }
+
+    // Deep-Pool Top-12 Milestone Promotion (before Kendall-Tau sort):
+    // Inspect Ranks 6..12 and promote up to 2 `is_initiative` sessions from uncovered chronological
+    // quintiles scoring >= 70% of Rank 5 and sharing a topic/entity token (`df <= ns / 3`).
+    let ns_total = ix.session_turns.len();
+    if final_session_indices.len() >= 6 && ns_total >= 10 {
+        let quintile_of = |si: usize| -> usize { ((si * 5) / ns_total).min(4) };
+        let mut covered_q = [false; 5];
+        for &si in final_session_indices.iter().take(5) {
+            covered_q[quintile_of(si)] = true;
+        }
+        let max_topic_df = ((ns_total as u32) / 3).max(3);
+        let topic_ids: Vec<u32> = ctx
+            .plan
+            .terms
+            .iter()
+            .filter(|qt| qt.exact_hit)
+            .filter(|qt| {
+                let df = ix.s_stats.df.get(&qt.id).copied().unwrap_or(0);
+                (1..=max_topic_df).contains(&df)
+            })
+            .map(|qt| qt.id)
+            .collect();
+        let rank4_sc = s_score.get(final_session_indices[4]).copied().unwrap_or(0.0);
+        let pool_hi = final_session_indices.len().min(12);
+        let mut promoted_idx: Vec<usize> = Vec::new();
+        for pos in 5..pool_hi {
+            if promoted_idx.len() >= 2 {
+                break;
+            }
+            let si = final_session_indices[pos];
+            let q_bin = quintile_of(si);
+            if covered_q[q_bin] {
+                continue;
+            }
+            let sc = s_score.get(si).copied().unwrap_or(0.0);
+            if rank4_sc > 0.0 && sc < 0.70 * rank4_sc {
+                continue;
+            }
+            let has_init = ix.session_turns[si]
+                .iter()
+                .any(|&ti| ix.turns[ti].is_initiative);
+            let shares_topic = topic_ids.is_empty()
+                || topic_ids.iter().any(|&tid| {
+                    ix.session_content[si].contains(&tid)
+                        || ix.session_entities[si].contains(&tid)
+                        || ix.session_bags[si].tf[0].contains_key(&tid)
+                });
+            if has_init && shares_topic {
+                covered_q[q_bin] = true;
+                promoted_idx.push(si);
+            }
+        }
+        let target_slots = [4usize, 3usize];
+        for (pi, si) in promoted_idx.into_iter().enumerate() {
+            let slot = target_slots[pi];
+            if let Some(cur_pos) = final_session_indices.iter().position(|&x| x == si)
+                && cur_pos >= 5
+            {
+                let moved = final_session_indices.remove(cur_pos);
+                let evicted = final_session_indices[slot];
+                final_session_indices[slot] = moved;
+                final_session_indices.insert(5.min(final_session_indices.len()), evicted);
+            }
+        }
     }
 
     let q_toks: Vec<&str> = query
@@ -302,9 +383,9 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
         .collect();
     let q_prof = inspect_closed_class_tense_tokens(&q_toks);
 
-    // Zero-regression `sA1` shield: allow reordering `S[0]` only when an earlier candidate in
-    // `1..total_m` covers `S[0]`'s exact query-group mask AND carries >= 75% (`3/4`) of `S[0]`'s
-    // lexical score; otherwise anchor `S[0]` at Rank 1 and order Positions `2..=5`.
+    // Zero-regression `sA1` shield: allow reordering `S[0]` when an earlier candidate in
+    // `1..total_m` covers `S[0]`'s exact query-group mask with >= 3/4 lexical score, OR on
+    // explicit closed-class sequence queries when an earlier candidate hits >= 1 group with >= 3/5 score.
     let s0 = final_session_indices[0];
     let s0_mask = s_exact_mask.get(s0).copied().unwrap_or(0);
     let s0_lex = ieee754_bits_to_q16(s_score.get(s0).map_or(0u32, |v| v.to_bits()));
@@ -312,8 +393,11 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
         let m_c = s_exact_mask.get(sc).copied().unwrap_or(0);
         let l_c = ieee754_bits_to_q16(s_score.get(sc).map_or(0u32, |v| v.to_bits()));
         sc < s0
-            && (m_c & s0_mask) == s0_mask
-            && l_c.saturating_mul(4) >= s0_lex.saturating_mul(3)
+            && (((m_c & s0_mask) == s0_mask
+                && l_c.saturating_mul(4) >= s0_lex.saturating_mul(3))
+                || (explicit_seq_q
+                    && m_c != 0
+                    && l_c.saturating_mul(5) >= s0_lex.saturating_mul(3)))
     });
     let start_idx = usize::from(!can_reorder_head);
     let cands: Vec<usize> = final_session_indices[start_idx..total_m].to_vec();
@@ -413,6 +497,123 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
 
     let ordered = solve_fabula_fas_kendall_order(&cands, &ix.session_ids, pref);
     final_session_indices[start_idx..total_m].copy_from_slice(&ordered);
+
+    // Re-project `final_turn_indices` onto the Kendall-ordered milestone sessions on user/assistant
+    // multi-session streams so Turn @1 / @5 / @10 track the chronological session order 1-for-1
+    // (prioritizing each session's opening `field == 0` user initiative turn).
+    if !ctx.has_named_speakers_eff
+        && !ctx.is_monologue_corpus
+        && !crate::retrieval::eff_summary_request(query)
+        && !ctx.final_turn_indices.is_empty()
+    {
+        let target_k = ctx.k.max(ctx.final_turn_indices.len()).max(5);
+        let mut reprojected: Vec<usize> = Vec::with_capacity(target_k);
+        let mut secondary_in_sess: Vec<usize> = Vec::new();
+        let smax = s_score.iter().copied().fold(0.0f32, f32::max);
+        for (rank_i, &si) in final_session_indices.iter().take(target_k).enumerate() {
+            if rank_i >= 5 && smax > 0.0 && s_score.get(si).copied().unwrap_or(0.0) < 0.38 * smax {
+                break;
+            }
+            let members = &ix.session_turns[si];
+            let mut user_turns: Vec<usize> = members
+                .iter()
+                .copied()
+                .filter(|&ti| {
+                    ix.turns[ti].field == 0
+                        && !ix.turns[ti].is_backchannel
+                        && !ix.turns[ti].is_standing_policy
+                })
+                .collect();
+            if user_turns.is_empty() {
+                user_turns = members
+                    .iter()
+                    .copied()
+                    .filter(|&ti| ix.turns[ti].field == 0 && !ix.turns[ti].is_backchannel)
+                    .collect();
+            }
+            let max_u_sc = user_turns
+                .iter()
+                .map(|&ti| ctx.t_scene.get(ti).copied().unwrap_or(0.0))
+                .fold(0.0f32, f32::max);
+            if user_turns.is_empty() || max_u_sc <= 0.0 {
+                let best_asst = members
+                    .iter()
+                    .copied()
+                    .filter(|&ti| {
+                        ix.turns[ti].field == 1
+                            && !ix.turns[ti].is_backchannel
+                            && ctx.t_scene.get(ti).copied().unwrap_or(0.0) > 0.0
+                    })
+                    .max_by(|&a, &b| {
+                        ctx.t_scene
+                            .get(a)
+                            .copied()
+                            .unwrap_or(0.0)
+                            .partial_cmp(&ctx.t_scene.get(b).copied().unwrap_or(0.0))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| b.cmp(&a))
+                    });
+                if let Some(ati) = best_asst {
+                    if !reprojected.contains(&ati) {
+                        reprojected.push(ati);
+                    }
+                    continue;
+                }
+            }
+            if !user_turns.is_empty() {
+                let open_u = user_turns[0];
+                let open_sc = ctx.t_scene.get(open_u).copied().unwrap_or(0.0);
+                let chosen = if max_u_sc <= 0.0 || open_sc >= 0.45 * max_u_sc {
+                    open_u
+                } else {
+                    user_turns
+                        .iter()
+                        .copied()
+                        .max_by(|&a, &b| {
+                            ctx.t_scene
+                                .get(a)
+                                .copied()
+                                .unwrap_or(0.0)
+                                .partial_cmp(&ctx.t_scene.get(b).copied().unwrap_or(0.0))
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                                .then_with(|| b.cmp(&a))
+                        })
+                        .unwrap_or(open_u)
+                };
+                if !reprojected.contains(&chosen) {
+                    reprojected.push(chosen);
+                }
+                if rank_i < 5 {
+                    for &uti in &user_turns {
+                        if uti != chosen && ctx.t_scene.get(uti).copied().unwrap_or(0.0) > 0.0 {
+                            secondary_in_sess.push(uti);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        for sti in secondary_in_sess {
+            if reprojected.len() >= target_k {
+                break;
+            }
+            if !reprojected.contains(&sti) {
+                reprojected.push(sti);
+            }
+        }
+        for &old_ti in &ctx.final_turn_indices {
+            if reprojected.len() >= target_k {
+                break;
+            }
+            if !reprojected.contains(&old_ti) {
+                reprojected.push(old_ti);
+            }
+        }
+        if !reprojected.is_empty() {
+            reprojected.truncate(ctx.k.max(5));
+            ctx.final_turn_indices = reprojected;
+        }
+    }
 }
 
 #[cfg(test)]

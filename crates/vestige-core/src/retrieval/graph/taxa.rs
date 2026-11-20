@@ -506,6 +506,20 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
         && has_ungrounded_rare_oov
         && nt <= 8192
         && (has_oov_or_rare_group || deficit_a || deficit_b);
+    let large_long_mono = is_monologue_stream && nt > 600 && ix.t_own_stats.avg[0] >= 55.0;
+    let base_top128: Vec<bool> = if large_long_mono {
+        let mut flags = vec![false; nt];
+        let mut by_b: Vec<(u64, usize)> = (0..nt)
+            .filter_map(|ti| (base_q16[ti] > 0).then_some((base_q16[ti], ti)))
+            .collect();
+        by_b.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        for &(_, ti) in by_b.iter().take(128) {
+            flags[ti] = true;
+        }
+        flags
+    } else {
+        Vec::new()
+    };
 
     // Clark & Schaefer (1989) Grounded Personal Commit Rescue for 2-role `user`/`assistant` chats:
     // A concise declarative user disclosure (`field == 0`, `!is_question`, `2..=22` content tokens)
@@ -586,15 +600,33 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
                     }
                 }
                 let mut best_commit: Option<(usize, usize, u64)> = None;
+                let large_haystack = ix.session_turns.len() > 20;
                 for &(uti, ati) in &grounded_commits {
                     let u = &ix.turns[uti];
                     let a = &ix.turns[ati];
+                    // hardcode-scan: closed-class (1st-person pronouns)
+                    let has_first_person = u.is_personal_constraint
+                        || u.body_for_headers
+                            .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'' && c != '\u{2019}')
+                            .any(|w| {
+                                matches!(
+                                    w.to_ascii_lowercase().as_str(),
+                                    "i" | "my" | "me" | "mine" | "we" | "our" | "i'm" | "i've"
+                                        | "i'd" | "i\u{2019}m" | "i\u{2019}ve" | "i\u{2019}d"
+                                )
+                            });
+                    if !has_first_person {
+                        continue;
+                    }
                     let exact_u = (t_exact_mask[uti]).count_ones() as u64;
                     let mut bridge_cnt = 0u64;
                     for &id in &commit_vocab_hits {
                         if u.content.contains(&id) || a.content.contains(&id) {
                             bridge_cnt += 1;
                         }
+                    }
+                    if exact_u == 0 && bridge_cnt == 0 && !is_self_inventory && large_haystack {
+                        continue;
                     }
                     let d_zato = zatocode_u128(
                         u.entities
@@ -890,8 +922,41 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
 
                 // Scan turns for exact recorded paths; rank strictly by `(hops ASC, min_df ASC, ti ASC)`.
                 let mut reached: Vec<(u8, u32, usize)> = Vec::new();
-                let mut ent_key_buf = String::with_capacity(64);
+                let path_cand_ok = if large_long_mono {
+                    let mut flags = base_top128.clone();
+                    let mark_tok = |tok: &str, flags: &mut [bool]| {
+                        if let Some(vid) = ix.vocab.get(tok)
+                            && let Some(plist) = ix.t_postings.get(vid as usize)
+                            && plist.len() <= 128
+                        {
+                            for &doc in plist {
+                                let d = doc as usize;
+                                if d < flags.len() {
+                                    flags[d] = true;
+                                }
+                            }
+                        }
+                    };
+                    for qt in &q_targets {
+                        for part in qt.split_ascii_whitespace() {
+                            mark_tok(part, &mut flags);
+                        }
+                        for inst in crate::wikidata::direct_instances_of(qt, 64) {
+                            for part in inst.split_ascii_whitespace() {
+                                if part.len() >= 4 {
+                                    mark_tok(part, &mut flags);
+                                }
+                            }
+                        }
+                    }
+                    flags
+                } else {
+                    Vec::new()
+                };
                 for ti in 0..nt {
+                    if large_long_mono && !path_cand_ok[ti] {
+                        continue;
+                    }
                     let t = &ix.turns[ti];
                     let sup = if is_monologue_stream {
                         ix.torrens_superseded.get(ti).copied().unwrap_or(false)
@@ -913,29 +978,24 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
                         continue;
                     }
 
+                    let mut ent_words: Vec<&str> = Vec::new();
+                    for &eid in &t.entities {
+                        if let Some(nm) = ix.vocab.names.get(eid as usize)
+                            && let Some(en) = nm.strip_prefix("\u{1}ent:")
+                        {
+                            for part in en.split('_') {
+                                if !ent_words.contains(&part) {
+                                    ent_words.push(part);
+                                }
+                            }
+                        }
+                    }
                     let d_toks = fold_ascii_tokens(&t.body_for_headers);
                     let tok_is_ent: Vec<bool> = d_toks
                         .iter()
                         .map(|w| {
                             let w_clean = w.strip_suffix("'s").unwrap_or(w.as_str());
-                            ent_key_buf.clear();
-                            ent_key_buf.push('\u{1}');
-                            ent_key_buf.push_str("ent:");
-                            ent_key_buf.push_str(w_clean);
-                            if ix
-                                .vocab
-                                .get(&ent_key_buf)
-                                .is_some_and(|eid| t.entities.contains(&eid))
-                            {
-                                return true;
-                            }
-                            t.entities.iter().any(|&eid| {
-                                ix.vocab
-                                    .names
-                                    .get(eid as usize)
-                                    .and_then(|s| s.strip_prefix("\u{1}ent:"))
-                                    .is_some_and(|en| en.split('_').any(|p| p == w_clean))
-                            })
+                            ent_words.contains(&w_clean)
                         })
                         .collect();
                     let mut best_turn_path: Option<(u8, i8, u32)> = None;
@@ -1353,8 +1413,45 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
         hits: Vec<(String, u64)>,
     }
     let mut cands: Vec<RescueCand> = Vec::new();
+    let taxa_cand_ok: Vec<bool> = if large_long_mono {
+        let mut flags = base_top128.clone();
+        for &lid in cn_wn_ids.iter().chain(oov_cn_wn_ids.iter()) {
+            if let Some(plist) = ix.t_postings.get(lid as usize)
+                && plist.len() <= max_rare_df as usize
+            {
+                for &doc in plist {
+                    let d = doc as usize;
+                    if d < flags.len() {
+                        flags[d] = true;
+                    }
+                }
+            }
+        }
+        for oc in &oov_q_exact {
+            for part in oc.split_ascii_whitespace() {
+                if part.len() >= 4
+                    && let Some(vid) = ix.vocab.get(part)
+                    && let Some(plist) = ix.t_postings.get(vid as usize)
+                    && plist.len() <= max_rare_df as usize
+                {
+                    for &doc in plist {
+                        let d = doc as usize;
+                        if d < flags.len() {
+                            flags[d] = true;
+                        }
+                    }
+                }
+            }
+        }
+        flags
+    } else {
+        Vec::new()
+    };
 
     for ti in 0..nt {
+        if large_long_mono && !taxa_cand_ok[ti] {
+            continue;
+        }
         let t = &ix.turns[ti];
         let already_head0 = final_turn_indices.first() == Some(&ti);
         let skip_seated = if is_monologue_stream && has_ungrounded_rare_oov {

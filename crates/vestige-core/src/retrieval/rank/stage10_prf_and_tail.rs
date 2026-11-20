@@ -33,7 +33,13 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         let prf_centroid = crate::retrieval::lexical::rocchio::build_rocchio_centroid_q16(ix, &plan, &prf_seeds, &prf_negs);
         let mut qld_terms_buf: Vec<crate::retrieval::lexical::qld::QldTermInput> = Vec::with_capacity(plan.terms.len());
         let s_rocchio_q16: Vec<u64> = (0..ns)
-            .map(|si| crate::retrieval::lexical::rocchio::score_session_rocchio_q16(ix, si, &prf_centroid))
+            .map(|si| {
+                if ns <= 128 || ctx.s_score[si] > 0.0 || ctx.bridge_boost[si] > 0.0 {
+                    crate::retrieval::lexical::rocchio::score_session_rocchio_q16(ix, si, &prf_centroid)
+                } else {
+                    0
+                }
+            })
             .collect();
         let t_scene_q16: Vec<u64> = (0..nt)
             .map(|ti| {
@@ -47,6 +53,34 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             })
             .collect();
         let avg_own_dl = (ix.t_own_stats.avg[0] + ix.t_own_stats.avg[1]).max(16.0);
+        let eval_bm25l_turn: Vec<bool> = if nt <= 128 {
+            vec![true; nt]
+        } else {
+            let mut flags = vec![false; nt];
+            for &ti in &final_turn_indices {
+                if ti < nt {
+                    flags[ti] = true;
+                }
+            }
+            let mut ranked_own: Vec<(f32, usize)> = (0..nt)
+                .filter_map(|ti| (t_own[ti] > 0.0).then_some((t_own[ti], ti)))
+                .collect();
+            ranked_own.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
+            for &(_, ti) in ranked_own.iter().take(128) {
+                flags[ti] = true;
+            }
+            if is_monologue_corpus {
+                for ti in 0..nt {
+                    if !flags[ti] && t_own[ti] > 0.0 && t_exact_mask[ti].count_ones() >= 2 {
+                        let dl_ti = ix.turn_own_bags[ti].len[0] + ix.turn_own_bags[ti].len[1];
+                        if dl_ti > 3.0 * avg_own_dl {
+                            flags[ti] = true;
+                        }
+                    }
+                }
+            }
+            flags
+        };
         let mut best_long_bm25l: Option<(usize, u64)> = None;
         let mut bm25l_raw_vec: Vec<u64> = vec![0; nt];
         let t_own_q16: Vec<u64> = (0..nt)
@@ -56,6 +90,9 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     return 0;
                 }
                 let base_q16 = (v * 65536.0).min(u64::MAX as f32) as u64;
+                if !eval_bm25l_turn[ti] {
+                    return base_q16;
+                }
                 let q_bag = bag_to_q8_into(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats, &mut qld_terms_buf);
                 let bm25l_q16 = crate::retrieval::lexical::bm25l_dfr::bm25l_dfr_score_q16(&q_bag, &qld_terms_buf);
                 let qld_q16 = crate::retrieval::lexical::qld::qld_score_q16(&q_bag, &qld_terms_buf, crate::retrieval::lexical::qld::MU_TURN_Q8);

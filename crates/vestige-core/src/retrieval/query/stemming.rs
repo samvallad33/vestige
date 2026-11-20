@@ -69,6 +69,10 @@ pub(in crate::retrieval) fn uk_suffix(w: &str) -> Option<String> {
         ("licenced", "licensed"),
         ("licencee", "licensee"),
         ("licence", "license"),
+        ("imposters", "impostors"),
+        ("imposter", "impostor"),
+        ("advisers", "advisors"),
+        ("adviser", "advisor"),
     ];
     for (uk, us) in PAIRS {
         if let Some(prefix) = w.strip_suffix(uk) {
@@ -291,6 +295,8 @@ pub(in crate::retrieval) fn classic_stem(w: &str) -> String {
     let rules: &[(&str, &str, usize)] = &[
         ("ingly", "", 4),
         ("edly", "", 4),
+        ("ships", "", 5),
+        ("ship", "", 5),
         ("ments", "", 4),
         ("ment", "", 4),
         ("ness", "", 4),
