@@ -69,7 +69,9 @@ export function evaluateCinemaAtSeq(
  * for `t` in `[0, 1]` with deterministic arc lift proportional to chord length.
  */
 export function sampleCausalParticleArc(start: Vec3, end: Vec3, t: number): Vec3 {
-  const clamped = Math.max(0, Math.min(1, t));
+  if (t <= 0) return { x: start.x, y: start.y, z: start.z };
+  if (t >= 1) return { x: end.x, y: end.y, z: end.z };
+  const clamped = t;
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const dz = end.z - start.z;
