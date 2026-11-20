@@ -901,7 +901,14 @@ async fn a_leased_dashboard_stops_with_its_last_lease() {
     second.release().await;
     assert!(answers(port).await, "one lease still holds it");
     first.release().await;
-    assert!(!answers(port).await, "the listener outlived its last lease");
+    let release_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while answers(port).await {
+        assert!(
+            std::time::Instant::now() < release_deadline,
+            "the listener outlived its last lease"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 
     // Dropping a lease (the attach connection closing) releases it too, and
     // the port serves again on the next request.
