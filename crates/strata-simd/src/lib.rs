@@ -100,12 +100,16 @@ pub fn dot_i32_postings(weights: &[i32], tf_norms: &[i32]) -> i64 {
         if std::arch::is_x86_feature_detected!("avx2") {
             return unsafe { dot_i32_avx2(weights, tf_norms) };
         }
+        dot_i32_scalar(weights, tf_norms)
     }
     #[cfg(target_arch = "aarch64")]
     {
-        return unsafe { dot_i32_neon(weights, tf_norms) };
+        unsafe { dot_i32_neon(weights, tf_norms) }
     }
-    dot_i32_scalar(weights, tf_norms)
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        dot_i32_scalar(weights, tf_norms)
+    }
 }
 
 /// Branchless / galloping sorted `u32` posting-list intersection (#834).
