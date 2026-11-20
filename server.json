@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-01/server.schema.json",
   "name": "io.github.samvallad33/vestige",
-  "description": "Vestige Causal Proof Engine & Agent Operating System: local-first signed Strata log, exact-handle recall, causal walks, and 102-rule Operator gate.",
+  "description": "Deterministic Operating System, Safety Kernel, and Zero-Vector Causal Memory Engine for AI Agents. Enforces BLAKE3 hash-chained audit logs, out-of-band Operator execution gates, and deterministic retrieval in Rust.",
   "version": "6.2.3",
   "repository": {
     "url": "https://github.com/samvallad33/vestige",

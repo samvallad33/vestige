@@ -43,8 +43,6 @@ const LOG2_MANTISSA_LUT_Q16: [u64; 17] = [
     38_336, 42_196, 45_904, 49_472, 52_911, 56_229, 59_434, 62_534, 65_536,
 ];
 
-/// Top-K session horizon (`5`) for exact `5! = 120` Kemeny-Young consensus (Dwork et al. WWW 2001).
-const KEMENY_CANDIDATE_POOL_CAP: usize = 5;
 /// Minimum session pool length (`2`) required for pairwise rank aggregation.
 const MIN_SESSIONS_FOR_CONSENSUS: usize = 2;
 /// Shtok et al. (ACM TOIS 2012) squared NQC dispersion threshold (`0.30 * 65536 = 19661`, `CV >= 0.55`).
@@ -62,21 +60,6 @@ const MRF_UNORDERED_WINDOW_TOKENS: usize = 8;
 const PLM_KERNEL_RADIUS_TOKENS: u64 = 16;
 /// Turn-boundary virtual token stride (`4` tokens) preserving adjacency-pair proximity across speaker turns.
 const PLM_TURN_BOUNDARY_GAP_TOKENS: usize = 4;
-
-/// Voter 1 weight (`30`): whole-session + window lexical sight (Metzler & Croft 2005 unigram backbone).
-const VOTER_WEIGHT_SESSION_SIGHT: u32 = 30;
-/// Voter 2 weight (`25`): MRF (`#1` + `#uw8`) + PLM + Tao-Zhai `MinCover` span density.
-const VOTER_WEIGHT_MRF_PLM_SPAN: u32 = 25;
-/// Voter 3 weight (`20`): Fang-Zhai `TDC` + Raaijmakers-Shiffrin `SAM` exact query-IC coverage.
-const VOTER_WEIGHT_EXACT_IC_COV: u32 = 20;
-/// Voter 4 weight (`15`): Two-turn support (`top1 + top2` scene Q16), defeating 1-turn `C3`/`C6` decoys.
-const VOTER_WEIGHT_TWO_TURN_SUPPORT: u32 = 15;
-/// Voter 5 weight (`10`): Seated top-5 turn multiplicity from `final_turn_indices[0..5]`.
-const VOTER_WEIGHT_TOP5_TURN_SEATS: u32 = 10;
-/// Pairwise significance numerator (`17`, i.e. `17:16 = +6.25%` Weber-fraction anti-jitter margin).
-const KEMENY_MARGIN_SIG_NUM: u64 = 17;
-/// Pairwise significance denominator (`16`, paired with `KEMENY_MARGIN_SIG_NUM`).
-const KEMENY_MARGIN_SIG_DEN: u64 = 16;
 
 /// Pure integer IEEE-754 binary32 bit-pattern to `Q16.16` conversion (zero FP instructions).
 #[inline]
@@ -333,225 +316,6 @@ pub(in crate::retrieval) fn nqc_locks_incumbent(sight_q16: &[u64], exact_ic_q16:
     nqc_sq_q16 >= NQC_HIGH_DISPERSION_SQ_Q16
 }
 
-fn permute_kemeny(
-    depth: usize,
-    m: usize,
-    cur: &mut [usize; KEMENY_CANDIDATE_POOL_CAP],
-    margin: &[[u32; KEMENY_CANDIDATE_POOL_CAP]; KEMENY_CANDIDATE_POOL_CAP],
-    cand_sessions: &[usize],
-    best_score: &mut u32,
-    best_perm: &mut [usize; KEMENY_CANDIDATE_POOL_CAP],
-) {
-    if depth == m {
-        let mut sc = 0u32;
-        for i in 0..m {
-            for j in (i + 1)..m {
-                sc += margin[cur[i]][cur[j]];
-            }
-        }
-        let better = if sc != *best_score {
-            sc > *best_score
-        } else {
-            let cur_is_id = (0..m).all(|k| cur[k] == k);
-            let best_is_id = (0..m).all(|k| best_perm[k] == k);
-            if cur_is_id != best_is_id {
-                cur_is_id
-            } else {
-                (0..m)
-                    .find_map(|k| {
-                        let sa = cand_sessions[cur[k]];
-                        let sb = cand_sessions[best_perm[k]];
-                        if sa != sb { Some(sa < sb) } else { None }
-                    })
-                    .unwrap_or(false)
-            }
-        };
-        if better {
-            *best_score = sc;
-            *best_perm = *cur;
-        }
-        return;
-    }
-    for idx in depth..m {
-        cur.swap(depth, idx);
-        permute_kemeny(depth + 1, m, cur, margin, cand_sessions, best_score, best_perm);
-        cur.swap(depth, idx);
-    }
-}
-
-/// Exact `m!`-permutation Kemeny-Young solver (`m <= 5`) with deterministic identity/ID tie-break.
-pub(in crate::retrieval) fn solve_kemeny_order(
-    cand_sessions: &[usize],
-    voters: &[[u64; KEMENY_CANDIDATE_POOL_CAP]; 5],
-    weights: &[u32; 5],
-    discrete_voter_mask: u8,
-) -> Vec<usize> {
-    let m = cand_sessions.len();
-    let mut margin = [[0u32; KEMENY_CANDIDATE_POOL_CAP]; KEMENY_CANDIDATE_POOL_CAP];
-    for a in 0..m {
-        for b in 0..m {
-            if a == b {
-                continue;
-            }
-            let mut w_sum = 0u32;
-            for v in 0..5 {
-                let va = voters[v][a];
-                let vb = voters[v][b];
-                let is_discrete = (discrete_voter_mask & (1u8 << v)) != 0;
-                let wins = if is_discrete {
-                    va > vb
-                } else {
-                    va > vb
-                        && va.saturating_mul(KEMENY_MARGIN_SIG_DEN)
-                            >= vb.saturating_mul(KEMENY_MARGIN_SIG_NUM)
-                };
-                if wins {
-                    w_sum += weights[v];
-                }
-            }
-            margin[a][b] = w_sum;
-        }
-    }
-
-    let mut cur = [0usize, 1, 2, 3, 4];
-    let mut best_perm = cur;
-    let mut best_score: u32 = 0;
-    for i in 0..m {
-        for j in (i + 1)..m {
-            best_score += margin[cur[i]][cur[j]];
-        }
-    }
-    permute_kemeny(
-        0,
-        m,
-        &mut cur,
-        &margin,
-        cand_sessions,
-        &mut best_score,
-        &mut best_perm,
-    );
-
-    // Zero-regression head guard: never dethrone `cand[0]` unless the new head wins direct
-    // pairwise majority AND matches or exceeds `cand[0]` on exact query-IC coverage (Voter 2 idx).
-    let w0 = best_perm[0];
-    if w0 != 0 && (margin[w0][0] <= margin[0][w0] || voters[2][w0] < voters[2][0]) {
-        return cand_sessions.to_vec();
-    }
-    (0..m).map(|k| cand_sessions[best_perm[k]]).collect()
-}
-
-#[allow(dead_code)]
-pub(in crate::retrieval) fn apply_nqc_gated_mrf_kemeny_top5(
-    ix: &Index,
-    plan: &QueryPlan,
-    final_turn_indices: &[usize],
-    final_session_indices: &mut Vec<usize>,
-    t_scene: &[f32],
-    s_score: &[f32],
-    bridge_boost: &[f32],
-    s_exact_mask: &[u64],
-) {
-    let m = final_session_indices.len().min(KEMENY_CANDIDATE_POOL_CAP);
-    if m < MIN_SESSIONS_FOR_CONSENSUS {
-        return;
-    }
-    let g_ic = query_group_ic_q16(ix, plan);
-    let g_cnt = g_ic.len();
-    let g_mask_limit = if g_cnt == MAX_QUERY_GROUP_BITS {
-        u64::MAX
-    } else {
-        (1u64 << g_cnt) - 1
-    };
-
-    let cands: Vec<usize> = final_session_indices[..m].to_vec();
-    let mut v_sight = [0u64; KEMENY_CANDIDATE_POOL_CAP];
-    let mut v_mrf = [0u64; KEMENY_CANDIDATE_POOL_CAP];
-    let mut v_ic_cov = [0u64; KEMENY_CANDIDATE_POOL_CAP];
-    let mut v_two_turn = [0u64; KEMENY_CANDIDATE_POOL_CAP];
-    let mut v_seats = [0u64; KEMENY_CANDIDATE_POOL_CAP];
-
-    let mut seq_buf: Vec<(usize, usize)> = Vec::new();
-    for (idx, &si) in cands.iter().enumerate() {
-        let s_q16 = s_score
-            .get(si)
-            .map_or(0, |v| ieee754_bits_to_q16(v.to_bits()));
-        let b_q16 = bridge_boost
-            .get(si)
-            .map_or(0, |v| ieee754_bits_to_q16(v.to_bits()));
-        v_sight[idx] = s_q16.saturating_add(b_q16);
-
-        let mut em = s_exact_mask.get(si).copied().unwrap_or(0) & g_mask_limit;
-        let hit_groups = em.count_ones() as u64;
-        let mut ic_sum: u64 = 0;
-        while em != 0 {
-            let g = em.trailing_zeros() as usize;
-            ic_sum = ic_sum.saturating_add(g_ic[g]);
-            em &= em - 1;
-        }
-        // Raaijmakers & Shiffrin (1981) SAM superlinear cue-intersection bonus for multi-group hits:
-        v_ic_cov[idx] = ic_sum.saturating_add(if hit_groups >= 2 {
-            (ic_sum * (hit_groups - 1)) >> 2
-        } else {
-            0
-        });
-
-        seq_buf.clear();
-        let mut cursor = 0usize;
-        let mut top1_t: u64 = 0;
-        let mut top2_t: u64 = 0;
-        if let Some(members) = ix.session_turns.get(si) {
-            for &ti in members {
-                let t_q16 = t_scene
-                    .get(ti)
-                    .map_or(0, |v| ieee754_bits_to_q16(v.to_bits()));
-                if t_q16 >= top1_t {
-                    top2_t = top1_t;
-                    top1_t = t_q16;
-                } else if t_q16 > top2_t {
-                    top2_t = t_q16;
-                }
-                for &(exact_id, stem_id) in &ix.turns[ti].seq {
-                    if let Some(&g) = plan
-                        .group_of
-                        .get(&exact_id)
-                        .or_else(|| plan.group_of.get(&stem_id))
-                        && g < g_cnt
-                    {
-                        seq_buf.push((cursor, g));
-                    }
-                    cursor += 1;
-                }
-                cursor += PLM_TURN_BOUNDARY_GAP_TOKENS;
-            }
-        }
-        v_mrf[idx] = score_session_mrf_plm_mincover_q16(&seq_buf, &g_ic);
-        v_two_turn[idx] = top1_t.saturating_add(top2_t);
-        let seat_cnt = final_turn_indices
-            .iter()
-            .take(KEMENY_CANDIDATE_POOL_CAP)
-            .filter(|&&ti| ix.turns[ti].session == si)
-            .count() as u64;
-        v_seats[idx] = seat_cnt << Q16_SHIFT;
-    }
-
-    if nqc_locks_incumbent(&v_sight[..m], &v_ic_cov[..m]) {
-        return;
-    }
-
-    let voters = [v_sight, v_mrf, v_ic_cov, v_two_turn, v_seats];
-    let weights = [
-        VOTER_WEIGHT_SESSION_SIGHT,
-        VOTER_WEIGHT_MRF_PLM_SPAN,
-        VOTER_WEIGHT_EXACT_IC_COV,
-        VOTER_WEIGHT_TWO_TURN_SUPPORT,
-        VOTER_WEIGHT_TOP5_TURN_SEATS,
-    ];
-    // Voters 2 (exact IC sum) and 4 (top-5 turn seat count) compare exact discrete quantities.
-    let discrete_mask: u8 = (1u8 << 2) | (1u8 << 4);
-    let reordered = solve_kemeny_order(&cands, &voters, &weights, discrete_mask);
-    final_session_indices[..m].copy_from_slice(&reordered);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -580,30 +344,12 @@ mod tests {
     }
 
     #[test]
-    fn nqc_locks_sharp_single_hop_winner_and_kemeny_promotes_ambiguous_consensus() {
+    fn nqc_locks_sharp_single_hop_winner_and_unlocks_flat_pool() {
         let sharp_sight = [10 * Q16_ONE, 4 * Q16_ONE, 2 * Q16_ONE];
         let sharp_ic = [6 * Q16_ONE, 3 * Q16_ONE, 3 * Q16_ONE];
         assert!(nqc_locks_incumbent(&sharp_sight, &sharp_ic));
 
-        let flat_sight = [10 * Q16_ONE, 9 * Q16_ONE, 8 * Q16_ONE, 0, 0];
-        assert!(!nqc_locks_incumbent(&flat_sight[..3], &[4 * Q16_ONE, 6 * Q16_ONE, 3 * Q16_ONE]));
-
-        let cands = vec![10usize, 22usize, 35usize];
-        let voters = [
-            [10 * Q16_ONE, 9 * Q16_ONE, 7 * Q16_ONE, 0, 0],
-            [Q16_ONE, 8 * Q16_ONE, Q16_ONE, 0, 0],
-            [4 * Q16_ONE, 7 * Q16_ONE, 3 * Q16_ONE, 0, 0],
-            [5 * Q16_ONE, 9 * Q16_ONE, 4 * Q16_ONE, 0, 0],
-            [Q16_ONE, 2 * Q16_ONE, 0, 0, 0],
-        ];
-        let weights = [
-            VOTER_WEIGHT_SESSION_SIGHT,
-            VOTER_WEIGHT_MRF_PLM_SPAN,
-            VOTER_WEIGHT_EXACT_IC_COV,
-            VOTER_WEIGHT_TWO_TURN_SUPPORT,
-            VOTER_WEIGHT_TOP5_TURN_SEATS,
-        ];
-        let out = solve_kemeny_order(&cands, &voters, &weights, (1 << 2) | (1 << 4));
-        assert_eq!(out[0], 22);
+        let flat_sight = [10 * Q16_ONE, 9 * Q16_ONE, 8 * Q16_ONE];
+        assert!(!nqc_locks_incumbent(&flat_sight, &[4 * Q16_ONE, 6 * Q16_ONE, 3 * Q16_ONE]));
     }
 }

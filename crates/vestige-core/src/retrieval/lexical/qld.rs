@@ -9,11 +9,8 @@
 
 use crate::retrieval::lexical::dph::{log2_q16, Q16};
 
-/// Default Dirichlet prior `mu` in Q8 (`384 * 256` = 384 tokens for session/window, `48 * 256` for turns).
-#[allow(dead_code)]
+/// Default Dirichlet prior `mu` in Q8 (`48 * 256` for turns).
 pub(in crate::retrieval) const MU_TURN_Q8: u64 = 48 * 256;
-#[allow(dead_code)]
-pub(in crate::retrieval) const MU_SESSION_Q8: u64 = 384 * 256;
 
 /// Pure-integer term entry passed across the thin `rank.rs` boundary (Q8 fixed-point).
 #[derive(Clone, Copy)]

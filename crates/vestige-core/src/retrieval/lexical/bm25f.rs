@@ -90,12 +90,6 @@ pub(in crate::retrieval) fn bm25f_prepared(
     (score, mask, exact_mask)
 }
 
-#[allow(dead_code)]
-pub(in crate::retrieval) fn bm25f(bag: &Bag, plan: &QueryPlan, st: &Stats, p: &Params, fl: &Fields) -> (f32, u64, u64) {
-    let prep = prepare_plan(plan, st, p);
-    bm25f_prepared(bag, plan, &prep, st, p, fl)
-}
-
 /// True when two distinct query words land within `span` content tokens of each other.
 pub(in crate::retrieval) fn proximity_hit<'a, I: Iterator<Item = &'a (u32, u32)>>(seq: I, plan: &QueryPlan, span: usize) -> bool {
     let mut last: DetHashMap<usize, usize> = DetHashMap::default();

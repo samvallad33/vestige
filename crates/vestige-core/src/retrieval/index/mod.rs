@@ -104,7 +104,6 @@ pub(in crate::retrieval) struct TurnIx {
     pub(in crate::retrieval) is_short_reply: bool,
     pub(in crate::retrieval) is_backchannel: bool,
     pub(in crate::retrieval) anaphoric: bool,
-    #[allow(dead_code)]
     pub(in crate::retrieval) is_personal_constraint: bool,
     pub(in crate::retrieval) has_temporal: bool,
     pub(in crate::retrieval) has_numeric: bool,
@@ -245,14 +244,6 @@ pub(in crate::retrieval) struct Index {
     pub(in crate::retrieval) ppmi_neighbors: DetHashMap<u32, Vec<(u32, f32)>>,
     /// O(1) precomputed supersession flag (`true` if any later turn supersedes `ti`).
     pub(in crate::retrieval) turn_superseded: Vec<bool>,
-    /// Burton Bloom 64-bit membership filters per session and per turn.
-    #[allow(dead_code)]
-    pub(in crate::retrieval) session_bloom: Vec<u64>,
-    #[allow(dead_code)]
-    pub(in crate::retrieval) turn_bloom: Vec<u64>,
-    /// Cache-aligned `<= 24B` turn metadata (20,000 turns <= 480 KB, fits in Sandy Bridge L3).
-    #[allow(dead_code)]
-    pub(in crate::retrieval) turn_meta: Vec<TurnMeta>,
     /// [W2-028/031] 64-bit bloom register over durable user-directive turns & their turn indices.
     pub(in crate::retrieval) standing_register: u64,
     pub(in crate::retrieval) standing_directive_turns: Vec<usize>,
@@ -265,30 +256,6 @@ pub(in crate::retrieval) struct Index {
     /// Lazy cache for corpus-wide Fellegi-Sunter role-entity aliases.
     pub(in crate::retrieval) fellegi_aliases: OnceLock<Vec<(u32, u32)>>,
 }
-
-/// Compact cache-aligned turn metadata (`<= 24 bytes`) for L3-resident linear scans.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(in crate::retrieval) struct TurnMeta {
-    pub(in crate::retrieval) bloom: u64,
-    pub(in crate::retrieval) session: u32,
-    pub(in crate::retrieval) content_len: u16,
-    pub(in crate::retrieval) entity_len: u16,
-    pub(in crate::retrieval) flags: u16,
-    pub(in crate::retrieval) field: u8,
-    pub(in crate::retrieval) _pad: u8,
-}
-
-const _: () = assert!(std::mem::size_of::<TurnMeta>() <= 24);
-
-pub(in crate::retrieval) const TM_QUESTION: u16 = 1 << 0;
-pub(in crate::retrieval) const TM_PURE_INFO_Q: u16 = 1 << 1;
-pub(in crate::retrieval) const TM_ANSWERS_Q: u16 = 1 << 2;
-pub(in crate::retrieval) const TM_SHORT_REPLY: u16 = 1 << 3;
-pub(in crate::retrieval) const TM_BACKCHANNEL: u16 = 1 << 4;
-pub(in crate::retrieval) const TM_ANAPHORIC: u16 = 1 << 5;
-pub(in crate::retrieval) const TM_CONSTRAINT: u16 = 1 << 6;
-pub(in crate::retrieval) const TM_STANDING_POLICY: u16 = 1 << 8;
 
 pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Index {
     let nicks = SpeakerNickIndex::build(sessions);
@@ -973,9 +940,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
     let vocab_len = vocab.names.len();
     let s_postings = build_postings(&session_bags, vocab_len);
     let w_postings = build_postings(&window_bags, vocab_len);
-    let (t_postings, turn_bloom) = build_turn_postings_and_bloom(&turn_bags, &turn_own_bags, vocab_len);
-    let session_bloom = build_session_bloom(&session_bags);
-    let turn_meta = build_turn_meta(&turns, &turn_bloom);
+    let t_postings = build_turn_postings(&turn_bags, &turn_own_bags, vocab_len);
 
     let is_monologue_stream = !turns.iter().any(|t| t.field == 1)
         && !turns
@@ -1040,9 +1005,6 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
         turn_bridge_postings,
         ppmi_neighbors,
         turn_superseded,
-        session_bloom,
-        turn_bloom,
-        turn_meta,
         standing_register,
         standing_directive_turns,
         preference_directive_turns,

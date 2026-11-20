@@ -2,7 +2,18 @@
   "name": "vestige",
   "version": "6.2.3",
   "private": true,
-  "description": "Vestige: the Causal Proof Engine and operating system for AI agents. A signed log, zero vectors, and every answer carries its proof.",
+  "description": "Deterministic Operating System, Safety Kernel, and Zero-Vector Causal Memory Engine for AI Agents. Enforces BLAKE3 hash-chained audit logs, out-of-band Operator execution gates, and deterministic retrieval in Rust.",
+  "keywords": [
+    "agent-os",
+    "deterministic-operating-system",
+    "ai-agents",
+    "safety-kernel",
+    "agent-governance",
+    "causal-memory",
+    "zero-vector",
+    "mcp-server",
+    "rust"
+  ],
   "author": "Sam Valladares",
   "license": "AGPL-3.0-only",
   "repository": {

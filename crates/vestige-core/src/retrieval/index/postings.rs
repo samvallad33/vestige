@@ -1,52 +1,6 @@
-//! Inverted postings, 64-bit Bloom filters, turn metadata, and bridge/PPMI postings.
+//! Inverted postings and bridge/PPMI postings.
 
 use crate::retrieval::*;
-
-
-pub(in crate::retrieval) fn build_turn_meta(turns: &[TurnIx], turn_bloom: &[u64]) -> Vec<TurnMeta> {
-    turns
-        .iter()
-        .zip(turn_bloom.iter())
-        .map(|(t, &bloom)| {
-            let mut flags = 0u16;
-            if t.is_question { flags |= TM_QUESTION; }
-            if t.is_pure_info_question { flags |= TM_PURE_INFO_Q; }
-            if t.answers_question { flags |= TM_ANSWERS_Q; }
-            if t.is_short_reply { flags |= TM_SHORT_REPLY; }
-            if t.is_backchannel { flags |= TM_BACKCHANNEL; }
-            if t.anaphoric { flags |= TM_ANAPHORIC; }
-            if t.is_personal_constraint { flags |= TM_CONSTRAINT; }
-            if t.is_standing_policy { flags |= TM_STANDING_POLICY; }
-            TurnMeta {
-                bloom,
-                session: t.session as u32,
-                content_len: t.content.len().min(u16::MAX as usize) as u16,
-                entity_len: t.entities.len().min(u16::MAX as usize) as u16,
-                flags,
-                field: t.field as u8,
-                _pad: 0,
-            }
-        })
-        .collect()
-}
-
-/// Burton Bloom (1970) 64-bit 2-hash bitmask for a dense `u32` TokenId.
-#[inline]
-pub(in crate::retrieval) fn bloom_mask64(id: u32) -> u64 {
-    let mut x = (id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    let b1 = (x & 63) as u32;
-    let b2 = ((x >> 6) & 63) as u32;
-    (1u64 << b1) | (1u64 << b2)
-}
-
-#[allow(dead_code)]
-#[inline]
-pub(in crate::retrieval) fn session_may_contain_token(ix: &Index, si: usize, id: u32) -> bool {
-    let m = bloom_mask64(id);
-    (ix.session_bloom[si] & m) == m
-}
 
 pub(in crate::retrieval) fn build_postings(bags: &[Bag], vocab_len: usize) -> Vec<Vec<u32>> {
     let mut postings = vec![Vec::new(); vocab_len];
@@ -70,13 +24,12 @@ pub(in crate::retrieval) fn build_postings(bags: &[Bag], vocab_len: usize) -> Ve
     postings
 }
 
-pub(in crate::retrieval) fn build_turn_postings_and_bloom(
+pub(in crate::retrieval) fn build_turn_postings(
     turn_bags: &[Bag],
     turn_own_bags: &[Bag],
     vocab_len: usize,
-) -> (Vec<Vec<u32>>, Vec<u64>) {
+) -> Vec<Vec<u32>> {
     let mut postings = vec![Vec::new(); vocab_len];
-    let mut blooms = vec![0u64; turn_bags.len()];
     let mut seen: DetHashSet<u32> = DetHashSet::default();
     for (ti, (tb, ob)) in turn_bags.iter().zip(turn_own_bags.iter()).enumerate() {
         seen.clear();
@@ -93,32 +46,13 @@ pub(in crate::retrieval) fn build_turn_postings_and_bloom(
             }
         }
         let d = ti as u32;
-        let mut mask = 0u64;
         for &t in &seen {
-            mask |= bloom_mask64(t);
             if let Some(list) = postings.get_mut(t as usize) {
                 list.push(d);
             }
         }
-        blooms[ti] = mask;
     }
-    (postings, blooms)
-}
-
-pub(in crate::retrieval) fn build_session_bloom(bags: &[Bag]) -> Vec<u64> {
-    bags.iter()
-        .map(|b| {
-            let mut mask = 0u64;
-            for f in 0..3 {
-                for (&t, &v) in &b.tf[f] {
-                    if v > 0.0 {
-                        mask |= bloom_mask64(t);
-                    }
-                }
-            }
-            mask
-        })
-        .collect()
+    postings
 }
 
 pub(in crate::retrieval) fn collect_posting_candidates(postings: &[Vec<u32>], plan: &QueryPlan, total_docs: usize) -> Vec<usize> {
