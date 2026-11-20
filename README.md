@@ -18,6 +18,38 @@ No embeddings, no LLMs, no GPU, and no API keys. It runs locally on CPU.
 
 ---
 
+## Instant Install (`v6.2.3`)
+
+### 1. Cursor & Claude Code Developers (1-Line Terminal Command)
+
+**macOS / Linux:**
+```sh
+curl -fsSL https://vestige.sh/install.sh | sh
+```
+
+**Windows PowerShell:**
+```powershell
+irm https://vestige.sh/install.ps1 | iex
+```
+
+**npm (Zero-install npx):**
+```sh
+npx @vestige/mcp setup
+```
+
+### 2. Antigravity Users
+
+```sh
+agy plugin add vestige
+```
+
+### 3. Everyday Companion Users (Zero Install, Web-First)
+
+Launch the live WebGPU Companion directly in your browser:
+**[https://stara-companion.pages.dev/?v=pro-reset](https://stara-companion.pages.dev/?v=pro-reset)**
+
+---
+
 ## Why Vestige?
 
 Roman trackers read *vestigia* in soil to reconstruct what passed through, how heavy it was, which way it moved, and how recently. Vestige does the same for agent memory. It records immutable footprints in an append-only log and walks the trail, instead of guessing meaning from a vector space.

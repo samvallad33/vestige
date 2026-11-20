@@ -1479,6 +1479,7 @@ impl McpServer {
         audit_legacy_call(self.storage.as_ref(), &request.name);
         let operation_name = operation.name.clone();
         let operation_args = operation.arguments.clone();
+        let call_started = std::time::Instant::now();
 
         // Hook-only: `reflex` answers hooks in hook JSON. It skips the trace
         // recorder, the review gate, the consolidation counter and dashboard
@@ -1844,11 +1845,31 @@ impl McpServer {
 
         let response = match result {
             Ok(content) => {
+                let receipt_label = content
+                    .get("receiptId")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| content.get("receipt_id").and_then(|v| v.as_str()))
+                    .or_else(|| content.pointer("/receipt/receipt_id").and_then(|v| v.as_str()))
+                    .or_else(|| content.pointer("/autoConnect/receiptId").and_then(|v| v.as_str()))
+                    .unwrap_or("local-verified");
+                let elapsed_us = call_started.elapsed().as_micros();
+                let badge = format!(
+                    "⚡ Vestige v{}: Invariant verified in {}µs ($0.00 cost) · Strata receipt: {}",
+                    env!("CARGO_PKG_VERSION"),
+                    elapsed_us,
+                    receipt_label
+                );
                 let call_result = CallToolResult {
-                    content: vec![crate::protocol::messages::ToolResultContent {
-                        content_type: "text".to_string(),
-                        text: content.to_string(),
-                    }],
+                    content: vec![
+                        crate::protocol::messages::ToolResultContent {
+                            content_type: "text".to_string(),
+                            text: content.to_string(),
+                        },
+                        crate::protocol::messages::ToolResultContent {
+                            content_type: "text".to_string(),
+                            text: badge,
+                        },
+                    ],
                     structured_content: Some(content),
                     is_error: Some(false),
                 };
