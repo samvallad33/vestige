@@ -26,10 +26,24 @@ pub(in crate::retrieval) fn is_open_domain_inferential_shape(tokens: &[&str]) ->
     let has_modal = tokens.iter().any(|w| {
         matches!(
             w.to_ascii_lowercase().as_str(),
-            "would" | "could" | "might" | "may" | "should"
+            "would" | "could" | "might" | "may" | "should" | "likely" | "potentially"
         )
     });
     if is_wh && has_modal {
+        return true;
+    }
+    // Epistemic/hypothetical modal anywhere in a non-past-aux frame (e.g. "In X's opinion, would...",
+    // "Based on..., what might...", "If X..., could..."), excluding historical "When/did" queries.
+    let has_past_did = matches!(first.as_str(), "when")
+        || tokens.iter().any(|w| w.eq_ignore_ascii_case("did"));
+    if !has_past_did
+        && tokens.iter().any(|w| {
+            matches!(
+                w.to_ascii_lowercase().as_str(),
+                "would" | "could" | "might" | "likely" | "potentially"
+            )
+        })
+    {
         return true;
     }
     // Sentence-initial modal ("Would Alice enjoy...").

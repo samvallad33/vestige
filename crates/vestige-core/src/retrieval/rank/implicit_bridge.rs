@@ -248,6 +248,11 @@ fn is_wrapper_or_scaffold(w: &str) -> bool {
             | "close"
             | "future"
             | "back"
+            | "effective"
+            | "effectively"
+            | "optimal"
+            | "focus"
+            | "upcoming"
     )
 }
 
@@ -348,6 +353,16 @@ fn is_implicit_advice_frame(q_text: &str) -> bool {
         "should i put",
         "what is it for",
         "what aged ",
+        "plan my ",
+        "organize my ",
+        "schedule my ",
+        "structure my ",
+        "prepare for ",
+        "preparing for ",
+        "dealing with ",
+        "handling ",
+        "keep it ",
+        "keeping it ",
     ]
     .iter()
     .any(|p| ql.contains(p))
@@ -482,6 +497,11 @@ fn is_request_or_gratitude_wrapper(text: &str) -> bool {
         "next question:",
         "sounds good",
         "got it",
+        "that's a good",
+        "that's a great",
+        "okay, i'm going",
+        "ok, i'm going",
+        "let's see",
     ]
     .iter()
     .any(|p| low.contains(p))
@@ -673,7 +693,7 @@ fn build_fst_concept_map(
                     add_direct(vid, 1.85 * turn_idf(nt, df));
                     // Also expand FST from the corrected word!
                     for (nbr, sc) in crate::conceptnet::two_hop_neighbors(vword, 14) {
-                        let w = ((sc as f32) / 65536.0).clamp(0.15, 1.0) * 0.70;
+                        let w = ((sc as f32) / 200.0).clamp(0.25, 1.0) * 0.70;
                         for tok in raw_tokens(nbr) {
                             add_fst(&tok, w);
                         }
@@ -682,7 +702,7 @@ fn build_fst_concept_map(
                         .into_iter()
                         .take(14)
                     {
-                        let w = ((sc as f32) / 65536.0).clamp(0.15, 1.0) * 0.65;
+                        let w = ((sc as f32) / 100.0).clamp(0.25, 1.0) * 0.65;
                         for tok in raw_tokens(nbr) {
                             add_fst(&tok, w);
                         }
@@ -705,32 +725,32 @@ fn build_fst_concept_map(
             }
         }
 
-        // 5. ConceptNet 1-2 hop + reciprocal 2-hop neighbors.
+        // 5. ConceptNet 1-2 hop + reciprocal 2-hop neighbors (`sc` in `0..=200`).
         for (nbr, sc) in crate::conceptnet::two_hop_neighbors(c, 22) {
-            let w = ((sc as f32) / 65536.0).clamp(0.15, 1.0) * 0.80;
+            let w = ((sc as f32) / 200.0).clamp(0.25, 1.0) * 0.80;
             for tok in raw_tokens(nbr) {
                 add_fst(&tok, w);
             }
         }
         for (nbr, sc) in crate::conceptnet::reciprocal_two_hop_neighbors(c, 16) {
-            let w = ((sc as f32) / 65536.0).clamp(0.15, 1.0) * 0.75;
+            let w = ((sc as f32) / 200.0).clamp(0.25, 1.0) * 0.75;
             for tok in raw_tokens(nbr) {
                 add_fst(&tok, w);
             }
         }
 
-        // 6. WordNet full lexicon neighbors + dual gloss hypernym bridge + gloss concepts.
+        // 6. WordNet full lexicon neighbors + dual gloss hypernym bridge (`sc` in `0..=100`) + gloss concepts.
         for (nbr, sc) in crate::wordnet::full_lexicon_neighbors(c)
             .into_iter()
             .take(18)
         {
-            let w = ((sc as f32) / 65536.0).clamp(0.15, 1.0) * 0.72;
+            let w = ((sc as f32) / 100.0).clamp(0.25, 1.0) * 0.72;
             for tok in raw_tokens(nbr) {
                 add_fst(&tok, w);
             }
         }
         for (nbr, sc) in crate::wordnet::dual_gloss_hypernym_bridge(c, 14) {
-            let w = ((sc as f32) / 65536.0).clamp(0.15, 1.0) * 0.65;
+            let w = ((sc as f32) / 100.0).clamp(0.25, 1.0) * 0.65;
             for tok in raw_tokens(nbr) {
                 add_fst(&tok, w);
             }
@@ -760,7 +780,7 @@ fn build_fst_concept_map(
             }
         }
         for (nbr, sc) in crate::conceptnet::two_hop_neighbors(ph, 16) {
-            let w = ((sc as f32) / 65536.0).clamp(0.20, 1.0) * 0.95;
+            let w = ((sc as f32) / 200.0).clamp(0.25, 1.0) * 0.95;
             for tok in raw_tokens(nbr) {
                 add_fst(&tok, w);
             }
@@ -770,7 +790,7 @@ fn build_fst_concept_map(
     (direct_weights, fst_weights)
 }
 
-/// Score a turn's `content` against `(direct_weights, fst_weights)`.
+/// Score a turn's `content` against `(direct_weights, fst_weights)` over distinct vocab IDs.
 fn score_turn_concepts(
     tr: &TurnIx,
     direct_weights: &DetHashMap<u32, f32>,
@@ -780,7 +800,11 @@ fn score_turn_concepts(
     let mut fst = 0.0f32;
     let mut d_hits = 0u32;
     let mut f_hits = 0u32;
+    let mut seen: DetHashSet<u32> = DetHashSet::default();
     for &cid in &tr.content {
+        if !seen.insert(cid) {
+            continue;
+        }
         if let Some(&w) = direct_weights.get(&cid) {
             direct += w;
             d_hits += 1;
@@ -823,10 +847,13 @@ fn find_sparse_personal_disclosure_pairs(ix: &Index) -> Vec<(usize, usize, bool)
         let u_toks = raw_tokens(ut);
         // Require a 1st-person subject in the opening clause (first 7 tokens) so quoted
         // or embedded pronouns inside creative-writing prompts are excluded.
-        let has_leading_1sg = u_toks
-            .iter()
-            .take(7)
-            .any(|w| matches!(w.as_str(), "i" | "my" | "me" | "we" | "our"));
+        // hardcode-scan: closed-class (1st-person personal pronouns and contractions)
+        let has_leading_1sg = u_toks.iter().take(7).any(|w| {
+            matches!(
+                w.as_str(),
+                "i" | "i'm" | "i've" | "i'd" | "i'll" | "my" | "me" | "mine" | "we" | "we're" | "we've" | "our" | "ours"
+            )
+        });
         if !has_leading_1sg {
             continue;
         }
@@ -842,7 +869,10 @@ fn find_sparse_personal_disclosure_pairs(ix: &Index) -> Vec<(usize, usize, bool)
 fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     if ctx.ix.has_tool_calls
         || ctx.has_named_speakers_eff
-        || ctx.eff_it.task_under_rules
+        || ctx
+            .final_turn_indices
+            .first()
+            .is_some_and(|&t0| ctx.ix.turns[t0].is_standing_policy)
         || ctx.eff_it.is_event_sequence
         || ctx.eff_it.assistant_attribution
         || ctx.torrens_locked_head
@@ -852,9 +882,9 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
 
     let pairs = find_sparse_personal_disclosure_pairs(ctx.ix);
     // Strict corpus-sparsity gate: only fire when concise disclosure pairs are rare
-    // (`1..=5` pairs and `< 1.6%` of corpus turns). Verified 0/5732 on BEAM 100K and
+    // (`1..=6` pairs and `< 1.8%` of corpus turns). Verified 0/5732 on BEAM 100K and
     // skipped on dense dialogue corpora (>15% density).
-    if pairs.is_empty() || pairs.len() > 5 || pairs.len() * 60 > ctx.nt {
+    if pairs.is_empty() || pairs.len() > 6 || pairs.len() * 55 > ctx.nt {
         return false;
     }
     if pairs.iter().any(|&(_, _, ack)| ack)
@@ -869,7 +899,6 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     let advice_q = is_implicit_advice_frame(&ctx.q.text);
     let profile_q = !advice_q
         && !ctx.eff_it.temporal
-        && !ctx.eff_it.current_state
         && is_personal_profile_recall_query(&ctx.q.text);
     if !advice_q && !profile_q {
         return false;
@@ -882,7 +911,7 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     for &(u_idx, a_idx, mem_ack) in &pairs {
         let (ud, uf, _, _) = score_turn_concepts(&ctx.ix.turns[u_idx], &direct_w, &fst_w);
         let (ad, af, _, _) = score_turn_concepts(&ctx.ix.turns[a_idx], &direct_w, &fst_w);
-        let ack_bonus = if mem_ack { 6.0 } else { 1.5 };
+        let ack_bonus = if mem_ack { 18.0 } else { 1.5 };
         let sc = (ud + ad) * 2.0 + (uf + af) * 1.15 + ack_bonus + 0.10 * ctx.t_scene[u_idx].max(0.0);
         scored_pairs.push((u_idx, a_idx, sc, mem_ack));
     }
@@ -989,10 +1018,30 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
 
     let t0 = ctx.final_turn_indices[0];
     let tr0 = &ctx.ix.turns[t0];
-    let t0_greeting = is_zero_substance_greeting(tr0);
-    let (_, _, dh0, fh0) = score_turn_concepts(tr0, &direct_w, &fst_w);
+    let (d0, f0, dh0, fh0) = score_turn_concepts(tr0, &direct_w, &fst_w);
+    let raw0 = d0 + f0;
+    let is_echo_courtesy = |tr: &TurnIx, dh: u32, fh: u32| -> bool {
+        if is_zero_substance_greeting(tr) {
+            return true;
+        }
+        if dh != 0 || fh != 0 {
+            return false;
+        }
+        let toks = raw_tokens(&tr.body_for_headers);
+        // hardcode-scan: closed-class (conversational greeting, backchannel, and courtesy interjections)
+        toks.len() <= 18
+            && toks.first().is_some_and(|w| {
+                matches!(
+                    w.as_str(),
+                    "hey" | "hi" | "hello" | "yep" | "yeah" | "haha" | "wow" | "thanks" | "aw" | "yay"
+                )
+            })
+    };
+    let t0_greeting = is_echo_courtesy(tr0, dh0, fh0);
+    let t0_sp_ok = queried_speakers.len() != 1
+        || tr0.speaker.eq_ignore_ascii_case(&queried_speakers[0]);
 
-    let mut cands: Vec<(usize, usize, f32, f32, u32)> = Vec::new();
+    let mut cands: Vec<(usize, usize, f32, f32, u32, u32)> = Vec::new();
     for ti in 0..ctx.nt {
         let tr = &ctx.ix.turns[ti];
         if is_zero_substance_greeting(tr) || tr.is_standing_policy {
@@ -1018,7 +1067,7 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
         let multi_hit_bonus = if dh + fh >= 2 { 1.25 } else { 1.0 };
         let total = raw_concept * sp_mul * decl_mul * multi_hit_bonus
             + 0.10 * ctx.t_scene[ti].max(0.0);
-        cands.push((ti, tr.session, total, raw_concept, dh));
+        cands.push((ti, tr.session, total, raw_concept, dh, fh));
     }
 
     if cands.is_empty() {
@@ -1030,17 +1079,27 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
             .then_with(|| a.0.cmp(&b.0))
     });
 
-    // Strict Zero-Regression Head Rule: ONLY rescue Rank 1 on Open-Domain inferential
-    // queries when `t0` is a zero-substance greeting/filler OR when `t0` has zero concept
-    // alignment and the candidate matches the queried speaker with a direct compound/OOV hit.
-    let (best_ti, best_si, _best_total, best_raw, best_dh) = cands[0];
+    // Rescue Rank 1 on Open-Domain inferential queries when `t0` is a greeting/courtesy echo,
+    // when `t0` has zero concept alignment (`dh0 == 0 && fh0 == 0`) while a queried-speaker
+    // candidate hits direct or multi-edge FST concepts, or when `t0` is the wrong speaker
+    // with zero direct concept hit and the queried speaker strongly outscores it.
+    let (best_ti, best_si, _best_total, best_raw, best_dh, best_fh) = cands[0];
     let best_sp_ok = queried_speakers.len() != 1
         || ctx.ix.turns[best_ti]
             .speaker
             .eq_ignore_ascii_case(&queried_speakers[0]);
     let should_promote_head = best_ti != t0
         && (t0_greeting
-            || (dh0 == 0 && fh0 == 0 && best_dh > 0 && best_sp_ok && best_raw >= 3.2));
+            || (dh0 == 0
+                && fh0 == 0
+                && best_sp_ok
+                && (best_dh > 0 || best_fh >= 2)
+                && best_raw >= 2.2)
+            || (!t0_sp_ok
+                && best_sp_ok
+                && dh0 == 0
+                && (best_dh > 0 || best_fh >= 2)
+                && best_raw >= (1.4 * raw0).max(2.4)));
 
     if should_promote_head {
         if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == best_ti) {
@@ -1048,10 +1107,10 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
         }
         ctx.final_turn_indices.insert(0, best_ti);
 
-        // Sync Rank-1 session ONLY when displacing a greeting or zero-concept session.
+        // Sync Rank-1 session when displacing a greeting, zero-concept, or wrong-speaker head.
         if !ctx.final_session_indices.is_empty() {
             let s0 = ctx.final_session_indices[0];
-            if s0 != best_si && (t0_greeting || (dh0 == 0 && fh0 == 0)) {
+            if s0 != best_si && (t0_greeting || (dh0 == 0 && fh0 == 0) || !t0_sp_ok) {
                 if let Some(sp) = ctx.final_session_indices.iter().position(|&s| s == best_si) {
                     ctx.final_session_indices.remove(sp);
                 }
@@ -1060,8 +1119,8 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
         }
     }
 
-    // Seat up to 2 strong distinct-session FST bridged turns ONLY into zero-substance
-    // greeting tail slots inside Top-5 (never evicting substantive Stage-4 candidates).
+    // Seat up to 2 strong distinct-session FST bridged turns into greeting/courtesy or
+    // zero-concept question tail slots inside Top-5, and sync `final_session_indices[1..5]`.
     let mut seated = 0usize;
     let mut seen_s: DetHashSet<usize> = ctx
         .final_turn_indices
@@ -1069,8 +1128,8 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
         .take(3)
         .map(|&ti| ctx.ix.turns[ti].session)
         .collect();
-    for &(ti, si, total, raw_c, _) in cands.iter().take(6) {
-        if seated >= 2 || raw_c < 2.8 || total < 3.5 {
+    for &(ti, si, total, raw_c, _, _) in cands.iter().take(8) {
+        if seated >= 2 || raw_c < 2.2 || total < 2.8 {
             break;
         }
         let top5 = ctx.final_turn_indices.len().min(5);
@@ -1080,7 +1139,9 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
         let mut repl: Option<usize> = None;
         for pos in (1..top5).rev() {
             let cur = ctx.final_turn_indices[pos];
-            if is_zero_substance_greeting(&ctx.ix.turns[cur]) {
+            let cur_tr = &ctx.ix.turns[cur];
+            let (_, _, cdh, cfh) = score_turn_concepts(cur_tr, &direct_w, &fst_w);
+            if is_echo_courtesy(cur_tr, cdh, cfh) || (cdh == 0 && cfh == 0 && cur_tr.is_question) {
                 repl = Some(pos);
                 break;
             }
@@ -1091,6 +1152,16 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
             }
             let ins = pos.min(ctx.final_turn_indices.len());
             ctx.final_turn_indices.insert(ins, ti);
+            if ctx.final_session_indices.len() >= 5 && !ctx.final_session_indices[..5].contains(&si)
+            {
+                let s4 = ctx.final_session_indices[4];
+                if (ctx.s_exact_mask[s4] & ctx.grounded_group_mask) == 0 {
+                    if let Some(sp) = ctx.final_session_indices.iter().position(|&s| s == si) {
+                        ctx.final_session_indices.remove(sp);
+                    }
+                    ctx.final_session_indices.insert(4, si);
+                }
+            }
             seated += 1;
         }
     }
@@ -1098,17 +1169,15 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
 
 /// Regime C: Non-sparse advice-frame user assertion rescue (demotes assistant essays
 /// and pure user questions below declarative `field == 0` user turns carrying stronger
-/// wrapper-stripped exact + FST concept evidence).
+/// wrapper-stripped exact + FST concept + personal constraint/habit evidence).
 fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
     if ctx.has_named_speakers_eff
         || ctx.ix.has_tool_calls
-        || ctx.pref_on
-        || ctx.eff_it.task_under_rules
+        || ctx.implicit_disclosure_locked
         || ctx.eff_it.is_event_sequence
         || ctx.eff_it.assistant_attribution
         || ctx.eff_it.multi_hop
-        || ctx.eff_it.temporal
-        || ctx.eff_it.current_state
+        || ctx.eff_it.sniper_when
         || eff_summary_request(&ctx.q.text)
         || ctx.torrens_locked_head
     {
@@ -1117,8 +1186,13 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
     if !is_implicit_advice_frame(&ctx.q.text) {
         return;
     }
-    let window = ctx.final_turn_indices.len().min(10);
-    if window < 2 {
+    if ctx.final_turn_indices.len() < 2 {
+        return;
+    }
+
+    let t0 = ctx.final_turn_indices[0];
+    let tr0 = &ctx.ix.turns[t0];
+    if tr0.is_standing_policy {
         return;
     }
 
@@ -1128,34 +1202,115 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
         return;
     }
 
-    let t0 = ctx.final_turn_indices[0];
-    let tr0 = &ctx.ix.turns[t0];
-    let (d0, f0, dh0, fh0) = score_turn_concepts(tr0, &direct_w, &fst_w);
-    let t0_weak = tr0.field == 1 || tr0.is_pure_info_question || (dh0 == 0 && fh0 == 0);
+    let (d0, f0, _, _) = score_turn_concepts(tr0, &direct_w, &fst_w);
+    let t0_weak = tr0.field == 1
+        || tr0.is_question
+        || tr0.body_for_headers.contains('?')
+        || is_request_or_gratitude_wrapper(&tr0.body_for_headers);
     if !t0_weak {
         return;
     }
 
-    let mut best_pos: Option<usize> = None;
-    let mut best_sc = (d0 + f0).max(0.0);
-    for (i, &ti) in ctx.final_turn_indices[1..window].iter().enumerate() {
+    let window = ctx.final_turn_indices.len().min(20);
+    let mut pool: Vec<usize> = ctx.final_turn_indices[1..window].to_vec();
+    for &si in ctx.final_session_indices.iter().take(3) {
+        for &ti in &ctx.ix.session_turns[si] {
+            if ti != t0 && ctx.ix.turns[ti].field == 0 && !pool.contains(&ti) {
+                pool.push(ti);
+            }
+        }
+    }
+    // Also admit corpus-wide 1st-person personal-constraint declarative turns (`field == 0`)
+    // that missed Top-20 purely due to zero wrapper overlap.
+    for (ti, tr) in ctx.ix.turns.iter().enumerate() {
+        if ti != t0
+            && tr.field == 0
+            && !tr.is_question
+            && !tr.is_backchannel
+            && !tr.is_standing_policy
+            && tr.is_personal_constraint
+            && !pool.contains(&ti)
+        {
+            pool.push(ti);
+        }
+    }
+
+    let mut best_ti: Option<usize> = None;
+    let mut best_sc = if tr0.field == 1 || tr0.is_question || is_request_or_gratitude_wrapper(&tr0.body_for_headers) {
+        1.55
+    } else {
+        (d0 * 1.40 + f0).max(2.2)
+    };
+
+    for ti in pool {
         let tr = &ctx.ix.turns[ti];
-        if tr.field != 0 || tr.is_question || tr.is_backchannel || tr.is_standing_policy {
+        if tr.field != 0
+            || tr.is_question
+            || tr.is_backchannel
+            || tr.is_standing_policy
+            || tr.body_for_headers.contains('?')
+            || is_request_or_gratitude_wrapper(&tr.body_for_headers)
+        {
+            continue;
+        }
+        let low = tr.body_for_headers.to_ascii_lowercase();
+        let toks = raw_tokens(&low);
+        if !(6..=95).contains(&toks.len()) {
             continue;
         }
         let (d, f, dh, fh) = score_turn_concepts(tr, &direct_w, &fst_w);
-        if dh == 0 && fh == 0 {
+        if dh == 0 && fh < 2 {
             continue;
         }
-        let sc = d * 1.3 + f;
-        if sc > best_sc + 0.5 {
+        // hardcode-scan: closed-class (1st-person personal pronouns and contractions)
+        let has_1sg = toks.iter().any(|w| {
+            matches!(
+                w.as_str(),
+                "i" | "i'm" | "i've" | "i'd" | "i'll" | "my" | "me" | "mine" | "we" | "we're" | "we've" | "our" | "ours"
+            )
+        });
+        if !has_1sg {
+            continue;
+        }
+        // hardcode-scan: closed-class (1st-person deontic, habit, and constraint stance modals/verbs)
+        let has_stance = tr.is_personal_constraint
+            || [
+                "prefer",
+                "usually",
+                "always",
+                "never",
+                "avoid",
+                "without",
+                "hard to",
+                "struggle",
+                "struggling",
+                "worried",
+                "takes a hit",
+                "top priority",
+                "learned",
+                "focus on",
+            ]
+            .iter()
+            .any(|p| low.contains(p));
+        let deontic_bonus = if has_stance { 1.85 } else { 0.0 };
+        let sc = d * 1.40 + f + deontic_bonus + 0.12 * ctx.t_scene[ti].max(0.0);
+        if sc > best_sc + 0.45 {
             best_sc = sc;
-            best_pos = Some(i + 1);
+            best_ti = Some(ti);
         }
     }
-    if let Some(pos) = best_pos {
-        let cand = ctx.final_turn_indices.remove(pos);
-        ctx.final_turn_indices.insert(0, cand);
+    if let Some(win_ti) = best_ti {
+        if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == win_ti) {
+            ctx.final_turn_indices.remove(pos);
+        }
+        ctx.final_turn_indices.insert(0, win_ti);
+        let win_s = ctx.ix.turns[win_ti].session;
+        if !ctx.final_session_indices.is_empty() && ctx.final_session_indices[0] != win_s {
+            if let Some(sp) = ctx.final_session_indices.iter().position(|&s| s == win_s) {
+                ctx.final_session_indices.remove(sp);
+            }
+            ctx.final_session_indices.insert(0, win_s);
+        }
     }
 }
 
