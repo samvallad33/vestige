@@ -363,6 +363,7 @@ fn is_implicit_advice_frame(q_text: &str) -> bool {
         "handling ",
         "keep it ",
         "keeping it ",
+        "optimal time",
     ]
     .iter()
     .any(|p| ql.contains(p))
@@ -544,6 +545,32 @@ fn is_zero_substance_greeting(tr: &TurnIx) -> bool {
         .filter(|w| is_content(w) && !is_wrapper_or_scaffold(w))
         .count();
     toks.len() <= 10 && non_scaf == 0
+}
+
+/// hardcode-scan: closed-class (greetings, farewells, and courtesy/ack leads).
+fn has_closed_class_greeting_or_ack_lead(low: &str) -> bool {
+    let trimmed = low.trim_start();
+    [
+        "hey ", "hi ", "hello ", "yep", "yeah", "haha", "wow", "thanks", "aw",
+    ]
+    .iter()
+    .any(|p| trimmed.starts_with(p))
+}
+
+/// hardcode-scan: closed-class (greetings, farewells, and courtesy fillers).
+fn is_zero_substance_greeting_with_hits(tr: &TurnIx, dh: u32, fh: u32) -> bool {
+    if is_zero_substance_greeting(tr) {
+        return true;
+    }
+    if dh == 0 && fh == 0 {
+        let toks = raw_tokens(&tr.body_for_headers);
+        if toks.len() <= 18
+            && has_closed_class_greeting_or_ack_lead(&tr.body_for_headers.to_ascii_lowercase())
+        {
+            return true;
+        }
+    }
+    false
 }
 
 #[inline]
@@ -907,13 +934,14 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     let empty_sp = DetHashSet::default();
     let (direct_w, fst_w) = build_fst_concept_map(ctx, &empty_sp);
 
-    let mut scored_pairs: Vec<(usize, usize, f32, bool)> = Vec::with_capacity(pairs.len());
+    let mut scored_pairs: Vec<(usize, usize, f32, bool, f32, f32, f32, f32)> =
+        Vec::with_capacity(pairs.len());
     for &(u_idx, a_idx, mem_ack) in &pairs {
         let (ud, uf, _, _) = score_turn_concepts(&ctx.ix.turns[u_idx], &direct_w, &fst_w);
         let (ad, af, _, _) = score_turn_concepts(&ctx.ix.turns[a_idx], &direct_w, &fst_w);
         let ack_bonus = if mem_ack { 18.0 } else { 1.5 };
         let sc = (ud + ad) * 2.0 + (uf + af) * 1.15 + ack_bonus + 0.10 * ctx.t_scene[u_idx].max(0.0);
-        scored_pairs.push((u_idx, a_idx, sc, mem_ack));
+        scored_pairs.push((u_idx, a_idx, sc, mem_ack, ud, uf, ad, af));
     }
     scored_pairs.sort_by(|a, b| {
         b.2.partial_cmp(&a.2)
@@ -921,13 +949,8 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
             .then_with(|| a.0.cmp(&b.0))
     });
 
-    // Strict zero-regression guard on `profile_q` (direct memory recall such as LongMemEval):
-    // ONLY elevate on `profile_q` when the sparse disclosure pair carries an explicit
-    // assistant memory-commit acknowledgment (`best_ack == true`). This protects 100% of
-    // LongMemEval Temporal/Update queries (where `t0` often ends with a polite `?`) while
-    // capturing explicit user-profile disclosures ("I'll remember...", "I've noted...").
     if profile_q {
-        let (_, _, _, best_ack) = scored_pairs[0];
+        let (_, _, _, best_ack, _, _, _, _) = scored_pairs[0];
         if !best_ack {
             return false;
         }
@@ -936,7 +959,7 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     // Seat winning disclosure pair(s) cleanly at the front of `final_turn_indices`
     // while demoting questions/wrappers within Top-10 and syncing `final_session_indices[0]`.
     let mut front: Vec<usize> = Vec::with_capacity(pairs.len() * 2);
-    for &(u_idx, a_idx, _, _) in &scored_pairs {
+    for &(u_idx, a_idx, _, _, _, _, _, _) in &scored_pairs {
         front.push(u_idx);
         front.push(a_idx);
     }
@@ -1020,35 +1043,18 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
     let tr0 = &ctx.ix.turns[t0];
     let (d0, f0, dh0, fh0) = score_turn_concepts(tr0, &direct_w, &fst_w);
     let raw0 = d0 + f0;
-    let is_echo_courtesy = |tr: &TurnIx, dh: u32, fh: u32| -> bool {
-        if is_zero_substance_greeting(tr) {
-            return true;
-        }
-        if dh != 0 || fh != 0 {
-            return false;
-        }
-        let toks = raw_tokens(&tr.body_for_headers);
-        // hardcode-scan: closed-class (conversational greeting, backchannel, and courtesy interjections)
-        toks.len() <= 18
-            && toks.first().is_some_and(|w| {
-                matches!(
-                    w.as_str(),
-                    "hey" | "hi" | "hello" | "yep" | "yeah" | "haha" | "wow" | "thanks" | "aw" | "yay"
-                )
-            })
-    };
-    let t0_greeting = is_echo_courtesy(tr0, dh0, fh0);
+    let t0_greeting = is_zero_substance_greeting_with_hits(tr0, dh0, fh0);
     let t0_sp_ok = queried_speakers.len() != 1
         || tr0.speaker.eq_ignore_ascii_case(&queried_speakers[0]);
 
     let mut cands: Vec<(usize, usize, f32, f32, u32, u32)> = Vec::new();
     for ti in 0..ctx.nt {
         let tr = &ctx.ix.turns[ti];
-        if is_zero_substance_greeting(tr) || tr.is_standing_policy {
+        if tr.is_standing_policy {
             continue;
         }
         let (d, f, dh, fh) = score_turn_concepts(tr, &direct_w, &fst_w);
-        if dh == 0 && fh == 0 {
+        if is_zero_substance_greeting_with_hits(tr, dh, fh) || (dh == 0 && fh == 0) {
             continue;
         }
         let raw_concept = d + f;
@@ -1079,11 +1085,7 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
             .then_with(|| a.0.cmp(&b.0))
     });
 
-    // Rescue Rank 1 on Open-Domain inferential queries when `t0` is a greeting/courtesy echo,
-    // when `t0` has zero concept alignment (`dh0 == 0 && fh0 == 0`) while a queried-speaker
-    // candidate hits direct or multi-edge FST concepts, or when `t0` is the wrong speaker
-    // with zero direct concept hit and the queried speaker strongly outscores it.
-    let (best_ti, best_si, _best_total, best_raw, best_dh, best_fh) = cands[0];
+    let (best_ti, _best_si, _best_total, best_raw, best_dh, best_fh) = cands[0];
     let best_sp_ok = queried_speakers.len() != 1
         || ctx.ix.turns[best_ti]
             .speaker
@@ -1095,32 +1097,19 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
                 && best_sp_ok
                 && (best_dh > 0 || best_fh >= 2)
                 && best_raw >= 2.2)
-            || (!t0_sp_ok
-                && best_sp_ok
-                && dh0 == 0
-                && (best_dh > 0 || best_fh >= 2)
-                && best_raw >= (1.4 * raw0).max(2.4)));
+            || (!t0_sp_ok && best_sp_ok && best_raw >= 1.4 * raw0));
 
+    let mut mutated_top5 = false;
     if should_promote_head {
         if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == best_ti) {
             ctx.final_turn_indices.remove(pos);
         }
         ctx.final_turn_indices.insert(0, best_ti);
-
-        // Sync Rank-1 session when displacing a greeting, zero-concept, or wrong-speaker head.
-        if !ctx.final_session_indices.is_empty() {
-            let s0 = ctx.final_session_indices[0];
-            if s0 != best_si && (t0_greeting || (dh0 == 0 && fh0 == 0) || !t0_sp_ok) {
-                if let Some(sp) = ctx.final_session_indices.iter().position(|&s| s == best_si) {
-                    ctx.final_session_indices.remove(sp);
-                }
-                ctx.final_session_indices.insert(0, best_si);
-            }
-        }
+        mutated_top5 = true;
     }
 
     // Seat up to 2 strong distinct-session FST bridged turns into greeting/courtesy or
-    // zero-concept question tail slots inside Top-5, and sync `final_session_indices[1..5]`.
+    // zero-concept question tail slots inside Top-5, and sync `final_session_indices[0..5]`.
     let mut seated = 0usize;
     let mut seen_s: DetHashSet<usize> = ctx
         .final_turn_indices
@@ -1141,7 +1130,9 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
             let cur = ctx.final_turn_indices[pos];
             let cur_tr = &ctx.ix.turns[cur];
             let (_, _, cdh, cfh) = score_turn_concepts(cur_tr, &direct_w, &fst_w);
-            if is_echo_courtesy(cur_tr, cdh, cfh) || (cdh == 0 && cfh == 0 && cur_tr.is_question) {
+            if is_zero_substance_greeting_with_hits(cur_tr, cdh, cfh)
+                || (cdh == 0 && cfh == 0 && cur_tr.is_question)
+            {
                 repl = Some(pos);
                 break;
             }
@@ -1152,18 +1143,27 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
             }
             let ins = pos.min(ctx.final_turn_indices.len());
             ctx.final_turn_indices.insert(ins, ti);
-            if ctx.final_session_indices.len() >= 5 && !ctx.final_session_indices[..5].contains(&si)
-            {
-                let s4 = ctx.final_session_indices[4];
-                if (ctx.s_exact_mask[s4] & ctx.grounded_group_mask) == 0 {
-                    if let Some(sp) = ctx.final_session_indices.iter().position(|&s| s == si) {
-                        ctx.final_session_indices.remove(sp);
-                    }
-                    ctx.final_session_indices.insert(4, si);
-                }
-            }
+            mutated_top5 = true;
             seated += 1;
         }
+    }
+
+    if mutated_top5 && !ctx.final_session_indices.is_empty() {
+        let top5 = ctx.final_turn_indices.len().min(5);
+        let mut synced_sess: Vec<usize> = Vec::with_capacity(ctx.final_session_indices.len() + top5);
+        let mut seen_sync: DetHashSet<usize> = DetHashSet::default();
+        for &ti in &ctx.final_turn_indices[..top5] {
+            let si = ctx.ix.turns[ti].session;
+            if seen_sync.insert(si) {
+                synced_sess.push(si);
+            }
+        }
+        for &si in &ctx.final_session_indices {
+            if seen_sync.insert(si) {
+                synced_sess.push(si);
+            }
+        }
+        ctx.final_session_indices = synced_sess;
     }
 }
 
@@ -1178,6 +1178,7 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
         || ctx.eff_it.assistant_attribution
         || ctx.eff_it.multi_hop
         || ctx.eff_it.sniper_when
+        || ctx.eff_it.temporal
         || eff_summary_request(&ctx.q.text)
         || ctx.torrens_locked_head
     {
@@ -1192,7 +1193,9 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
 
     let t0 = ctx.final_turn_indices[0];
     let tr0 = &ctx.ix.turns[t0];
-    if tr0.is_standing_policy {
+    if tr0.is_standing_policy
+        || (tr0.field == 0 && tr0.is_personal_constraint && !tr0.is_pure_info_question)
+    {
         return;
     }
 
@@ -1220,8 +1223,6 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
             }
         }
     }
-    // Also admit corpus-wide 1st-person personal-constraint declarative turns (`field == 0`)
-    // that missed Top-20 purely due to zero wrapper overlap.
     for (ti, tr) in ctx.ix.turns.iter().enumerate() {
         if ti != t0
             && tr.field == 0
@@ -1236,10 +1237,10 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
     }
 
     let mut best_ti: Option<usize> = None;
-    let mut best_sc = if tr0.field == 1 || tr0.is_question || is_request_or_gratitude_wrapper(&tr0.body_for_headers) {
-        1.55
+    let mut best_sc = if tr0.field == 1 {
+        0.45 * d0 + 0.50 * f0
     } else {
-        (d0 * 1.40 + f0).max(2.2)
+        (d0 * 1.45 + f0 * 1.15 + 0.10 * ctx.t_scene[t0].max(0.0)).max(2.2)
     };
 
     for ti in pool {
@@ -1263,13 +1264,13 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
             continue;
         }
         // hardcode-scan: closed-class (1st-person personal pronouns and contractions)
-        let has_1sg = toks.iter().any(|w| {
+        let has_leading_1sg = toks.iter().take(8).any(|w| {
             matches!(
                 w.as_str(),
                 "i" | "i'm" | "i've" | "i'd" | "i'll" | "my" | "me" | "mine" | "we" | "we're" | "we've" | "our" | "ours"
             )
         });
-        if !has_1sg {
+        if !tr.is_personal_constraint && !has_leading_1sg {
             continue;
         }
         // hardcode-scan: closed-class (1st-person deontic, habit, and constraint stance modals/verbs)
@@ -1292,9 +1293,9 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
             ]
             .iter()
             .any(|p| low.contains(p));
-        let deontic_bonus = if has_stance { 1.85 } else { 0.0 };
-        let sc = d * 1.40 + f + deontic_bonus + 0.12 * ctx.t_scene[ti].max(0.0);
-        if sc > best_sc + 0.45 {
+        let deontic_bonus = if has_stance { 1.25 } else { 0.0 };
+        let sc = d * 1.45 + f * 1.15 + deontic_bonus + 0.10 * ctx.t_scene[ti].max(0.0);
+        if sc > best_sc + 0.25 {
             best_sc = sc;
             best_ti = Some(ti);
         }

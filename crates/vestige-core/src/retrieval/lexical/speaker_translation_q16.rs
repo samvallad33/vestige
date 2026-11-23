@@ -21,36 +21,26 @@ pub(in crate::retrieval) fn is_open_domain_inferential_shape(tokens: &[&str]) ->
     if tokens.len() < 3 {
         return false;
     }
-    let first = tokens[0].to_ascii_lowercase();
-    let is_wh = matches!(first.as_str(), "what" | "which" | "how" | "who" | "where");
-    let has_modal = tokens.iter().any(|w| {
+    let has_epistemic_modal = tokens.iter().any(|w| {
         matches!(
             w.to_ascii_lowercase().as_str(),
-            "would" | "could" | "might" | "may" | "should" | "likely" | "potentially"
+            "would" | "could" | "might" | "likely" | "potentially"
         )
     });
-    if is_wh && has_modal {
+    if has_epistemic_modal {
         return true;
     }
-    // Epistemic/hypothetical modal anywhere in a non-past-aux frame (e.g. "In X's opinion, would...",
-    // "Based on..., what might...", "If X..., could..."), excluding historical "When/did" queries.
-    let has_past_did = matches!(first.as_str(), "when")
-        || tokens.iter().any(|w| w.eq_ignore_ascii_case("did"));
-    if !has_past_did
-        && tokens.iter().any(|w| {
-            matches!(
-                w.to_ascii_lowercase().as_str(),
-                "would" | "could" | "might" | "likely" | "potentially"
-            )
-        })
-    {
+    let first = tokens[0].to_ascii_lowercase();
+    let is_wh = matches!(first.as_str(), "what" | "which" | "how" | "who" | "where");
+    let has_aux_modal = tokens
+        .iter()
+        .any(|w| matches!(w.to_ascii_lowercase().as_str(), "may" | "should"));
+    if is_wh && has_aux_modal {
         return true;
     }
-    // Sentence-initial modal ("Would Alice enjoy...").
-    if matches!(first.as_str(), "would" | "could" | "might" | "may") {
+    if matches!(first.as_str(), "may") {
         return true;
     }
-    // Sentence-initial copular/auxiliary predicative frame ("Is X ...", "Does X ...").
     let is_copula_head = matches!(first.as_str(), "is" | "are" | "was" | "were" | "does" | "do");
     if is_copula_head
         && !tokens.iter().any(|w| {
