@@ -4519,6 +4519,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     ctx.final_session_indices = final_session_indices;
     ctx.final_turn_indices = final_turn_indices;
     crate::retrieval::event_ordering::apply_event_ordering_stack(ctx);
+    crate::retrieval::rank::tool_receipt::apply_tool_receipt_priority(ctx);
     if ctx.final_session_indices.len() > ctx.k {
         ctx.final_session_indices.truncate(ctx.k);
     }

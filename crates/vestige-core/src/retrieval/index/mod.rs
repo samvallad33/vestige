@@ -153,6 +153,8 @@ pub(in crate::retrieval) struct TurnIx {
     /// Step 14 ingest-time closed-class user preference/constraint role-object ids (`prose_body` only).
     pub(in crate::retrieval) role_objs: Vec<u32>,
     pub(in crate::retrieval) raw_links: Vec<TurnLink>,
+    /// True when the turn contains an executed structured `[tool_call ...]` receipt block.
+    pub(in crate::retrieval) has_tool_call: bool,
     /// Dump-only. Full prose body, filled only when VESTIGE_REPLAY_DUMP is set.
     /// Never read by ranking.
     pub(in crate::retrieval) body: String,
@@ -269,6 +271,8 @@ pub(in crate::retrieval) struct Index {
     /// Per-speaker standing trait bag (`speaker_lower -> top high-IC (term_id, weight_q16)`),
     /// gathered from first-person turns with 2x weight on habitual aspect turns.
     pub(in crate::retrieval) speaker_trait_bags: std::collections::BTreeMap<String, Vec<(u32, u64)>>,
+    /// True iff at least one indexed turn contains a structured `[tool_call ...]` receipt.
+    pub(in crate::retrieval) has_tool_calls: bool,
     /// Lazy KITE upward-cone typed facet index (WordNet 3.1 synsets + Wikidata containers).
     pub(in crate::retrieval) kite: OnceLock<kite_typed::KiteTypedIndex>,
 }
@@ -278,6 +282,19 @@ impl Index {
         self.kite
             .get_or_init(|| kite_typed::build_kite_typed_index(&self.turns))
     }
+}
+
+/// Split a turn's prose from any trailing serialized `[tool_call ...]` receipt lines.
+/// Returns `(human_prose, Some(tool_receipt_block))` when present, or `(text, None)`
+/// with zero allocation and zero behavior change on plain dialogue turns.
+fn split_tool_call_receipt(text: &str) -> (&str, Option<&str>) {
+    if text.starts_with("[tool_call ") {
+        return ("", Some(text));
+    }
+    if let Some(pos) = text.find("\n[tool_call ") {
+        return (&text[..pos], Some(&text[pos + 1..]));
+    }
+    (text, None)
 }
 
 pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Index {
@@ -397,7 +414,9 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
         }
 
         for (ti, t) in s.turns.iter().enumerate() {
-            let (prose_body, blip_opt) = split_blip_caption(&t.content);
+            let (raw_prose_body, blip_opt) = split_blip_caption(&t.content);
+            let (prose_body, tool_receipt_opt) = split_tool_call_receipt(raw_prose_body);
+            let has_tool_call = tool_receipt_opt.is_some();
             let raw = raw_tokens(prose_body);
             let nick_bound = nicks.bindings_in(prose_body);
             let role = t.role.trim();
@@ -466,6 +485,85 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                     let eid = vocab.intern(&bent);
                     blip_feats.push(Feat { id: eid, w: 0.85, counts_len: false, inheritable: false });
                     entities.insert(eid);
+                }
+            }
+            // Stream 3: Structured `[tool_call ...]` receipt field (counts_len:false, inheritable:false).
+            // Keeps entity handles (`ORD-6014`, `BK-1000`), dollar amounts, statuses, and product values
+            // searchable without inflating BM25F document length `dl` with serialized JSON boilerplate.
+            if let Some(receipt) = tool_receipt_opt {
+                let mut seen_rcpt: DetHashSet<u32> = DetHashSet::default();
+                for handle in extract_exact_technical_handles(receipt) {
+                    let hid = vocab.intern(&handle);
+                    if seen_rcpt.insert(hid) {
+                        feats.push(Feat {
+                            id: hid,
+                            w: 1.15,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                        entities.insert(hid);
+                        content.insert(hid);
+                        s_ents.insert(hid);
+                        s_cont.insert(hid);
+                    }
+                }
+                for (slot_tok, _) in typed_slot_tokens(receipt) {
+                    let sid = vocab.intern(&slot_tok);
+                    if seen_rcpt.insert(sid) {
+                        feats.push(Feat {
+                            id: sid,
+                            w: 0.70,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                        entities.insert(sid);
+                        s_ents.insert(sid);
+                    }
+                }
+                for rent in proper_entity_tokens(receipt) {
+                    let eid = vocab.intern(&rent);
+                    if seen_rcpt.insert(eid) {
+                        feats.push(Feat {
+                            id: eid,
+                            w: 0.85,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                        entities.insert(eid);
+                        s_ents.insert(eid);
+                    }
+                }
+                // hardcode-scan: protocol (JSON serialization literals excluded from receipt BM25F).
+                for rw in raw_tokens(receipt).into_iter().filter(|w| {
+                    is_content(w)
+                        && !matches!(
+                            w.as_str(),
+                            "tool_call" | "tool" | "call" | "true" | "false" | "null"
+                        )
+                }) {
+                    let rid = vocab.intern(&rw);
+                    if seen_rcpt.insert(rid) {
+                        feats.push(Feat {
+                            id: rid,
+                            w: 0.65,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                        content.insert(rid);
+                        s_cont.insert(rid);
+                        if p.enable_stemming {
+                            let rst = stem(&rw);
+                            let rsid = vocab.intern(&stem_term(&rst));
+                            if seen_rcpt.insert(rsid) {
+                                feats.push(Feat {
+                                    id: rsid,
+                                    w: 0.45,
+                                    counts_len: false,
+                                    inheritable: false,
+                                });
+                            }
+                        }
+                    }
                 }
             }
             // Pre-saturation BM25F title boost for structured `{Title}\n{Body}` documents.
@@ -826,6 +924,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 first_move_num: step9_first_move_num(prose_body),
                 role_objs,
                 raw_links: t.links.clone(),
+                has_tool_call,
                 body: if replay_dump_path().is_some() {
                     prose_body.to_string()
                 } else {
@@ -1208,6 +1307,8 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
         }
     }
 
+    let has_tool_calls = turns.iter().any(|t| t.has_tool_call);
+
     Index {
         vocab,
         session_ids,
@@ -1252,6 +1353,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
         spatial_events,
         fellegi_aliases: OnceLock::new(),
         speaker_trait_bags,
+        has_tool_calls,
         kite: OnceLock::new(),
     }
 }
