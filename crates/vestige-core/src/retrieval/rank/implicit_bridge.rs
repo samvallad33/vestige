@@ -857,6 +857,14 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     if pairs.is_empty() || pairs.len() > 5 || pairs.len() * 60 > ctx.nt {
         return false;
     }
+    if pairs.iter().any(|&(_, _, ack)| ack)
+        || (!ctx.final_turn_indices.is_empty()
+            && pairs
+                .iter()
+                .any(|&(u, a, _)| u == ctx.final_turn_indices[0] || a == ctx.final_turn_indices[0]))
+    {
+        ctx.implicit_disclosure_locked = true;
+    }
 
     let advice_q = is_implicit_advice_frame(&ctx.q.text);
     let profile_q = !advice_q
@@ -1157,6 +1165,7 @@ pub(in crate::retrieval) fn apply_unified_implicit_bridge(ctx: &mut RankCtx<'_>)
         return;
     }
     if apply_sparse_personal_disclosure_regime(ctx) {
+        ctx.implicit_disclosure_locked = true;
         return;
     }
     apply_named_open_domain_fst_bridge(ctx);

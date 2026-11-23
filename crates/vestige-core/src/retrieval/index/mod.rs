@@ -155,6 +155,10 @@ pub(in crate::retrieval) struct TurnIx {
     pub(in crate::retrieval) raw_links: Vec<TurnLink>,
     /// True when the turn contains an executed structured `[tool_call ...]` receipt block.
     pub(in crate::retrieval) has_tool_call: bool,
+    /// Ingest-time sliding-window within-session coreference entity IDs bound onto
+    /// anaphoric follow-up turns (`it`, `there`, `he`, `she`, definite NPs) without
+    /// altering BM25F document lengths.
+    pub(in crate::retrieval) coref_entities: Vec<u32>,
     /// Dump-only. Full prose body, filled only when VESTIGE_REPLAY_DUMP is set.
     /// Never read by ranking.
     pub(in crate::retrieval) body: String,
@@ -925,6 +929,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 role_objs,
                 raw_links: t.links.clone(),
                 has_tool_call,
+                coref_entities: Vec::new(),
                 body: if replay_dump_path().is_some() {
                     prose_body.to_string()
                 } else {
@@ -1304,6 +1309,39 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
             vec.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             vec.truncate(64);
             speaker_trait_bags.insert(sp, vec);
+        }
+    }
+
+    // Ingest-time sliding-window within-session anaphoric coreference: bind up to 4
+    // rarest topic entity IDs (`df <= 12`) from the preceding 1..=2 turns in the same
+    // session onto anaphoric or definite-NP follow-up turns without modifying BM25F `dl`.
+    let coref_max_df = ((turns.len() / 30).clamp(8, 16)) as u32;
+    for members in &session_turns {
+        for pos in 1..members.len() {
+            let ti = members[pos];
+            let needs_coref = turns[ti].anaphoric
+                || turns[ti].body_for_headers.to_ascii_lowercase().contains(" the ");
+            if !needs_coref {
+                continue;
+            }
+            let mut cands: Vec<(u32, u32)> = Vec::new();
+            let start = pos.saturating_sub(2);
+            for &prev_ti in &members[start..pos] {
+                for &eid in &turns[prev_ti].entities {
+                    if turns[ti].entities.contains(&eid) {
+                        continue;
+                    }
+                    let df = t_own_stats.df.get(&eid).copied().unwrap_or(1);
+                    if (1..=coref_max_df).contains(&df) && !cands.iter().any(|&(id, _)| id == eid) {
+                        cands.push((eid, df));
+                    }
+                }
+            }
+            if !cands.is_empty() {
+                cands.sort_by_key(|&(id, df)| (df, id));
+                cands.truncate(4);
+                turns[ti].coref_entities = cands.into_iter().map(|(id, _)| id).collect();
+            }
         }
     }
 

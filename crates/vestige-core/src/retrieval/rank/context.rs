@@ -125,4 +125,5 @@ pub(in crate::retrieval) struct RankCtx<'a> {
     pub(in crate::retrieval) deficit_a: bool,
     pub(in crate::retrieval) deficit_b: bool,
     pub(in crate::retrieval) torrens_locked_head: bool,
+    pub(in crate::retrieval) implicit_disclosure_locked: bool,
 }

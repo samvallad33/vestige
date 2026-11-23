@@ -3,6 +3,7 @@
 pub(in crate::retrieval) mod context;
 pub(in crate::retrieval) mod event_ordering;
 pub(in crate::retrieval) mod implicit_bridge;
+pub(in crate::retrieval) mod supersession_and_guard;
 pub(in crate::retrieval) mod tool_receipt;
 mod stage01_session_bm25f;
 mod stage02_turn_scores;

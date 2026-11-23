@@ -314,5 +314,6 @@ pub(in crate::retrieval) fn run<'a>(
         deficit_a: false,
         deficit_b: false,
         torrens_locked_head: false,
+        implicit_disclosure_locked: false,
     }
 }
