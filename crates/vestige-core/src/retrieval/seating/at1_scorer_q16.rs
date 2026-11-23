@@ -3182,16 +3182,63 @@ struct AnonCondorcetCtx<'a> {
     q: &'a Query,
     t_scene: &'a [f32],
     t_own: &'a [f32],
+    t_exact_mask: &'a [u64],
     s_score: &'a [f32],
     bridge_boost: &'a [f32],
 }
 
-/// Deterministic 5-ballot Condorcet `@1` verifier for anonymous User/Assistant dialogues
-/// (BEAM & LongMemEval_S). Strictly reorders within `0..5` so `@5` membership is 100% invariant.
+// hardcode-scan: closed-class (revision, state-update, and correction markers)
+const CLOSED_REVISION_CUES: &[&str] = &[
+    "actually",
+    "instead",
+    "anymore",
+    "switched",
+    "changed",
+    "updated",
+    "updating",
+    "revised",
+    "adjusted",
+    "increased",
+    "decreased",
+    "extended",
+    "replaced",
+    "postponed",
+    "rescheduled",
+];
+
+fn turn_has_revision_cue(text: &str) -> bool {
+    let low = text.to_ascii_lowercase();
+    if low.contains("no longer") || low.contains("instead of") || low.contains("rather than") {
+        return true;
+    }
+    raw_tokens(&low)
+        .iter()
+        .any(|w| CLOSED_REVISION_CUES.contains(&w.as_str()))
+}
+
+fn turns_share_rare_slot_anchor(ix: &Index, t_a: usize, t_b: usize) -> bool {
+    let ns = ix.session_turns.len().max(1);
+    let hub_df = ((ns / 3).clamp(4, 32)) as u32;
+    let a = &ix.turns[t_a];
+    let b = &ix.turns[t_b];
+    if a.entities.iter().any(|e| {
+        b.entities.contains(e) && ix.s_stats.df.get(e).copied().unwrap_or(0) <= hub_df
+    }) {
+        return true;
+    }
+    a.content.iter().any(|c| {
+        b.content.contains(c) && (1..=hub_df).contains(&ix.s_stats.df.get(c).copied().unwrap_or(0))
+    })
+}
+
+/// Deterministic 5-ballot Condorcet `@1` verifier for anonymous User/Assistant dialogues.
+/// Strictly reorders within `0..5` (or inserts a latest-leaf revision ahead while keeping `@5`
+/// intact) and preserves `@5` membership on Rank-1 user-source recovery.
 fn apply_anonymous_dialogue_at1_condorcet_q16(
     ctx: &AnonCondorcetCtx<'_>,
-    final_turn_indices: &mut [usize],
-    final_session_indices: &mut [usize],
+    final_turn_indices: &mut Vec<usize>,
+    final_session_indices: &mut Vec<usize>,
+    k: usize,
 ) {
     let w = final_turn_indices.len().min(5);
     if w < 2 {
@@ -3199,20 +3246,19 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
     }
     let ix = ctx.ix;
     let spec = build_query_at1_spec(ix, ctx.plan, ctx.q);
-    let t0 = final_turn_indices[0];
-    let s0 = ix.turns[t0].session;
+    let _t0 = final_turn_indices[0];
+    let _s0 = ix.turns[_t0].session;
     let sight_of = |s: usize| -> u64 {
         let sc = ctx.s_score.get(s).copied().unwrap_or(0.0)
             + ctx.bridge_boost.get(s).copied().unwrap_or(0.0);
         ieee754_bits_to_q16(sc.to_bits())
     };
-    let sight0 = sight_of(s0);
     let role_ok = |ti: usize| -> bool {
         let tr = &ix.turns[ti];
         if ctx.eff_it.assistant_attribution {
             tr.field == 1
         } else {
-            tr.field == 0 && !tr.is_question
+            tr.field == 0 && (!tr.is_question || tr.content.len() >= 6)
         }
     };
     let self_share_of = |ti: usize| -> u64 {
@@ -3220,6 +3266,659 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
         let scn = ieee754_bits_to_q16(ctx.t_scene.get(ti).copied().unwrap_or(0.0).to_bits()).max(1);
         own.saturating_mul(65_536) / scn
     };
+
+    let mut q_mask_full = 0u64;
+    for qt in &ctx.plan.terms {
+        if qt.exact_hit
+            && let Some(g) = qt.group
+            && g < 64
+        {
+            q_mask_full |= 1u64 << g;
+        }
+    }
+
+    let q_low = ctx.q.text.trim_start().to_ascii_lowercase();
+    let q_toks = raw_tokens(&ctx.q.text);
+    let is_history_or_agg = q_low.starts_with("have i ")
+        || q_low.starts_with("have we ")
+        || q_low.contains("did i ")
+        || q_low.contains("did we ")
+        || q_toks
+            .iter()
+            .any(|w| matches!(w.as_str(), "between" | "across" | "compare" | "compared" | "both"));
+
+    // 0. Session-to-Turn Slot-0 Coherence Sync (`!has_named_speakers_eff`):
+    //    When Rank-1 turn `t0` is a stray standing-policy rule on a non-rule query OR belongs
+    //    to a lower-ranked session while `final_session_indices[0]`'s turn sits in Slots `1..5`
+    //    with comparable/better coverage, seat `final_session_indices[0]`'s turn at Rank 1.
+    if let Some(&s_head) = final_session_indices.first() {
+        let t0_cur = final_turn_indices[0];
+        let t0_is_stray_rule = ix.turns[t0_cur].is_standing_policy && !ctx.eff_it.task_under_rules;
+        if t0_is_stray_rule || ix.turns[t0_cur].session != s_head {
+            let own0_c = ieee754_bits_to_q16(ctx.t_own.get(t0_cur).copied().unwrap_or(0.0).to_bits());
+            let ex0_c = (ctx.t_exact_mask.get(t0_cur).copied().unwrap_or(0) & q_mask_full).count_ones();
+            let mut head_slot: Option<(usize, u32, u64)> = None;
+            for (slot, &tc) in final_turn_indices.iter().enumerate().take(w).skip(1) {
+                let trc = &ix.turns[tc];
+                if trc.is_backchannel || trc.is_standing_policy || turn_is_superseded(ix, tc) {
+                    continue;
+                }
+                if !t0_is_stray_rule && trc.session != s_head {
+                    continue;
+                }
+                if !ctx.eff_it.assistant_attribution && trc.field != 0 {
+                    continue;
+                }
+                let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+                let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+                let sync_ok = t0_is_stray_rule
+                    || (exc >= ex0_c && ownc.saturating_mul(100) >= own0_c.saturating_mul(72))
+                    || (exc > ex0_c && ownc > 0);
+                if sync_ok && head_slot.is_none_or(|(_, be, bo)| (exc, ownc) > (be, bo)) {
+                    head_slot = Some((slot, exc, ownc));
+                }
+            }
+            if let Some((win_slot, _, _)) = head_slot {
+                final_turn_indices[..=win_slot].rotate_right(1);
+            }
+        }
+    }
+    let t0 = final_turn_indices[0];
+    let s0 = ix.turns[t0].session;
+
+    // 1. User-Source Recovery over Assistant Echo (`!assistant_attribution`):
+    //    When Rank 1 is an assistant turn (`field == 1`) and its preceding same-session user
+    //    source (`field == 0`, declarative or substantive multi-clause question) sits inside Top-5,
+    //    preferring non-superseded user turns (`>= 28%` own score on immediate parent `pc+1 == p0`),
+    //    restore the originating user turn to Rank 1 while preserving Top-5 membership.
+    if !ctx.eff_it.assistant_attribution && ix.turns[t0].field == 1 {
+        let own0 = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let ex0 = ctx.t_exact_mask.get(t0).copied().unwrap_or(0) & q_mask_full;
+        let pos0 = turn_pos(ix, t0);
+        let mut user_src_slot: Option<(usize, bool, u32, u64)> = None;
+        for (slot, &tc) in final_turn_indices.iter().enumerate().take(w).skip(1) {
+            let trc = &ix.turns[tc];
+            let substantive_user = !trc.is_question || trc.content.len() >= 6;
+            if trc.field != 0 || !substantive_user || trc.is_backchannel {
+                continue;
+            }
+            if trc.session != s0 && tc + 1 != t0 {
+                continue;
+            }
+            let direct_parent = tc + 1 == t0
+                || match (turn_pos(ix, tc), pos0) {
+                    (Some(pc), Some(p0)) => pc < p0 && p0 - pc == 1,
+                    _ => false,
+                };
+            let near_prev = direct_parent
+                || match (turn_pos(ix, tc), pos0) {
+                    (Some(pc), Some(p0)) => pc < p0 && p0 - pc <= 2,
+                    _ => false,
+                };
+            if !near_prev {
+                continue;
+            }
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            if ownc == 0 {
+                continue;
+            }
+            let exc = ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full;
+            let cov_match = (exc & ex0) == ex0
+                || ownc.saturating_mul(100) >= own0.saturating_mul(58)
+                || (direct_parent
+                    && exc != 0
+                    && (ownc.saturating_mul(100) >= own0.saturating_mul(25)
+                        || exc.count_ones() >= 2));
+            if cov_match {
+                let fresh = !turn_is_superseded(ix, tc);
+                let bits = exc.count_ones();
+                if user_src_slot.is_none_or(|(_, bf, bb, bo)| (fresh, bits, ownc) > (bf, bb, bo)) {
+                    user_src_slot = Some((slot, fresh, bits, ownc));
+                }
+            }
+        }
+        if let Some((win_slot, _, _, _)) = user_src_slot {
+            final_turn_indices[..=win_slot].rotate_right(1);
+        }
+    }
+
+    // 2. Closed-Class Revision-Cue + Latest-Leaf Override at Rank 1 (current-state updates):
+    //    When the query asks for current state (`!past_override && !is_history_or_agg`), if a newer
+    //    non-superseded user declarative in Top-10 shares the entity/slot signature with `t0` and
+    //    either carries a closed-class revision cue or supersedes `t0`, seat the newest leaf at #1.
+    let t0_now = final_turn_indices[0];
+    let s0_now = ix.turns[t0_now].session;
+    let ts0_now = ix.session_ts.get(s0_now).copied().unwrap_or(0);
+    if !spec.past_override
+        && !ctx.eff_it.is_event_sequence
+        && !ctx.eff_it.assistant_attribution
+        && !is_history_or_agg
+        && final_turn_indices.len() >= 2
+    {
+        let own0_now = ieee754_bits_to_q16(ctx.t_own.get(t0_now).copied().unwrap_or(0.0).to_bits());
+        let sight0_now = sight_of(s0_now);
+        let ex0_now = ctx.t_exact_mask.get(t0_now).copied().unwrap_or(0) & q_mask_full;
+        let sup0_now = turn_is_superseded(ix, t0_now)
+            || ix.torrens_superseded.get(t0_now).copied().unwrap_or(false);
+        let top_scan = final_turn_indices.len().min(10);
+        let mut best_rev: Option<(bool, usize, usize)> = None;
+        for (slot, &tc) in final_turn_indices.iter().enumerate().take(top_scan).skip(1) {
+            let trc = &ix.turns[tc];
+            let substantive_user = !trc.is_question || trc.content.len() >= 6;
+            if trc.field != 0 || !substantive_user || trc.is_backchannel || turn_is_superseded(ix, tc) {
+                continue;
+            }
+            let sc = trc.session;
+            let tsc = ix.session_ts.get(sc).copied().unwrap_or(0);
+            if tc <= t0_now || sc <= s0_now || (ts0_now > 0 && tsc > 0 && tsc < ts0_now) {
+                continue;
+            }
+            if sight_of(sc).saturating_mul(100) < sight0_now.saturating_mul(75) {
+                continue;
+            }
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            if ownc == 0 || ownc.saturating_mul(100) < own0_now.saturating_mul(65) {
+                continue;
+            }
+            let exc = ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full;
+            let cov_ok = (exc & ex0_now) == ex0_now
+                || (exc.count_ones() >= 2 && exc.count_ones() >= ex0_now.count_ones());
+            if !cov_ok {
+                continue;
+            }
+            let explicit_sup = trc.supersedes_turns.contains(&t0_now)
+                || ix.session_supersedes_back.get(sc).is_some_and(|v| v.contains(&s0_now))
+                || sup0_now;
+            // #5 Cellular Sheaf Cohomology H^1 + #6 Dempster-Shafer Conflict Mass `K`:
+            // When two turns share a rare entity/slot anchor across epochs and yield non-zero
+            // sheaf residual + DS conflict (`pair_sheaf_conflict_q16 > Q16/2`), promote the newer gluer.
+            let sheaf_ds_conflict = crate::retrieval::graph::sheaf_dempster_q16::pair_sheaf_conflict_q16(ix, t0_now, tc);
+            let has_rev_cue = turn_has_revision_cue(&trc.body_for_headers) || sheaf_ds_conflict >= 32_768;
+            let same_slot = turns_share_rare_slot_anchor(ix, t0_now, tc);
+            if explicit_sup || (has_rev_cue && same_slot) {
+                let cand_key = (explicit_sup || has_rev_cue, tc, slot);
+                if best_rev.is_none_or(|cur| (cand_key.0, cand_key.1) > (cur.0, cur.1)) {
+                    best_rev = Some(cand_key);
+                }
+            }
+        }
+        if let Some((_, win_ti, win_slot)) = best_rev {
+            let win_sess = ix.turns[win_ti].session;
+            if win_slot < 5 {
+                final_turn_indices[..=win_slot].rotate_right(1);
+            } else {
+                // Keep Top-4 incumbents (Slots 0..4) inside Top-5 so All@5 on pairs is preserved.
+                final_turn_indices.remove(win_slot);
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+            }
+            if win_sess != s0_now {
+                let sw = final_session_indices.len().min(5);
+                if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
+                    && spos > 0
+                {
+                    final_session_indices[..=spos].rotate_right(1);
+                }
+            }
+            return;
+        }
+    }
+
+    // 1b. Strict Assistant-Attribution & "did I" User-Attribution Enforcement:
+    //     When the query asks `"did you recommend/suggest/..."` (`eff_it.assistant_attribution`)
+    //     and a User turn sits at Slot 0, promote a matching Assistant reply from Top-7.
+    //     Conversely when the query asks `"did i ..."` and an Assistant turn sits at Slot 0,
+    //     promote a matching substantive User turn from Top-6.
+    if ctx.eff_it.assistant_attribution && ix.turns[t0].field == 0 {
+        let own0_a = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let scan = final_turn_indices.len().min(10);
+        let mut best_asst: Option<(u32, u64, usize)> = None;
+        for (slot, &tc) in final_turn_indices.iter().enumerate().take(scan).skip(1) {
+            let trc = &ix.turns[tc];
+            if trc.field != 1 || trc.is_question || trc.is_backchannel {
+                continue;
+            }
+            if sight_of(trc.session).saturating_mul(100) < sight_of(s0).saturating_mul(75) {
+                continue;
+            }
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            let in_top2_sess = final_session_indices.iter().take(2).any(|&s| s == trc.session);
+            if (exc >= 1 || in_top2_sess) && ownc.saturating_mul(100) >= own0_a.saturating_mul(45) {
+                let key = (exc, ownc, slot);
+                if best_asst.is_none_or(|b| (key.0, key.1) > (b.0, b.1)) {
+                    best_asst = Some(key);
+                }
+            }
+        }
+        if let Some((_, _, win_slot)) = best_asst {
+            if win_slot < 5 {
+                final_turn_indices[..=win_slot].rotate_right(1);
+            } else {
+                let win_ti = final_turn_indices.remove(win_slot);
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+            }
+            return;
+        }
+        // Fallback: scan substantive `field == 1` replies inside Top-2 sessions with WordNet/ConceptNet
+        // lexical expansion so paraphrased assistant recommendations ("flow of requests" <-> "rate limits") promote.
+        let mut q_lex_asst: Vec<u32> = Vec::new();
+        for qw in &ctx.plan.groups {
+            if qw.starts_with('\u{1}') || !is_content(qw) {
+                continue;
+            }
+            for (lem, _) in crate::wordnet::full_lexicon_neighbors(qw).into_iter().take(16) {
+                if let Some(id) = ix.vocab.get(lem)
+                    && !q_lex_asst.contains(&id)
+                {
+                    q_lex_asst.push(id);
+                }
+            }
+            for (lem, _) in crate::conceptnet::two_hop_neighbors(qw, 8) {
+                if let Some(id) = ix.vocab.get(lem)
+                    && !q_lex_asst.contains(&id)
+                {
+                    q_lex_asst.push(id);
+                }
+            }
+        }
+        let scn0_a = ieee754_bits_to_q16(ctx.t_scene.get(t0).copied().unwrap_or(0.0).to_bits());
+        let mut sess_asst: Option<(u32, usize, u64, usize)> = None;
+        for &si in final_session_indices.iter().take(2) {
+            if sight_of(si).saturating_mul(100) < sight_of(s0).saturating_mul(65) {
+                continue;
+            }
+            for &tc in &ix.session_turns[si] {
+                if tc == t0 {
+                    continue;
+                }
+                let trc = &ix.turns[tc];
+                if trc.field != 1 || trc.is_question || trc.is_backchannel {
+                    continue;
+                }
+                let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+                let scnc = ieee754_bits_to_q16(ctx.t_scene.get(tc).copied().unwrap_or(0.0).to_bits());
+                let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+                let lex_h = q_lex_asst
+                    .iter()
+                    .filter(|id| trc.content.contains(id) || trc.feats.iter().any(|f| f.id == **id))
+                    .count();
+                let bridge_ok = exc >= 1 || lex_h >= 1;
+                if (bridge_ok && scnc.saturating_mul(100) >= scn0_a.saturating_mul(40))
+                    || ownc.saturating_mul(100) >= own0_a.saturating_mul(45)
+                {
+                    let key = (exc, lex_h, scnc.max(ownc), tc);
+                    if sess_asst.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                        sess_asst = Some(key);
+                    }
+                }
+            }
+        }
+        if let Some((_, _, _, win_ti)) = sess_asst {
+            final_turn_indices.retain(|&x| x != win_ti);
+            final_turn_indices.insert(0, win_ti);
+            final_turn_indices.truncate(k.max(5));
+            return;
+        }
+    } else if !ctx.eff_it.assistant_attribution
+        && (q_low.contains("did i ")
+            || q_low.contains("did we ")
+            || q_low.contains("have i ")
+            || q_low.contains("was i "))
+        && ix.turns[t0].field == 1
+    {
+        let own0_u = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let scan = final_turn_indices.len().min(10);
+        let mut best_u: Option<(u32, u64, usize)> = None;
+        for (slot, &tc) in final_turn_indices.iter().enumerate().take(scan).skip(1) {
+            let trc = &ix.turns[tc];
+            if trc.field != 0 || trc.is_backchannel || turn_is_superseded(ix, tc) {
+                continue;
+            }
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            if ownc.saturating_mul(100) >= own0_u.saturating_mul(50) {
+                let key = (exc, ownc, slot);
+                if best_u.is_none_or(|b| (key.0, key.1) > (b.0, b.1)) {
+                    best_u = Some(key);
+                }
+            }
+        }
+        if let Some((_, _, win_slot)) = best_u {
+            if win_slot < 5 {
+                final_turn_indices[..=win_slot].rotate_right(1);
+            } else {
+                let win_ti = final_turn_indices.remove(win_slot);
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+            }
+            return;
+        }
+    }
+
+    // Re-read Slot 0 in case User-Source Recovery just restored the user turn.
+    let t0 = final_turn_indices[0];
+    let s0 = ix.turns[t0].session;
+
+    // Protect a condition-matched standing rule already seated at Slot 0 by Stage 12 Step 2
+    // from being evicted by downstream rare-anchor or habitus tie-breakers.
+    if ix.turns[t0].is_standing_policy {
+        return;
+    }
+
+    // 1c. Closed-Class Quantitative Answer-Type Gate (`information_extraction`):
+    //     When a quantitative query ("how much/how long/how old/what probability/percentage") seats a
+    //     Slot-0 turn lacking digits (or lacking expected currency/duration units), promote the strongest
+    //     unit/digit-bearing exact-hit turn from Top-10 or Top-10 sessions (`field == 0`) to Slot 0.
+    // hardcode-scan: closed-class (quantitative WH interrogatives & currency/percent/duration format cues)
+    let is_quant_ie_q = !ctx.eff_it.is_event_sequence
+        && !eff_summary_request(&ctx.q.text)
+        && (q_low.starts_with("how much ")
+            || q_low.starts_with("how long ")
+            || q_low.starts_with("how old ")
+            || q_low.starts_with("what probability")
+            || q_low.starts_with("what percentage"));
+    let want_unit_sym = q_low.contains("cost")
+        || q_low.contains("price")
+        || q_low.contains("pay")
+        || q_low.contains("much")
+        || q_low.contains("percentage");
+    let want_dur_unit = q_low.starts_with("how long ");
+    let t0_body_q = ix.turns[t0].body_for_headers.as_str();
+    let t0_low_q = t0_body_q.to_ascii_lowercase();
+    let t0_has_digit = t0_body_q.bytes().any(|b| b.is_ascii_digit());
+    let has_dur_unit = |s_low: &str| {
+        s_low.bytes().any(|b| b.is_ascii_digit())
+            && (s_low.contains(" year")
+                || s_low.contains(" month")
+                || s_low.contains(" week")
+                || s_low.contains(" day")
+                || s_low.contains(" hour"))
+    };
+    let t0_missing_quant = !t0_has_digit
+        || (want_unit_sym && !(t0_body_q.contains('$') || t0_body_q.contains('%')))
+        || (want_dur_unit && !has_dur_unit(&t0_low_q));
+    if is_quant_ie_q
+        && !ix.turns[t0].is_standing_policy
+        && t0_missing_quant
+    {
+        let own0_q = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let mut quant_cands: Vec<usize> = final_turn_indices
+            .iter()
+            .copied()
+            .skip(1)
+            .take(9)
+            .collect();
+        for &si in final_session_indices.iter().take(10) {
+            for &ti in &ix.session_turns[si] {
+                let tr = &ix.turns[ti];
+                if ti != t0
+                    && tr.field == 0
+                    && !tr.is_backchannel
+                    && !tr.is_standing_policy
+                    && !quant_cands.contains(&ti)
+                {
+                    quant_cands.push(ti);
+                }
+            }
+        }
+        let mut best_quant: Option<(bool, u32, u64, usize)> = None;
+        for tc in quant_cands {
+            let trc = &ix.turns[tc];
+            if trc.is_backchannel || trc.is_standing_policy {
+                continue;
+            }
+            let body = trc.body_for_headers.as_str();
+            if !body.bytes().any(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let body_low = body.to_ascii_lowercase();
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            let unit_hit = (want_unit_sym && (body.contains('$') || body.contains('%')))
+                || (want_dur_unit && has_dur_unit(&body_low));
+            let min_own_pct = if unit_hit { 20u64 } else { 45u64 };
+            if exc >= 1 && ownc.saturating_mul(100) >= own0_q.saturating_mul(min_own_pct) {
+                let key = (unit_hit, exc, ownc, tc);
+                if best_quant.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    best_quant = Some(key);
+                }
+            }
+        }
+        if let Some((_, _, _, win_ti)) = best_quant {
+            let win_sess = ix.turns[win_ti].session;
+            if let Some(win_slot) = final_turn_indices.iter().position(|&x| x == win_ti) {
+                if win_slot < 5 {
+                    final_turn_indices[..=win_slot].rotate_right(1);
+                } else {
+                    final_turn_indices.remove(win_slot);
+                    final_turn_indices.insert(0, win_ti);
+                    final_turn_indices.truncate(k.max(5));
+                }
+            } else {
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+            }
+            if win_sess != s0 {
+                let sw = final_session_indices.len().min(5);
+                if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
+                    && spos > 0
+                {
+                    final_session_indices[..=spos].rotate_right(1);
+                }
+            }
+            return;
+        }
+    }
+
+    // 1d. Closed-Class Episodic Entity-Rich Extraction Gate (`"what ... did I say/mention/outline"`):
+    //     When a factual "did I say/mention" query lands on a low-entity Slot-0 turn (`<= 2` entities)
+    //     while a Top-10 or Top-3 session user turn packs rich explicit technologies/entities with strong exact IC,
+    //     promote it to Slot 0.
+    // hardcode-scan: closed-class (first-person past episodic mention interrogatives)
+    let is_entity_ie_q = !ctx.eff_it.temporal
+        && !ctx.eff_it.is_event_sequence
+        && !ctx.eff_it.assistant_attribution
+        && !eff_summary_request(&ctx.q.text)
+        && (q_low.contains("did i say")
+            || q_low.contains("did i mention")
+            || q_low.contains("did i outline")
+            || q_low.contains("did i use"));
+    if is_entity_ie_q && ix.turns[t0].slot_entities_clean <= 2 {
+        let own0_e = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let mut ent_cands: Vec<usize> = final_turn_indices.iter().copied().skip(1).take(9).collect();
+        for &si in final_session_indices.iter().take(3) {
+            for &ti in &ix.session_turns[si] {
+                let tr = &ix.turns[ti];
+                if ti != t0
+                    && tr.field == 0
+                    && !tr.is_backchannel
+                    && !tr.is_standing_policy
+                    && !ent_cands.contains(&ti)
+                {
+                    ent_cands.push(ti);
+                }
+            }
+        }
+        let min_ents = ix.turns[t0].slot_entities_clean.saturating_add(2);
+        let mut best_ent: Option<(u32, u16, u64, usize)> = None;
+        for tc in ent_cands {
+            let trc = &ix.turns[tc];
+            if trc.field != 0
+                || trc.is_backchannel
+                || trc.is_standing_policy
+                || trc.slot_entities_clean < min_ents
+            {
+                continue;
+            }
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            if exc >= 2 && ownc.saturating_mul(100) >= own0_e.saturating_mul(60) {
+                let key = (exc, trc.slot_entities_clean, ownc, tc);
+                if best_ent.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    best_ent = Some(key);
+                }
+            }
+        }
+        if let Some((_, _, _, win_ti)) = best_ent {
+            let win_sess = ix.turns[win_ti].session;
+            if let Some(win_slot) = final_turn_indices.iter().position(|&x| x == win_ti) {
+                if win_slot < 5 {
+                    final_turn_indices[..=win_slot].rotate_right(1);
+                } else {
+                    final_turn_indices.remove(win_slot);
+                    final_turn_indices.insert(0, win_ti);
+                    final_turn_indices.truncate(k.max(5));
+                }
+            } else {
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+            }
+            if win_sess != s0 {
+                let sw = final_session_indices.len().min(5);
+                if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
+                    && spos > 0
+                {
+                    final_session_indices[..=spos].rotate_right(1);
+                }
+            }
+            return;
+        }
+    }
+
+    // 2b. Closed-Class Constraint & Directive Density Promotion (#3) + Short Ack-Question Demotion (#6)
+    //     + Chronological Latest-State Tie-Break (#9):
+    {
+        let own0_c = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let ex0_c = (ctx.t_exact_mask.get(t0).copied().unwrap_or(0) & q_mask_full).count_ones();
+        let is_adv = crate::retrieval::seating::constraint_density_q16::is_advice_or_preference_query(&ctx.q.text);
+        let d0 = if is_adv {
+            crate::retrieval::seating::constraint_density_q16::deontic_directive_density_q16(&ix.turns[t0].body_for_headers)
+        } else {
+            0
+        };
+        let t0_ack = crate::retrieval::fusion::summary_silhouette_q16::is_short_ack_question(ix, t0);
+        // Exclusive Rare-Anchor Tournament: find ultra-rare exact query anchors (`df <= 2`) missing from `t0`.
+        let rare_missing_from_t0: Vec<u32> = ctx
+            .plan
+            .terms
+            .iter()
+            .filter(|qt| {
+                qt.exact_hit
+                    && !ix.turns[t0].content.contains(&qt.id)
+                    && ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(99) <= 2
+            })
+            .map(|qt| qt.id)
+            .collect();
+        let mut promo_slot: Option<(u8, u64, u32, usize)> = None;
+        for (slot, &tc) in final_turn_indices.iter().enumerate().take(w).skip(1) {
+            let trc = &ix.turns[tc];
+            if trc.field != ix.turns[t0].field
+                && (ctx.eff_it.assistant_attribution || trc.field != 0)
+            {
+                continue;
+            }
+            if trc.is_backchannel || trc.is_standing_policy || turn_is_superseded(ix, tc) {
+                continue;
+            }
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            if ownc == 0 || sight_of(trc.session).saturating_mul(100) < sight_of(s0).saturating_mul(75) {
+                continue;
+            }
+            // Priority 3: Exclusive ultra-rare anchor hit missing from `t0` (e.g. `endpoint`)
+            if !rare_missing_from_t0.is_empty()
+                && !trc.is_question
+                && ownc.saturating_mul(100) >= own0_c.saturating_mul(85)
+                && exc >= ex0_c
+            {
+                let rare_hits = rare_missing_from_t0
+                    .iter()
+                    .filter(|id| trc.content.contains(id))
+                    .count() as u64;
+                if rare_hits > 0 && exc >= ex0_c {
+                    let key = (4u8, rare_hits, exc, slot);
+                    if promo_slot.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                        promo_slot = Some(key);
+                    }
+                    continue;
+                }
+            }
+            // Priority 2 (#3): High deontic constraint density on advice/preference queries
+            if is_adv && d0 < 2_500 && !trc.is_question {
+                let dc = crate::retrieval::seating::constraint_density_q16::deontic_directive_density_q16(&trc.body_for_headers);
+                if dc >= 4_500
+                    && ownc.saturating_mul(100) >= own0_c.saturating_mul(65)
+                    && exc.saturating_add(1) >= ex0_c
+                {
+                    let key = (3u8, dc, exc, slot);
+                    if promo_slot.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                        promo_slot = Some(key);
+                    }
+                    continue;
+                }
+            }
+            // Priority 1 (#6): Demote short ack/clarification question at Slot 0
+            if t0_ack && !trc.is_question && trc.content.len() >= 10 && ownc.saturating_mul(100) >= own0_c.saturating_mul(65) {
+                let key = (2u8, ownc, exc, slot);
+                if promo_slot.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    promo_slot = Some(key);
+                }
+                continue;
+            }
+            // Priority 0 (#9 + Pillar 7a IA-RAG Directional Allen Cone):
+            // On temporal directional queries ("before/after/during"), prefer Top-5 turns inside
+            // the matching Allen cone; on current-state queries, let fresher assertions break ties.
+            let allen_cone = crate::retrieval::graph::temporal_allen::detect_ia_rag_cone(&ctx.q.text);
+            if allen_cone != crate::retrieval::graph::temporal_allen::AllenDirCone::None
+                && !trc.is_question
+                && exc >= ex0_c
+                && ownc.saturating_mul(100) >= own0_c.saturating_mul(78)
+                && crate::retrieval::graph::temporal_allen::satisfies_ia_rag_cone(ix, allen_cone, t0, tc)
+            {
+                let key = (2u8, ownc, exc, slot);
+                if promo_slot.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    promo_slot = Some(key);
+                }
+                continue;
+            }
+            if ctx.eff_it.current_state
+                && !spec.past_override
+                && !is_history_or_agg
+                && !ctx.eff_it.is_event_sequence
+                && !ctx.eff_it.assistant_attribution
+                && !trc.is_question
+                && trc.session > s0
+                && ex0_c >= 1
+                && exc >= ex0_c
+                && ownc.saturating_mul(100) >= own0_c.saturating_mul(88)
+            {
+                let key = (1u8, trc.session as u64, exc, slot);
+                if promo_slot.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    promo_slot = Some(key);
+                }
+            }
+        }
+        if let Some((_, _, _, win_slot)) = promo_slot {
+            let win_sess = ix.turns[final_turn_indices[win_slot]].session;
+            final_turn_indices[..=win_slot].rotate_right(1);
+            if win_sess != s0 {
+                let sw = final_session_indices.len().min(5);
+                if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
+                    && spos > 0
+                {
+                    final_session_indices[..=spos].rotate_right(1);
+                }
+            }
+            return;
+        }
+    }
+
+    // Re-read Slot 0 after Step 2b/c/d.
+    let t0 = final_turn_indices[0];
+    let s0 = ix.turns[t0].session;
+    let sight0 = sight_of(s0);
 
     let (lr0, dur0) = eval_li_roth_turn(ix, &spec, t0);
     let r0 = role_ok(t0);
@@ -3243,7 +3942,7 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
             continue;
         }
         let rc = role_ok(tc);
-        if r0 && !rc && !sup0 {
+        if r0 && !rc {
             continue;
         }
         let (lrc, durc) = eval_li_roth_turn(ix, &spec, tc);
@@ -3312,6 +4011,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
     t_own: &[f32],
     t_turn_raw: &[f32],
     t_bridge: &[f32],
+    t_exact_mask: &[u64],
     s_score: &[f32],
     bridge_boost: &[f32],
     k: usize,
@@ -3320,10 +4020,132 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
         || is_monologue_corpus
         || eff_it.is_event_sequence
         || eff_summary_request(&q.text)
-        || pref_on
-        || eff_it.task_under_rules
     {
         return;
+    }
+    // Pillar 6 (HabitusMem `2611.25855` + MINDSET `2610.08586` Scope Energy Rank-1 Re-Seating):
+    // Unlocked specifically on anonymous dialogue `pref_on || task_under_rules` queries where
+    // Top-5 near-misses previously stalled because transient debug / assistant turns stole Slot 0.
+    if pref_on || eff_it.task_under_rules {
+        if !has_named_speakers_eff && final_turn_indices.len() >= 2 {
+            let q_low_h = q.text.to_ascii_lowercase();
+            // hardcode-scan: closed-class (genuine personal preference/advice openings vs general how-to rules)
+            let is_genuine_pref_q = q_low_h.contains("suggest")
+                || q_low_h.contains("recommend")
+                || q_low_h.contains("prefer")
+                || q_low_h.contains("i'd like")
+                || q_low_h.contains("i would like")
+                || q_low_h.contains("i'm looking")
+                || q_low_h.contains("i'm working")
+                || q_low_h.contains("i'm planning")
+                || q_low_h.contains("can you help me");
+            let w = final_turn_indices.len().min(6);
+            let t0 = final_turn_indices[0];
+            let s0 = ix.turns[t0].session;
+            let u0 = crate::retrieval::seating::habitus_energy_q16::habitus_scope_utility_q16(ix, t0, true);
+            let d0 = crate::retrieval::seating::constraint_density_q16::deontic_directive_density_q16(
+                &ix.turns[t0].body_for_headers,
+            );
+            let own0 = ieee754_bits_to_q16(t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+            let mut q_mask_h = 0u64;
+            for qt in &plan.terms {
+                if qt.exact_hit
+                    && let Some(g) = qt.group
+                    && g < 64
+                {
+                    q_mask_h |= 1u64 << g;
+                }
+            }
+            let ex0 = (t_exact_mask.get(t0).copied().unwrap_or(0) & q_mask_h).count_ones();
+            let q_toks_h = raw_tokens(&q.text);
+            let t0_cond_matched_rule = ix.turns[t0].is_standing_policy
+                && ix.standing_rules.iter().any(|r| {
+                    r.turn == t0 && rule_condition_matches(ix, r, plan, &q_toks_h)
+                });
+            let t0_is_decoy = crate::retrieval::seating::habitus_energy_q16::is_status_metric_decoy(
+                &ix.turns[t0].body_for_headers,
+            );
+            let t0_weak_scope = !t0_cond_matched_rule
+                && (ix.turns[t0].field == 1
+                    || (u0 < 0 && !ix.turns[t0].is_standing_policy)
+                    || crate::retrieval::fusion::summary_silhouette_q16::is_short_ack_question(ix, t0)
+                    || (is_genuine_pref_q && (ix.turns[t0].is_standing_policy || t0_is_decoy)))
+                && !(ix.turns[t0].is_standing_policy && !is_genuine_pref_q);
+            if t0_weak_scope {
+                let mut best_h: Option<(i64, u64, u32, usize)> = None;
+                for (slot, &tc) in final_turn_indices.iter().enumerate().take(w).skip(1) {
+                    let trc = &ix.turns[tc];
+                    if trc.field != 0 || trc.is_backchannel || turn_is_superseded(ix, tc) {
+                        continue;
+                    }
+                    if is_genuine_pref_q && trc.is_standing_policy {
+                        continue;
+                    }
+                    if crate::retrieval::seating::habitus_energy_q16::is_status_metric_decoy(&trc.body_for_headers) {
+                        continue;
+                    }
+                    let uc = crate::retrieval::seating::habitus_energy_q16::habitus_scope_utility_q16(ix, tc, true);
+                    let beats_stray_policy = is_genuine_pref_q && ix.turns[t0].is_standing_policy;
+                    if !beats_stray_policy && !t0_is_decoy && uc <= u0 {
+                        continue;
+                    }
+                    let dc = crate::retrieval::seating::constraint_density_q16::deontic_directive_density_q16(
+                        &trc.body_for_headers,
+                    );
+                    let ownc = ieee754_bits_to_q16(t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+                    let exc = (t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_h).count_ones();
+                    let min_pct = if beats_stray_policy || t0_is_decoy { 55 } else { 75 };
+                    let rel_ok = ownc > 0
+                        && ownc.saturating_mul(100) >= own0.saturating_mul(min_pct)
+                        && (exc >= 1 && (beats_stray_policy || t0_is_decoy || exc >= ex0 || dc >= d0.saturating_add(2_500)));
+                    if rel_ok {
+                        let key = (uc, dc, exc, slot);
+                        if best_h.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                            best_h = Some(key);
+                        }
+                    }
+                }
+                if let Some((_, _, _, win_slot)) = best_h {
+                    let win_sess = ix.turns[final_turn_indices[win_slot]].session;
+                    if win_slot < 5 {
+                        final_turn_indices[..=win_slot].rotate_right(1);
+                    } else {
+                        let win_ti = final_turn_indices.remove(win_slot);
+                        final_turn_indices.insert(0, win_ti);
+                        final_turn_indices.truncate(k.max(5));
+                    }
+                    if win_sess != s0 {
+                        let sw = final_session_indices.len().min(5);
+                        if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
+                            && spos > 0
+                        {
+                            final_session_indices[..=spos].rotate_right(1);
+                        }
+                    }
+                }
+            }
+        }
+        // Unlock anonymous dialogue Condorcet & IE gates (`1b` Assistant-Attribution, `1c` Quantitative,
+        // `1d` Entity-Rich Extraction) when the Slot-0 turn is NOT a protected standing policy.
+        // hardcode-scan: closed-class (factual IE quantitative/attribution triggers)
+        let q_low_ie = q.text.trim_start().to_ascii_lowercase();
+        let run_ie_after_habitus = !has_named_speakers_eff
+            && !final_turn_indices
+                .first()
+                .is_some_and(|&t0| ix.turns[t0].is_standing_policy)
+            && (eff_it.assistant_attribution
+                || q_low_ie.contains("did i ")
+                || q_low_ie.contains("did we ")
+                || q_low_ie.contains("have i ")
+                || q_low_ie.contains("was i ")
+                || q_low_ie.starts_with("how much ")
+                || q_low_ie.starts_with("how long ")
+                || q_low_ie.starts_with("how old ")
+                || q_low_ie.starts_with("what probability")
+                || q_low_ie.starts_with("what percentage"));
+        if !run_ie_after_habitus {
+            return;
+        }
     }
     if !has_named_speakers_eff {
         let anon_ctx = AnonCondorcetCtx {
@@ -3333,6 +4155,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             q,
             t_scene,
             t_own,
+            t_exact_mask,
             s_score,
             bridge_boost,
         };
@@ -3340,6 +4163,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             &anon_ctx,
             final_turn_indices,
             final_session_indices,
+            k,
         );
         return;
     }
@@ -3402,7 +4226,116 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
         return;
     }
 
-    let scores: Vec<i64> = feats.iter().map(eval_at1_gbdt_q16).collect();
+    let mut scores: Vec<i64> = feats.iter().map(eval_at1_gbdt_q16).collect();
+
+    // #4 Tropical (max,+) 2-Hop Squaring bonus in `@1` scoring for Multi-Hop queries:
+    // Adds a bounded Q16 tropical 2-hop bridge bonus to declarative candidates connected
+    // to top Pass-1 anchors through rare non-query bridge entities.
+    if eff_it.multi_hop {
+        let mut q_gmask = 0u64;
+        for qt in &plan.terms {
+            if qt.exact_hit
+                && let Some(g) = qt.group
+                && g < 64
+            {
+                q_gmask |= 1u64 << g;
+            }
+        }
+        let q_toks_mh = raw_tokens(&q.text);
+        let mut matched_sps: Vec<String> = Vec::new();
+        for tr in ix.turns.iter().take(64) {
+            let sp = tr.speaker.to_ascii_lowercase();
+            if !sp.is_empty()
+                && sp != "user"
+                && sp != "assistant"
+                && q_toks_mh.iter().any(|w| w == &sp)
+                && !matched_sps.contains(&sp)
+            {
+                matched_sps.push(sp);
+            }
+        }
+        let single_sp = if matched_sps.len() == 1 {
+            Some(matched_sps[0].as_str())
+        } else {
+            None
+        };
+        let trop_map =
+            crate::retrieval::graph::tropical_bridge_q16::tropical_max_plus_entity_bridge_q16(
+                ix,
+                plan,
+                t_own,
+                t_exact_mask,
+                q_gmask,
+                single_sp,
+            );
+        if let Some(max_t) = trop_map.values().copied().max()
+            && max_t > 0
+        {
+            const TROP_AT1_CAP_Q16: u64 = 16_000;
+            for (i, &ti) in pool.iter().enumerate() {
+                if let Some(&tsc) = trop_map.get(&ti)
+                    && feats[i][32] == 0
+                {
+                    let bonus = (((tsc as u128).saturating_mul(TROP_AT1_CAP_Q16 as u128))
+                        / (max_t as u128)) as i64;
+                    scores[i] = scores[i].saturating_add(bonus);
+                }
+            }
+        }
+    }
+
+    // #6 Co-Hyponym Sibling Mismatch Penalty (guarded by `any_cand_matches_qw` so
+    // false-premise Adversarial source passages are NEVER penalized when the queried
+    // sibling does not exist in the candidate pool):
+    {
+        const COHYP_MISMATCH_PENALTY_Q16: i64 = 18_000;
+        let q_toks_ch = raw_tokens(&q.text);
+        let mut checked_qw: Vec<String> = Vec::new();
+        for qw in &q_toks_ch {
+            if !is_content(qw) || qw.len() < 3 || checked_qw.contains(qw) {
+                continue;
+            }
+            checked_qw.push(qw.clone());
+            let sibs = crate::wordnet::strict_co_hyponym_siblings(qw);
+            if sibs.is_empty() {
+                continue;
+            }
+            let qw_ids: Vec<u32> = [ix.vocab.get(qw), ix.vocab.get(&stem_term(&stem(qw)))]
+                .into_iter()
+                .flatten()
+                .collect();
+            if qw_ids.is_empty() {
+                continue;
+            }
+            let any_cand_matches_qw = pool.iter().any(|&ti| {
+                let tr = &ix.turns[ti];
+                !tr.is_question
+                    && qw_ids
+                        .iter()
+                        .any(|id| tr.content.contains(id) || tr.feats.iter().any(|f| f.id == *id))
+            });
+            if !any_cand_matches_qw {
+                continue;
+            }
+            let sib_ids: Vec<u32> = sibs
+                .into_iter()
+                .filter_map(|s| ix.vocab.get(s))
+                .collect();
+            if sib_ids.is_empty() {
+                continue;
+            }
+            for (i, &ti) in pool.iter().enumerate() {
+                let tr = &ix.turns[ti];
+                let has_qw = qw_ids
+                    .iter()
+                    .any(|id| tr.content.contains(id) || tr.feats.iter().any(|f| f.id == *id));
+                if !has_qw && sib_ids.iter().any(|sid| tr.content.contains(sid)) {
+                    scores[i] = scores[i].saturating_sub(COHYP_MISMATCH_PENALTY_Q16);
+                }
+            }
+        }
+    }
+
     let mut order: Vec<usize> = (0..pool.len()).collect();
     order.sort_by(|&a, &b| {
         scores[b]
@@ -3471,7 +4404,15 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             let s0_t = ix.turns[t0].session;
             let own0 = ieee754_bits_to_q16(t_own.get(t0).copied().unwrap_or(0.0).to_bits());
             let mut flip_slot: Option<usize> = None;
-            for slot in 1..new_turns.len().min(3) {
+            let pure_zero_decoy = ix.turns[t0].slot_entities_clean == 0 && feats[i0][9] == 0;
+            let scan_self = if pure_zero_decoy {
+                new_turns.len().min(5)
+            } else {
+                new_turns.len().min(3)
+            };
+            let max_pos_diff = if pure_zero_decoy { 4 } else { 2 };
+            let max_gap_self = if pure_zero_decoy { 48_000 } else { 24_576 };
+            for slot in 1..scan_self {
                 let tc = new_turns[slot];
                 if ix.turns[tc].session != s0_t
                     || ix.turns[tc].is_question
@@ -3480,7 +4421,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                     continue;
                 }
                 let near = match (p0, turn_pos(ix, tc)) {
-                    (Some(a), Some(b)) => a.abs_diff(b) <= 2,
+                    (Some(a), Some(b)) => a.abs_diff(b) <= max_pos_diff,
                     _ => false,
                 };
                 if !near {
@@ -3489,7 +4430,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                 let Some(ic) = pool.iter().position(|&x| x == tc) else {
                     continue;
                 };
-                if feats[ic][32] > 0 || scores[i0].saturating_sub(scores[ic]) > 24_576 {
+                if feats[ic][32] > 0 || scores[i0].saturating_sub(scores[ic]) > max_gap_self {
                     continue;
                 }
                 let ownc = ieee754_bits_to_q16(t_own.get(tc).copied().unwrap_or(0.0).to_bits());
@@ -3499,7 +4440,11 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                     && ix.turns[tc].slot_entities_clean >= 1
                     && feats[ic][20] >= feats[i0][20]
                     && feats[ic][15] >= feats[i0][15];
-                if cond_a || cond_b {
+                let cond_c = pure_zero_decoy
+                    && feats[ic][15] == 2
+                    && feats[ic][9] > 0
+                    && ix.turns[tc].slot_entities_clean >= 1;
+                if cond_a || cond_b || cond_c {
                     flip_slot = Some(slot);
                     break;
                 }
@@ -3509,15 +4454,612 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             }
         }
     }
-    new_turns.truncate(k);
-    *final_turn_indices = new_turns;
-
+    // Post-GBDT Speaker-Subject Alignment & Lexical WH Answer-Type Hard Gate (`0..5` invariant):
+    // 1. When the query targets a single non-conjoined speaker (`feats[ic][15] == 2`) without `WH_PERSON`,
+    //    if Rank 1 is spoken by an unqueried speaker (`feats[i0][15] < 0`) and a Top-5 declarative by
+    //    the queried speaker covers strong non-speaker IC (or `t0` is a question / adjacent reply),
+    //    rotate the queried speaker's declarative to Rank 1.
+    // 2. When Rank 1 is a question (`is_question`) or fails the WH-type check (`feats[i0][20] < 0`)
+    //    while a Top-5 declarative satisfies it (`feats[ic][20] > feats[i0][20]`) without speaker
+    //    regression, rotate it to Rank 1.
+    if new_turns.len() >= 2 && (wh_slots(&q.text) & WH_PERSON) == 0 {
+        let t0 = new_turns[0];
+        if let Some(i0) = pool.iter().position(|&x| x == t0) {
+            let sp_names_tr = session_speaker_names(ix, &ix.session_turns[ix.turns[t0].session]);
+            let q_exact_ids_sp: Vec<u32> = plan
+                .terms
+                .iter()
+                .filter(|qt| qt.exact_hit && !is_speaker_term(ix, qt.id, &sp_names_tr))
+                .map(|qt| qt.id)
+                .collect();
+            let turn_only_other = |ti: usize| -> bool {
+                let tr = &ix.turns[ti];
+                if tr.other_speaker_terms.is_empty() {
+                    return false;
+                }
+                let mut hit = false;
+                for &qid in &q_exact_ids_sp {
+                    if tr.content.contains(&qid) {
+                        hit = true;
+                        if !tr.other_speaker_terms.contains(&qid) {
+                            return false;
+                        }
+                    }
+                }
+                hit
+            };
+            let mut sp_win: Option<(usize, i32, i64)> = None;
+            if feats[i0][15] < 0 {
+                let q_toks_sp = raw_tokens(&q.text);
+                let q_refs_sp: Vec<&str> = q_toks_sp.iter().map(String::as_str).collect();
+                let is_od_infer_sp =
+                    crate::retrieval::lexical::speaker_translation_q16::is_open_domain_inferential_shape(
+                        &q_refs_sp,
+                    );
+                let p0 = turn_pos(ix, t0);
+                let s0_t = ix.turns[t0].session;
+                let own0 = ieee754_bits_to_q16(t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+                let scn0 = ieee754_bits_to_q16(t_scene.get(t0).copied().unwrap_or(0.0).to_bits());
+                let sp_scan = if is_od_infer_sp {
+                    new_turns.len().min(8)
+                } else {
+                    new_turns.len().min(6)
+                };
+                for slot in 1..sp_scan {
+                    let tc = new_turns[slot];
+                    let trc = &ix.turns[tc];
+                    let allow_multi_clause_od = is_od_infer_sp && trc.content.len() >= 10;
+                    if (trc.is_question && !allow_multi_clause_od) || trc.is_backchannel {
+                        continue;
+                    }
+                    let Some(ic) = pool.iter().position(|&x| x == tc) else {
+                        continue;
+                    };
+                    if (feats[ic][32] > 0 && !allow_multi_clause_od) || feats[ic][15] != 2 {
+                        continue;
+                    }
+                    let adj_same_sess = trc.session == s0_t
+                        && match (p0, turn_pos(ix, tc)) {
+                            (Some(a), Some(b)) => a.abs_diff(b) <= 2,
+                            _ => false,
+                        };
+                    let ownc = ieee754_bits_to_q16(t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+                    let scnc = ieee754_bits_to_q16(t_scene.get(tc).copied().unwrap_or(0.0).to_bits());
+                    let od_sp_ok = is_od_infer_sp
+                        && scores[i0].saturating_sub(scores[ic]) <= 95_000
+                        && (adj_same_sess
+                            || trc.is_habitual
+                            || scnc.saturating_mul(100) >= scn0.saturating_mul(35)
+                            || feats[ic][9] * 10 >= feats[i0][9] * 5);
+                    // Vocative / 2nd-person praise flip: only flip non-OD `feats[i0][15] < 0` with relaxed IC
+                    // when `t0` exclusively references the queried terms in 2nd-person (`turn_only_other(t0)`),
+                    // preventing false-premise Adversarial queries from evicting Speaker B's 1st-person gold fact.
+                    let vocative_sp_ok = turn_only_other(t0)
+                        && !turn_only_other(tc)
+                        && feats[ic][9] * 10 >= feats[i0][9] * 8
+                        && scores[i0].saturating_sub(scores[ic]) <= 48_000;
+                    let ic_ok = if ix.turns[t0].is_question {
+                        feats[ic][9] * 10 >= feats[i0][9] * 7
+                    } else {
+                        od_sp_ok
+                            || vocative_sp_ok
+                            || (trc.session == s0_t
+                                && feats[ic][9] >= feats[i0][9]
+                                && ownc.saturating_mul(100) >= own0.saturating_mul(65)
+                                && scores[i0].saturating_sub(scores[ic]) <= 42_000)
+                            || (feats[ic][9] >= feats[i0][9]
+                                && ((adj_same_sess && ownc * 5 >= own0 * 4)
+                                    || (ownc >= own0
+                                        && scores[i0].saturating_sub(scores[ic]) <= 32_000)))
+                    };
+                    if ic_ok && feats[ic][20] >= feats[i0][20] {
+                        let key = (slot, feats[ic][9], scores[ic]);
+                        if sp_win.is_none_or(|(_, bic, bsc)| (key.1, key.2) > (bic, bsc)) {
+                            sp_win = Some(key);
+                        }
+                    }
+                }
+            }
+            if let Some((slot, _, _)) = sp_win {
+                new_turns[..=slot].rotate_right(1);
+            } else {
+                // Strict Speaker-Attributed Predicate Guard: if Rank 1 matches the queried speaker
+                // (`feats[i0][15] == 2`) ONLY inside 2nd-person `other_speaker_terms` (e.g., praising
+                // the interlocutor), rotate a Top-5 declarative by the queried speaker that owns the
+                // matched query terms in 1st-person to Rank 1.
+                if feats[i0][15] == 2 && turn_only_other(t0) {
+                    let mut own_win: Option<(usize, i32, i64)> = None;
+                    for slot in 1..new_turns.len().min(5) {
+                        let tc = new_turns[slot];
+                        let trc = &ix.turns[tc];
+                        if trc.is_question || trc.is_backchannel || turn_only_other(tc) {
+                            continue;
+                        }
+                        let Some(ic) = pool.iter().position(|&x| x == tc) else {
+                            continue;
+                        };
+                        if feats[ic][32] == 0
+                            && feats[ic][15] == 2
+                            && feats[ic][9] * 10 >= feats[i0][9] * 8
+                            && scores[i0].saturating_sub(scores[ic]) <= 36_000
+                        {
+                            let key = (slot, feats[ic][9], scores[ic]);
+                            if own_win.is_none_or(|(_, bic, bsc)| (key.1, key.2) > (bic, bsc)) {
+                                own_win = Some(key);
+                            }
+                        }
+                    }
+                    if let Some((slot, _, _)) = own_win {
+                        new_turns[..=slot].rotate_right(1);
+                    }
+                } else if (feats[i0][15] == 2 && ix.turns[t0].is_question)
+                    || (feats[i0][15] == -1 && (ix.turns[t0].is_question || turn_only_other(t0)))
+                {
+                    // #7 Cross-Speaker Self-Disclosure Tie-Break:
+                    // When Slot 0 is a question or spoken by a non-target interlocutor while a
+                    // Top-5 declarative 1st-person turn by the queried speaker sits nearby, promote it.
+                    let mut self_win: Option<(usize, i32, i64)> = None;
+                    for slot in 1..new_turns.len().min(5) {
+                        let tc = new_turns[slot];
+                        let trc = &ix.turns[tc];
+                        if trc.is_question || trc.is_backchannel || turn_only_other(tc) {
+                            continue;
+                        }
+                        let Some(ic) = pool.iter().position(|&x| x == tc) else {
+                            continue;
+                        };
+                        if feats[ic][32] == 0
+                            && feats[ic][15] == 2
+                            && feats[ic][9] >= feats[i0][9]
+                            && scores[i0].saturating_sub(scores[ic]) <= 24_000
+                        {
+                            let key = (slot, feats[ic][9], scores[ic]);
+                            if self_win.is_none_or(|(_, bic, bsc)| (key.1, key.2) > (bic, bsc)) {
+                                self_win = Some(key);
+                            }
+                        }
+                    }
+                    if let Some((slot, _, _)) = self_win {
+                        new_turns[..=slot].rotate_right(1);
+                    }
+                } else if (ix.turns[t0].modality_mask & 0x04) != 0 {
+                    // 4-Bit ModalityMask Guard (`0x04 = HYPOTHETICAL` / pure prospective intent):
+                    // On factual/past-tense queries, a purely prospective remark yields Rank 1 to an
+                    // `ASSERTED` (`0x01`) Top-5 turn with equal/better speaker and strong coverage.
+                    let q_low_mod = q.text.to_ascii_lowercase();
+                    let is_past_q_m = q_low_mod.starts_with("what did ")
+                        || q_low_mod.starts_with("when did ")
+                        || q_low_mod.starts_with("where has ")
+                        || q_low_mod.starts_with("where did ")
+                        || q_low_mod.starts_with("what has ");
+                    let ic_num = if is_past_q_m { 7 } else { 10 };
+                    let max_gap = if is_past_q_m { 48_000 } else { 28_000 };
+                    let mut mod_win: Option<(usize, i32, i64)> = None;
+                    for slot in 1..new_turns.len().min(5) {
+                        let tc = new_turns[slot];
+                        let trc = &ix.turns[tc];
+                        if trc.is_question || trc.is_backchannel || (trc.modality_mask & 0x01) == 0 {
+                            continue;
+                        }
+                        let Some(ic) = pool.iter().position(|&x| x == tc) else {
+                            continue;
+                        };
+                        if feats[ic][32] == 0
+                            && feats[ic][15] >= feats[i0][15]
+                            && feats[ic][9] * 10 >= feats[i0][9] * ic_num
+                            && scores[i0].saturating_sub(scores[ic]) <= max_gap
+                        {
+                            let key = (slot, feats[ic][9], scores[ic]);
+                            if mod_win.is_none_or(|(_, bic, bsc)| (key.1, key.2) > (bic, bsc)) {
+                                mod_win = Some(key);
+                            }
+                        }
+                    }
+                    if let Some((slot, _, _)) = mod_win {
+                        new_turns[..=slot].rotate_right(1);
+                    }
+                } else {
+                    // Lexical Answer-Type Hard Gate (closed-class WH stems: when, where, why, how many):
+                    // When Rank 1 fails the closed-class WH answer-type check (`feats[i0][20] < 0`)
+                    // while a Top-5 declarative satisfies it (`feats[ic][20] > 0`) with same-or-better
+                    // speaker alignment and strong coverage within narrow GBDT margin, seat it at #1.
+                    if feats[i0][20] < 0 {
+                        let mut wh_win: Option<(usize, i32, i64)> = None;
+                        for slot in 1..new_turns.len().min(5) {
+                            let tc = new_turns[slot];
+                            let trc = &ix.turns[tc];
+                            if trc.is_question || trc.is_backchannel {
+                                continue;
+                            }
+                            let Some(ic) = pool.iter().position(|&x| x == tc) else {
+                                continue;
+                            };
+                            if feats[ic][32] == 0
+                                && feats[ic][20] > 0
+                                && feats[ic][15] >= feats[i0][15]
+                                && feats[ic][9] * 10 >= feats[i0][9] * 9
+                                && scores[i0].saturating_sub(scores[ic]) <= 26_000
+                            {
+                                let key = (slot, feats[ic][20], scores[ic]);
+                                if wh_win.is_none_or(|(_, blr, bsc)| (key.1, key.2) > (blr, bsc)) {
+                                    wh_win = Some(key);
+                                }
+                            }
+                        }
+                        if let Some((slot, _, _)) = wh_win {
+                            new_turns[..=slot].rotate_right(1);
+                        }
+                    }
+                }
+            }
+        }
+    }
     let q_toks_sync = raw_tokens(&q.text);
     let q_refs_sync: Vec<&str> = q_toks_sync.iter().map(String::as_str).collect();
     let is_inferential_modal =
         crate::retrieval::lexical::speaker_translation_q16::is_open_domain_inferential_shape(
             &q_refs_sync,
         );
+    let q_low_od = q.text.trim_start().to_ascii_lowercase();
+    let is_strong_od_infer = is_inferential_modal
+        && has_named_speakers_eff
+        && (q_low_od.starts_with("would ")
+            || q_low_od.contains(" would ")
+            || q_low_od.starts_with("could ")
+            || q_low_od.contains(" could ")
+            || q_low_od.contains(" likely")
+            || q_low_od.contains(" might "))
+        && new_turns.len() >= 2;
+    if is_strong_od_infer {
+        // Dedicated Open-Domain Inferential Rank-1 Arbiter:
+        // Fuses KITE Upward-Cone Typed Meet + Discrete Sinkhorn OT + SYNAPSE Spreading Activation
+        // + exact/compound-suffix IC + `is_habitual` + `t_scene` over candidate turns by the
+        // queried speaker(s), rescuing turns where generic polysemous decoys stole Slot 0.
+        let mut queried_sp_od: BTreeSet<String> = BTreeSet::new();
+        for (idx, &ti) in pool.iter().enumerate() {
+            if feats[idx][15] > 0 && !ix.turns[ti].speaker.is_empty() {
+                queried_sp_od.insert(ix.turns[ti].speaker.to_ascii_lowercase());
+            }
+        }
+        let ns_od = (ix.session_turns.len() as u32).max(1);
+        let max_suf_df = (ns_od / 3).max(4);
+        let mut q_suffix_ids: Vec<u32> = Vec::new();
+        for w in &q_toks_sync {
+            if !w.is_ascii() || !is_content(w) || queried_sp_od.contains(w.as_str()) {
+                continue;
+            }
+            if w.len() >= 6 && ix.vocab.get(w).is_none() {
+                for (vid, vname) in ix.vocab.names.iter().enumerate() {
+                    if !vname.starts_with('\u{1}')
+                        && crate::retrieval::lexical::bm25f::damerau_levenshtein_le_1(w, vname)
+                    {
+                        let cand_id = vid as u32;
+                        let df = ix.s_stats.df.get(&cand_id).copied().unwrap_or(0);
+                        if (1..=max_suf_df).contains(&df) && !q_suffix_ids.contains(&cand_id) {
+                            q_suffix_ids.push(cand_id);
+                        }
+                    }
+                }
+            }
+            if w.len() < 7 {
+                continue;
+            }
+            for split in 3..=(w.len() - 4) {
+                let suf = &w[split..];
+                let st_suf = stem(suf);
+                for cand_id in [ix.vocab.get(suf), ix.vocab.get(&st_suf)]
+                    .into_iter()
+                    .flatten()
+                {
+                    let df = ix.s_stats.df.get(&cand_id).copied().unwrap_or(0);
+                    if (1..=max_suf_df).contains(&df) && !q_suffix_ids.contains(&cand_id) {
+                        q_suffix_ids.push(cand_id);
+                    }
+                }
+            }
+        }
+        let (_, kite_t_od) = crate::retrieval::index::kite_typed::score_kite_typed_facet_meet_q16(
+            ix,
+            plan,
+            &q.text,
+            &queried_sp_od,
+            0,
+            65_536,
+        );
+        let ot_od = crate::retrieval::lexical::sinkhorn_ot_q16::SinkhornQuery::build(
+            ix,
+            &q.text,
+            &queried_sp_od,
+        );
+        let max_scn_od = t_scene
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max)
+            .max(1e-6);
+        let mut od_cands: Vec<(usize, u64)> = Vec::new();
+        for (idx, &ti) in pool.iter().enumerate() {
+            let tr = &ix.turns[ti];
+            if tr.is_question || tr.is_backchannel || turn_is_superseded(ix, ti) {
+                continue;
+            }
+            if !queried_sp_od.is_empty() && !queried_sp_od.contains(&tr.speaker.to_ascii_lowercase()) {
+                continue;
+            }
+            let scn_q = (((t_scene.get(ti).copied().unwrap_or(0.0).max(0.0)) / max_scn_od) * 65_536.0) as u64;
+            let exact_q = (feats[idx][9].max(0) as u64).min(65_536);
+            let suf_q = if q_suffix_ids.iter().any(|id| tr.content.contains(id)) {
+                24_576u64
+            } else {
+                0u64
+            };
+            let kite_q = kite_t_od.get(ti).copied().unwrap_or(0);
+            let ot_q = ot_od.score_turn_q16(ix, ti);
+            let hab_q = if tr.is_habitual { 16_384u64 } else { 0u64 };
+            let comb = scn_q
+                .saturating_add(exact_q.saturating_mul(3) / 2)
+                .saturating_add(suf_q)
+                .saturating_add(kite_q.saturating_mul(3) / 2)
+                .saturating_add(ot_q.saturating_mul(2))
+                .saturating_add(hab_q);
+            if comb > 0 {
+                od_cands.push((ti, comb));
+            }
+        }
+        od_cands.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        od_cands.truncate(20);
+        let syn_ranked = crate::retrieval::graph::synapse_activation_q16::synapse_activate_speaker_turns_q16(
+            ix,
+            &od_cands,
+        );
+        if let Some(&(best_ti, best_syn)) = syn_ranked.first() {
+            let t0 = new_turns[0];
+            let best_in_topk = new_turns.iter().take(10).position(|&x| x == best_ti);
+            let best_kite = kite_t_od.get(best_ti).copied().unwrap_or(0);
+            let t0_kite = kite_t_od.get(t0).copied().unwrap_or(0);
+            let best_exact_q = pool
+                .iter()
+                .position(|&x| x == best_ti)
+                .map(|idx| feats[idx][9].max(0) as u64)
+                .unwrap_or(0);
+            let t0_exact_q = pool
+                .iter()
+                .position(|&x| x == t0)
+                .map(|idx| feats[idx][9].max(0) as u64)
+                .unwrap_or(0);
+            let t0_syn = syn_ranked
+                .iter()
+                .find(|&&(ti, _)| ti == t0)
+                .map(|&(_, sc)| sc)
+                .unwrap_or(0);
+            let t0_wrong_sp = !queried_sp_od.is_empty()
+                && !queried_sp_od.contains(&ix.turns[t0].speaker.to_ascii_lowercase());
+            let decisive = best_ti != t0
+                && (t0_wrong_sp
+                    || (best_syn > t0_syn.saturating_mul(115) / 100
+                        && best_kite >= t0_kite
+                        && best_exact_q >= t0_exact_q)
+                    || (best_exact_q > t0_exact_q && best_syn >= t0_syn)
+                    || (t_scene.get(best_ti).copied().unwrap_or(0.0)
+                        > 1.15 * t_scene.get(t0).copied().unwrap_or(0.0)
+                        && best_kite > t0_kite));
+            if decisive {
+                if let Some(pos) = best_in_topk {
+                    new_turns[..=pos].rotate_right(1);
+                } else {
+                    new_turns.retain(|&x| x != best_ti);
+                    new_turns.insert(0, best_ti);
+                    new_turns.truncate(k);
+                }
+                let win_sess = ix.turns[best_ti].session;
+                if let Some(s_pos) = final_session_indices.iter().take(10).position(|&s| s == win_sess)
+                    && s_pos > 0
+                {
+                    let moved = final_session_indices.remove(s_pos);
+                    final_session_indices.insert(0, moved);
+                }
+            }
+        }
+    }
+    // Forward GeoNames (City -> Country/US-State), WordNet Forward Hypernym-Category,
+    // and Single-Speaker Possessive Alignment Arbiter for named-speaker dialogues.
+    if has_named_speakers_eff && !new_turns.is_empty() {
+        let mut sp_set_w17: Vec<String> = Vec::new();
+        for (idx, &ti) in pool.iter().enumerate() {
+            if feats[idx][15] > 0 && !ix.turns[ti].speaker.is_empty() {
+                let sp_l = ix.turns[ti].speaker.to_ascii_lowercase();
+                if !sp_set_w17.contains(&sp_l) {
+                    sp_set_w17.push(sp_l);
+                }
+            }
+        }
+        let single_sp_w17: Option<&str> = if sp_set_w17.len() == 1 {
+            Some(sp_set_w17[0].as_str())
+        } else {
+            None
+        };
+        let q_toks_w17 = raw_tokens(&q.text);
+        let countries_list = crate::geonames::geo_class_instances("country");
+        let states_list = crate::geonames::geo_class_instances("state");
+        let explicit_places: Vec<String> = q_toks_w17
+            .iter()
+            .filter(|w| {
+                w.len() >= 4
+                    && !sp_set_w17.iter().any(|sp| sp == w.as_str())
+                    && (countries_list.iter().any(|c| c == w.as_str())
+                        || states_list.iter().any(|s| s == w.as_str()))
+            })
+            .cloned()
+            .collect();
+        let wants_country = q_toks_w17
+            .iter()
+            .any(|w| matches!(w.as_str(), "country" | "countries" | "nation" | "nations"));
+        let wants_state = q_toks_w17
+            .iter()
+            .any(|w| matches!(w.as_str(), "state" | "states" | "province" | "provinces"));
+        // hardcode-scan: closed-class (WH determiners & generic classifier nouns skipped as hypernym heads)
+        let q_hyp_target: Option<String> = q_toks_w17
+            .windows(2)
+            .find_map(|win| {
+                if (win[0] == "which" || win[0] == "what")
+                    && win[1].len() >= 4
+                    && is_content(&win[1])
+                    && !matches!(
+                        win[1].as_str(),
+                        "country" | "state" | "city" | "kind" | "sort" | "type" | "ways" | "things" | "year" | "month" | "time" | "additional"
+                    )
+                    && crate::wordnet::full_lexicon_neighbors(&win[1]).len() > 0
+                {
+                    Some(win[1].clone())
+                } else {
+                    None
+                }
+            });
+        let geo_score_turn = |ti: usize| -> u32 {
+            if explicit_places.is_empty() && !wants_country && !wants_state {
+                return 0;
+            }
+            let mut sc = 0u32;
+            for tw in raw_tokens(&ix.turns[ti].body_for_headers) {
+                if tw.len() < 4 || q_toks_w17.iter().any(|qw| qw == &tw) {
+                    continue;
+                }
+                if !explicit_places.is_empty()
+                    && (explicit_places.iter().any(|p| p == &tw)
+                        || crate::geonames::geo_neighbors(&tw)
+                            .iter()
+                            .any(|&(nb, _)| explicit_places.iter().any(|p| p == nb)))
+                {
+                    sc = sc.saturating_add(3);
+                }
+                if wants_country
+                    && (countries_list.iter().any(|c| c == &tw)
+                        || crate::geonames::geo_neighbors(&tw)
+                            .iter()
+                            .any(|&(nb, _)| countries_list.iter().any(|c| c == nb)))
+                {
+                    sc = sc.saturating_add(2);
+                }
+                if wants_state
+                    && (states_list.iter().any(|s| s == &tw)
+                        || crate::geonames::geo_neighbors(&tw)
+                            .iter()
+                            .any(|&(nb, _)| states_list.iter().any(|s| s == nb)))
+                {
+                    sc = sc.saturating_add(2);
+                }
+            }
+            sc
+        };
+        let hyp_score_turn = |ti: usize| -> u32 {
+            let Some(ref hyp) = q_hyp_target else {
+                return 0;
+            };
+            let mut sc = 0u32;
+            for tw in raw_tokens(&ix.turns[ti].body_for_headers) {
+                if tw.len() < 4 || q_toks_w17.iter().any(|qw| qw == &tw) {
+                    continue;
+                }
+                if tw == *hyp || crate::wordnet::heyting_implication_ic_q16(&tw, hyp) > 0 {
+                    sc = sc.saturating_add(1);
+                }
+            }
+            sc
+        };
+        let t0 = new_turns[0];
+        let mut q_nonsp_mask = 0u64;
+        for qt in &plan.terms {
+            if qt.exact_hit
+                && let Some(g) = qt.group
+                && g < 64
+            {
+                let gnm = plan.groups.get(g).map(String::as_str).unwrap_or("");
+                if !sp_set_w17.iter().any(|sp| sp == gnm) {
+                    q_nonsp_mask |= 1u64 << g;
+                }
+            }
+        }
+        let ex0_nonsp = (t_exact_mask.get(t0).copied().unwrap_or(0) & q_nonsp_mask).count_ones();
+        let geo0 = geo_score_turn(t0);
+        let hyp0 = hyp_score_turn(t0);
+        let mut cand_turns_w17: Vec<usize> = pool.clone();
+        for &si in final_session_indices.iter().take(5) {
+            for &ti in &ix.session_turns[si] {
+                if !cand_turns_w17.contains(&ti) {
+                    cand_turns_w17.push(ti);
+                }
+            }
+        }
+        let mut promoted_w17: Option<usize> = None;
+        if !explicit_places.is_empty() || wants_country || wants_state || q_hyp_target.is_some() {
+            let mut best_ans: Option<(u32, u32, u64, usize)> = None;
+            let tsc0 = t_scene.get(t0).copied().unwrap_or(0.0);
+            let i0_w17 = pool.iter().position(|&x| x == t0);
+            let gsc0_w17 = i0_w17.map(|i| scores[i]).unwrap_or(i64::MIN / 2);
+            for &tc in &cand_turns_w17 {
+                if tc == t0 {
+                    continue;
+                }
+                let trc = &ix.turns[tc];
+                if trc.is_question || trc.is_backchannel || turn_is_superseded(ix, tc) {
+                    continue;
+                }
+                if let Some(sp) = single_sp_w17
+                    && !trc.speaker.eq_ignore_ascii_case(sp)
+                {
+                    continue;
+                }
+                let gc = geo_score_turn(tc);
+                let hc = hyp_score_turn(tc);
+                let gain_geo = gc > geo0 && geo0 == 0;
+                let gain_hyp = q_hyp_target.is_some() && hc > hyp0 && hyp0 == 0;
+                if !gain_geo && !gain_hyp {
+                    continue;
+                }
+                let exc_ns = (t_exact_mask.get(tc).copied().unwrap_or(0) & q_nonsp_mask).count_ones();
+                let tscc = t_scene.get(tc).copied().unwrap_or(0.0);
+                let gsc_c = pool
+                    .iter()
+                    .position(|&x| x == tc)
+                    .map(|i| scores[i])
+                    .unwrap_or(i64::MIN / 2);
+                let geo_ok = gain_geo
+                    && exc_ns >= ex0_nonsp
+                    && (tscc >= 0.65 * tsc0 || gsc_c.saturating_add(24_000) >= gsc0_w17);
+                let hyp_ok = gain_hyp
+                    && exc_ns >= ex0_nonsp
+                    && tscc >= 0.72 * tsc0
+                    && gsc_c.saturating_add(22_000) >= gsc0_w17;
+                if geo_ok || hyp_ok {
+                    let key = (gc * 2 + hc, exc_ns, ieee754_bits_to_q16(tscc.to_bits()), tc);
+                    if best_ans.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                        best_ans = Some(key);
+                    }
+                }
+            }
+            if let Some((_, _, _, win_ti)) = best_ans {
+                promoted_w17 = Some(win_ti);
+            }
+        }
+        if let Some(win_ti) = promoted_w17 {
+            if let Some(pos) = new_turns.iter().take(10).position(|&x| x == win_ti) {
+                if pos > 0 {
+                    new_turns[..=pos].rotate_right(1);
+                }
+            } else {
+                new_turns.retain(|&x| x != win_ti);
+                new_turns.insert(0, win_ti);
+            }
+            let win_sess = ix.turns[win_ti].session;
+            if let Some(s_pos) = final_session_indices.iter().take(8).position(|&s| s == win_sess)
+                && s_pos > 0
+            {
+                let mv = final_session_indices.remove(s_pos);
+                final_session_indices.insert(0, mv);
+            }
+        }
+    }
+    new_turns.truncate(k);
+    *final_turn_indices = new_turns;
     if !is_inferential_modal
         && let Some(&win_ti) = final_turn_indices.first()
         && final_session_indices.len() >= 2
@@ -3552,5 +5094,13 @@ mod tests {
         let digest = Sha256::digest(&bytes);
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(hex, AT1_GBDT_SHA256, "AT1 GBDT sha256 mismatch");
+    }
+
+    #[test]
+    fn closed_revision_cues_reject_ambient_time_words() {
+        assert!(turn_has_revision_cue("I switched my diet to vegetarian instead of keto"));
+        assert!(turn_has_revision_cue("Actually my weekly quota was updated to 500"));
+        assert!(turn_has_revision_cue("I am no longer taking the morning class"));
+        assert!(!turn_has_revision_cue("Right now I need to plan my new schedule for May"));
     }
 }

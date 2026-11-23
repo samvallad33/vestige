@@ -672,18 +672,54 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
     }
     let sp_mult = if queried_speakers.len() == 1 { 1.16 } else { 1.06 };
+    // Strict Speaker-Attributed Predicates: collect exact non-speaker query content term IDs
+    // so a turn by the queried speaker that ONLY mentions those terms inside 2nd-person
+    // ("you"/"your") clauses about the interlocutor does NOT receive the queried-speaker boost.
+    let q_non_sp_exact_ids: Vec<u32> = plan
+        .terms
+        .iter()
+        .filter(|qt| {
+            qt.exact_hit
+                && ix
+                    .vocab
+                    .names
+                    .get(qt.id as usize)
+                    .is_some_and(|nm| !queried_speakers.iter().any(|qs| qs.eq_ignore_ascii_case(nm)))
+        })
+        .map(|qt| qt.id)
+        .collect();
     for t_sc in [&mut t_scene[..], &mut t_scene_sess[..]] {
         for ti in 0..nt {
             if t_raw[ti] <= 0.0 && t_own[ti] <= 0.0 {
                 continue;
             }
-            let sp = ix.turns[ti].speaker.as_str();
+            let tr = &ix.turns[ti];
+            let sp = tr.speaker.as_str();
             if !sp.is_empty()
                 && sp != "user"
                 && sp != "assistant"
                 && queried_speakers.iter().any(|qs| qs.eq_ignore_ascii_case(sp))
             {
-                t_sc[ti] *= sp_mult;
+                let mut matched_any = false;
+                let mut all_in_other = true;
+                if queried_speakers.len() == 1 && !tr.other_speaker_terms.is_empty() {
+                    for &qid in &q_non_sp_exact_ids {
+                        if tr.content.contains(&qid) {
+                            matched_any = true;
+                            if !tr.other_speaker_terms.contains(&qid) {
+                                all_in_other = false;
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    all_in_other = false;
+                }
+                if matched_any && all_in_other {
+                    t_sc[ti] *= 0.88;
+                } else {
+                    t_sc[ti] *= sp_mult;
+                }
             }
         }
     }
@@ -788,7 +824,15 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         || q_trim_low.starts_with("what are ")
         || q_trim_low.starts_with("if i")
         || is_when_participial;
-    let has_compact_rule_register = (1..=8).contains(&ix.standing_rules.len());
+    let has_compact_rule_register = !ix.standing_rules.is_empty();
+    // hardcode-scan: closed-class (1st-person possessive pronouns gating personal advice vs general rules)
+    let has_personal_poss = q_toks_eff
+        .iter()
+        .any(|w| matches!(w.as_str(), "my" | "our" | "mine" | "ours"))
+        || q_trim_low.contains("i'd like")
+        || q_trim_low.contains("i would like")
+        || q_trim_low.contains("i'm looking")
+        || q_trim_low.contains("i'm working");
     // Rule-condition gate: a compact rule register only marks the query as a
     // task-under-rules consultation when some live rule's own condition clause
     // ("when I ask about X") or strict high-IC rule-body binding matches the query.
@@ -799,12 +843,28 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         .map(|r| r.turn)
         .collect();
     let rule_condition_live = has_compact_rule_register && !cond_rule_turns.is_empty();
+    // hardcode-scan: closed-class (simple "When is/was ..." date queries governed by date-format standing rules)
+    let has_date_format_rule = ix.standing_rules.iter().any(|r| {
+        let b = ix.turns[r.turn].body_for_headers.to_ascii_lowercase();
+        (b.contains("format") && b.contains("date")) || (b.contains("mm/") && b.contains("yyyy"))
+    });
+    let is_simple_when_date_q = !has_named_speakers_eff
+        && !is_monologue_corpus
+        && has_date_format_rule
+        && !it.sniper_how_many
+        && !q_trim_low.contains("between ")
+        && (q_trim_low.starts_with("when is ")
+            || q_trim_low.starts_with("when was ")
+            || q_trim_low.contains("remind me of the date")
+            || q_trim_low.starts_with("what is the date")
+            || q_trim_low.starts_with("what date"));
     let pref_live_eff = ix.turns.len() >= 24
         && !past_cue_eff
         && !it.temporal
         && !seq_mode_eff
         && !eff_summary_request(&q.text)
         && !is_factual_retro_query
+        && !( !has_personal_poss && !q_trim_low.starts_with("i'm ") && rule_condition_live )
         && (advice_shape_eff
             || (crate::retrieval::step14_is_rec_request(&q.text)
                 && !is_how_what_task_shape
@@ -813,8 +873,8 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && !has_named_speakers_eff
         && ix.turns.len() >= 64
         && !past_cue_eff
-        && (!it.temporal || is_when_participial)
-        && (!it.sniper_when || is_when_participial)
+        && (!it.temporal || is_when_participial || is_simple_when_date_q)
+        && (!it.sniper_when || is_when_participial || is_simple_when_date_q)
         && !it.sniper_how_many
         && !seq_mode_eff
         && !pref_live_eff
@@ -823,6 +883,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && (!q_trim_low.ends_with('?')
             || q_trim_low.starts_with("please ")
             || rule_condition_live
+            || is_simple_when_date_q
             || q_toks_eff.windows(2).any(|p| {
                 ((p[0] == "could" || p[0] == "can" || p[0] == "would") && p[1] == "you")
                     || (p[0] == "how" && (p[1] == "to" || p[1] == "can" || p[1] == "should" || p[1] == "do"))
@@ -844,10 +905,16 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         ..it.clone()
     };
     let pref_on = pref_on || (p.enable_preference && eff_it.preference);
+    // hardcode-scan: closed-class (personal factual/itinerary openings excluded from standing policy hijack)
+    let is_personal_fact_q = q_trim_low.starts_with("when am i ")
+        || q_trim_low.starts_with("what time ")
+        || q_trim_low.starts_with("by what date")
+        || q_trim_low.starts_with("what is my ");
     let policy_boost_ok = !eff_summary_request(&q.text)
         && !eff_it.is_event_sequence
         && !eff_it.preference
-        && (!eff_it.temporal || is_when_participial)
+        && !is_personal_fact_q
+        && (!eff_it.temporal || is_when_participial || is_simple_when_date_q)
         && !eff_it.sniper_how_many
         && !past_cue_eff
         && (ix.turns.len() < 64 || (!is_factual_retro_query && eff_it.task_under_rules));

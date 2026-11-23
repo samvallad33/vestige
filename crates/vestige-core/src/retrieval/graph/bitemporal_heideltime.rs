@@ -40,22 +40,135 @@ pub(in crate::retrieval) fn query_has_historical_override(tokens: &[&str]) -> bo
         .any(|w| w[0].eq_ignore_ascii_case("used") && w[1].eq_ignore_ascii_case("to"))
 }
 
-/// Resolve closed-class relative-date phrases (`yesterday`, `last week`, `two months ago`,
-/// `three days after`) against anchor timestamp `anchor_ts` into a half-open `[v_s, v_e)` interval.
-/// hardcode-scan: closed-class (deictic direction words, small numerals, calendar units only).
-pub(in crate::retrieval) fn resolve_relative_interval(
+/// Closed-class English weekday index (`0 = Sunday .. 6 = Saturday`, matching Unix epoch math).
+/// hardcode-scan: closed-class (seven calendar weekday names only).
+fn parse_weekday(tok: &str) -> Option<i64> {
+    match tok {
+        "sunday" | "sundays" => Some(0),
+        "monday" | "mondays" => Some(1),
+        "tuesday" | "tuesdays" => Some(2),
+        "wednesday" | "wednesdays" => Some(3),
+        "thursday" | "thursdays" => Some(4),
+        "friday" | "fridays" => Some(5),
+        "saturday" | "saturdays" => Some(6),
+        _ => None,
+    }
+}
+
+/// Pure integer Howard Hinnant civil-from-days conversion (`epoch_ts -> (year, month_name, day)`).
+/// hardcode-scan: closed-class (twelve Gregorian calendar month names only).
+pub(in crate::retrieval) fn epoch_ts_to_ymd_tokens(ts: i64) -> (i32, &'static str, u32) {
+    const MONTHS: [&str; 12] = [
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+    ];
+    let z = ts.div_euclid(SECS_PER_DAY) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as usize;
+    let year = (y + i64::from(m <= 2)) as i32;
+    (year, MONTHS[(m - 1).min(11)], d)
+}
+
+/// Compile ALL closed-class relative-date expressions (`"yesterday"`, `"the day before"`,
+/// `"last Saturday"`, `"two Saturdays ago"`, `"last weekend"`, `"a few days ago"`,
+/// `"two months ago"`, `"next week"`) against `anchor_ts` at ingest into half-open `[v_s, v_e)` spans.
+/// hardcode-scan: closed-class (deictic direction words, numerals, weekdays, calendar units only).
+pub(in crate::retrieval) fn compile_ingest_timex_anchors(
     tokens: &[&str],
     anchor_ts: i64,
-) -> Option<(i64, i64)> {
+) -> Vec<(i64, i64)> {
+    let mut out: Vec<(i64, i64)> = Vec::new();
+    if anchor_ts <= 0 || tokens.is_empty() {
+        return out;
+    }
     let low: Vec<String> = tokens.iter().map(|t| t.to_ascii_lowercase()).collect();
+    // 1970-01-01 was Thursday (dow = 4 in 0=Sun..6=Sat).
+    let anchor_day = anchor_ts.div_euclid(SECS_PER_DAY);
+    let anchor_dow = (anchor_day + 4).rem_euclid(7);
+    let day_start = anchor_day * SECS_PER_DAY;
+
+    let mut push_iv = |iv: (i64, i64)| {
+        if !out.contains(&iv) {
+            out.push(iv);
+        }
+    };
+
     for i in 0..low.len() {
         if low[i] == "yesterday" {
-            let s = anchor_ts - SECS_PER_DAY;
-            return Some((s, s + SECS_PER_DAY));
+            let s = day_start - SECS_PER_DAY;
+            push_iv((s, s + SECS_PER_DAY));
+            continue;
         }
         if low[i] == "tomorrow" {
-            let s = anchor_ts + SECS_PER_DAY;
-            return Some((s, s + SECS_PER_DAY));
+            let s = day_start + SECS_PER_DAY;
+            push_iv((s, s + SECS_PER_DAY));
+            continue;
+        }
+        // "the day before" / "day before yesterday"
+        if low[i] == "day" && i + 1 < low.len() && low[i + 1] == "before" {
+            let offset = if i + 2 < low.len() && low[i + 2] == "yesterday" {
+                2
+            } else {
+                1
+            };
+            let s = day_start - offset * SECS_PER_DAY;
+            push_iv((s, s + SECS_PER_DAY));
+            continue;
+        }
+        // "last weekend" / "next weekend" / "this weekend"
+        if low[i] == "weekend" && i > 0 {
+            if low[i - 1] == "last" {
+                let days_back = if anchor_dow == 0 { 1 } else { anchor_dow + 1 };
+                let sat = day_start - days_back * SECS_PER_DAY;
+                push_iv((sat, sat + 2 * SECS_PER_DAY));
+                continue;
+            }
+            if low[i - 1] == "next" || low[i - 1] == "this" {
+                let days_fwd = (6 - anchor_dow).rem_euclid(7);
+                let sat = day_start + days_fwd * SECS_PER_DAY;
+                push_iv((sat, sat + 2 * SECS_PER_DAY));
+                continue;
+            }
+        }
+        // Weekday patterns: "last Saturday", "next Friday", "two Saturdays ago"
+        if let Some(target_dow) = parse_weekday(&low[i]) {
+            if i > 0 && low[i - 1] == "last" {
+                let mut diff = (anchor_dow - target_dow).rem_euclid(7);
+                if diff == 0 {
+                    diff = 7;
+                }
+                let s = day_start - diff * SECS_PER_DAY;
+                push_iv((s, s + SECS_PER_DAY));
+                continue;
+            }
+            if i > 0 && low[i - 1] == "next" {
+                let mut diff = (target_dow - anchor_dow).rem_euclid(7);
+                if diff == 0 {
+                    diff = 7;
+                }
+                let s = day_start + diff * SECS_PER_DAY;
+                push_iv((s, s + SECS_PER_DAY));
+                continue;
+            }
+            if i > 0 && i + 1 < low.len()
+                && let Some(n) = parse_small_numeral(&low[i - 1])
+                && matches!(low[i + 1].as_str(), "ago" | "before" | "earlier")
+            {
+                let mut diff = (anchor_dow - target_dow).rem_euclid(7);
+                if diff == 0 {
+                    diff = 7;
+                }
+                let total_days = diff + ((n.saturating_sub(1)) as i64) * 7;
+                let s = day_start - total_days * SECS_PER_DAY;
+                push_iv((s, s + SECS_PER_DAY));
+                continue;
+            }
         }
         let unit_secs = match low[i].as_str() {
             "day" | "days" => Some(SECS_PER_DAY),
@@ -70,15 +183,26 @@ pub(in crate::retrieval) fn resolve_relative_interval(
         // Pattern 1: "last <unit>" / "next <unit>"
         if i > 0 && low[i - 1] == "last" {
             let s = anchor_ts - u_secs;
-            return Some((s, s + u_secs));
+            push_iv((s, s + u_secs));
+            continue;
         }
         if i > 0 && low[i - 1] == "next" {
             let s = anchor_ts + u_secs;
-            return Some((s, s + u_secs));
+            push_iv((s, s + u_secs));
+            continue;
         }
-        // Pattern 2: "<n> <unit> ago|before|after|later"
+        // Pattern 2: "<n> <unit> ago|before|after|later" or "a few/couple <unit> ago"
         if i > 0 && i + 1 < low.len() {
-            if let Some(n) = parse_small_numeral(&low[i - 1]) {
+            let n_opt = parse_small_numeral(&low[i - 1]).or_else(|| {
+                if low[i - 1] == "few" {
+                    Some(3)
+                } else if low[i - 1] == "of" && i >= 2 && low[i - 2] == "couple" {
+                    Some(2)
+                } else {
+                    None
+                }
+            });
+            if let Some(n) = n_opt {
                 let sign = match low[i + 1].as_str() {
                     "ago" | "before" | "earlier" => Some(-1i64),
                     "after" | "later" => Some(1i64),
@@ -86,12 +210,21 @@ pub(in crate::retrieval) fn resolve_relative_interval(
                 };
                 if let Some(sg) = sign {
                     let center = anchor_ts + sg * (n as i64) * u_secs;
-                    return Some((center, center + u_secs));
+                    push_iv((center, center + u_secs));
                 }
             }
         }
     }
-    None
+    out
+}
+
+/// Resolve closed-class relative-date phrases (`yesterday`, `last week`, `two Saturdays ago`,
+/// `two months ago`, `three days after`) against anchor timestamp `anchor_ts` into a half-open `[v_s, v_e)` interval.
+pub(in crate::retrieval) fn resolve_relative_interval(
+    tokens: &[&str],
+    anchor_ts: i64,
+) -> Option<(i64, i64)> {
+    compile_ingest_timex_anchors(tokens, anchor_ts).into_iter().next()
 }
 
 /// Closed-class small English numeral parser (`1..12` + digits).
@@ -171,5 +304,20 @@ mod tests {
         assert!(bitemporal_validity_factor_q16(true, true) > bitemporal_validity_factor_q16(false, true));
         assert!(query_has_historical_override(&["Where", "did", "she", "originally", "live"]));
         assert!(!query_has_historical_override(&["Where", "does", "she", "live", "now"]));
+    }
+
+    #[test]
+    fn ingest_timex_compiler_resolves_weekdays_and_civil_dates() {
+        // 2023-05-08 00:00:00 UTC (Monday) = 19485 days since 1970-01-01.
+        let may8_2023 = 19_485 * SECS_PER_DAY;
+        assert_eq!(epoch_ts_to_ymd_tokens(may8_2023), (2023, "may", 8));
+        // "last Saturday" from Monday May 8 -> Saturday May 6, 2023.
+        let iv_sat = compile_ingest_timex_anchors(&["ran", "last", "Saturday"], may8_2023);
+        assert_eq!(iv_sat.len(), 1);
+        assert_eq!(epoch_ts_to_ymd_tokens(iv_sat[0].0), (2023, "may", 6));
+        // "two Saturdays ago" from Monday May 8 -> Saturday April 29, 2023.
+        let iv_2sat = compile_ingest_timex_anchors(&["two", "Saturdays", "ago"], may8_2023);
+        assert_eq!(iv_2sat.len(), 1);
+        assert_eq!(epoch_ts_to_ymd_tokens(iv_2sat[0].0), (2023, "april", 29));
     }
 }

@@ -596,6 +596,36 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 fused_cands.push(ti);
             }
         }
+        // #4 Tropical (max,+) 2-Hop Squaring + Entity-Denoised 2-Hop Bridge:
+        // Pull only new high-IC entities from the top 3..5 Pass-1 turns and admit the
+        // strongest tropical 2-hop chain turn when Multi-Hop / deficit_b has missing groups.
+        if ctx.has_named_speakers_eff && (it.multi_hop || deficit_b) {
+            let single_qsp: Option<&str> = {
+                let mut m: Vec<&str> = speaker_lowers_rank
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|sp| q_toks_eff.iter().any(|qt| qt.eq_ignore_ascii_case(sp)))
+                    .collect();
+                if m.len() == 1 { m.pop() } else { None }
+            };
+            let trop_scores =
+                crate::retrieval::graph::tropical_bridge_q16::tropical_max_plus_entity_bridge_q16(
+                    ix,
+                    &plan,
+                    t_own,
+                    t_exact_mask,
+                    q_group_mask,
+                    single_qsp,
+                );
+            let mut trop_ranked: Vec<(u64, usize)> =
+                trop_scores.into_iter().map(|(ti, sc)| (sc, ti)).collect();
+            trop_ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            for (_, ti) in trop_ranked.into_iter().take(2) {
+                if !final_turn_indices.contains(&ti) && !fused_cands.contains(&ti) {
+                    fused_cands.insert(0, ti);
+                }
+            }
+        }
 
         if let Some(cand_ti) = fused_cands.into_iter().next() {
             if final_turn_indices.len() < k {

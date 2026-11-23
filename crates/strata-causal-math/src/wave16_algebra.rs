@@ -134,6 +134,37 @@ pub fn tropical_all_pairs_shortest(n: usize, weighted_edges: &[(usize, usize, u6
     dist
 }
 
+/// Tropical `(max, +)` 2-hop semiring squaring: returns `M^2[i][j] = max_k (M[i][k] + M[k][j])`
+/// over non-zero directed edges (`0` marks unreachable / `-inf` in the tropical semiring).
+pub fn tropical_max_plus_two_hop(n: usize, weighted_edges: &[(usize, usize, u64)]) -> Vec<Vec<u64>> {
+    let mut adj = vec![vec![0u64; n]; n];
+    for &(u, v, w) in weighted_edges {
+        if u < n && v < n && w > adj[u][v] {
+            adj[u][v] = w;
+        }
+    }
+    let mut sq = vec![vec![0u64; n]; n];
+    for i in 0..n {
+        for k in 0..n {
+            let wik = adj[i][k];
+            if wik == 0 {
+                continue;
+            }
+            for j in 0..n {
+                let wkj = adj[k][j];
+                if wkj == 0 {
+                    continue;
+                }
+                let chain = wik.saturating_add(wkj);
+                if chain > sq[i][j] {
+                    sq[i][j] = chain;
+                }
+            }
+        }
+    }
+    sq
+}
+
 /// #704: HodgeRank preference potential & cyclic curl residual decomposition.
 pub fn hodgerank_potential_and_curl(
     n: usize,
@@ -302,4 +333,17 @@ pub fn verify_category_schema(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tropical_max_plus_tests {
+    use super::*;
+
+    #[test]
+    fn tropical_max_plus_two_hop_picks_strongest_chain() {
+        let sq = tropical_max_plus_two_hop(4, &[(0, 1, 10), (1, 3, 25), (0, 2, 12), (2, 3, 15)]);
+        // 0 -> 1 -> 3 = 35 beats 0 -> 2 -> 3 = 27.
+        assert_eq!(sq[0][3], 35);
+        assert_eq!(sq[1][0], 0);
+    }
 }

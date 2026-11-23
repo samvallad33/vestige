@@ -43,6 +43,51 @@ pub(in crate::retrieval) fn is_standing_constraint_utterance(tokens: &[&str]) ->
     false
 }
 
+/// Closed-class first-person habitual aspect detector (distinguishes standing habits/traits
+/// like `"I always run on Sundays"` or `"My routine usually..."` from one-off episodic events).
+/// hardcode-scan: closed-class (1SG pronouns, copula/auxiliaries, and habitual frequency adverbs only).
+pub(in crate::retrieval) fn is_habitual_first_person_utterance(tokens: &[&str]) -> bool {
+    if tokens.len() < 3 {
+        return false;
+    }
+    let low: Vec<String> = tokens.iter().map(|t| t.to_ascii_lowercase()).collect();
+    let has_1sg = low.iter().any(|w| {
+        matches!(
+            w.as_str(),
+            "i" | "my" | "me" | "myself" | "im" | "ive" | "id" | "we" | "our"
+        )
+    });
+    if !has_1sg {
+        return false;
+    }
+    let has_habit_adv = low.iter().any(|w| {
+        matches!(
+            w.as_str(),
+            "always"
+                | "usually"
+                | "often"
+                | "normally"
+                | "generally"
+                | "typically"
+                | "regularly"
+                | "every"
+                | "daily"
+                | "weekly"
+                | "monthly"
+                | "rarely"
+                | "seldom"
+                | "sometimes"
+                | "constantly"
+                | "never"
+        )
+    });
+    if has_habit_adv {
+        return true;
+    }
+    low.windows(2)
+        .any(|w| (w[0] == "used" && w[1] == "to") || (w[0] == "tend" && w[1] == "to"))
+}
+
 /// Score a candidate standing constraint turn `turn_entities` against query high-IC entities
 /// `query_hi_ic_q16` in `Q16.16`.
 ///
@@ -83,6 +128,14 @@ mod tests {
         assert!(is_standing_constraint_utterance(&["Never", "reply", "with", "bullet", "points"]));
         assert!(is_standing_constraint_utterance(&["Make", "sure", "to", "cite", "sources"]));
         assert!(!is_standing_constraint_utterance(&["The", "train", "arrived", "at", "noon"]));
+    }
+
+    #[test]
+    fn detects_first_person_habitual_aspect_separately_from_one_offs() {
+        assert!(is_habitual_first_person_utterance(&["I", "usually", "run", "on", "Sundays"]));
+        assert!(is_habitual_first_person_utterance(&["We", "used", "to", "camp", "there"]));
+        assert!(!is_habitual_first_person_utterance(&["I", "went", "to", "the", "park", "yesterday"]));
+        assert!(!is_habitual_first_person_utterance(&["She", "usually", "drinks", "tea"]));
     }
 
     #[test]

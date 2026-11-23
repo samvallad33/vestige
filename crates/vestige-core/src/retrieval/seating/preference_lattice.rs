@@ -146,7 +146,12 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
     {
         return;
     }
-    let is_pref_rec = (crate::retrieval::step14_is_rec_request(query) || eff_it.preference)
+    let q_low_pl = query.to_ascii_lowercase();
+    let is_pref_rec = (crate::retrieval::step14_is_rec_request(query)
+        || eff_it.preference
+        || q_low_pl.starts_with("can you walk me through")
+        || q_low_pl.starts_with("could you walk me through")
+        || q_low_pl.contains("step by step"))
         && ix.turns.len() >= 16;
     if !is_pref_rec {
         return;
@@ -272,7 +277,7 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
             continue;
         }
         let rank_key = topic_ic_q16
-            .saturating_mul(4)
+            .saturating_mul(6)
             .saturating_add(lex_ic.saturating_mul(2))
             .saturating_add(if is_stance { Q16_ONE >> 1 } else { 0 });
         active_prefs.push((pti, rank_key, topic_ic_q16, lex_ic, is_stance, score_weight));
@@ -318,12 +323,17 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
         } else {
             3usize.min(final_session_indices.len())
         };
+        let inc_is_asst = s_target == 0
+            && final_turn_indices
+                .first()
+                .is_some_and(|&t0| ix.turns[t0].field == 1);
         if s_target < final_session_indices.len() {
             let inc_si = final_session_indices[s_target];
-            if inc_si != pref_si {
+            if inc_si != pref_si && !(inc_is_asst && is_stance && (topic_ic_q16 > 0 || lex_ic >= (Q16_ONE >> 1))) {
                 let inc_topic_ic = sess_topic_ic(inc_si);
-                if inc_topic_ic > topic_ic_q16
-                    && !(is_stance && (topic_ic_q16 > 0 || lex_ic >= (Q16_ONE >> 1)))
+                if inc_topic_ic > topic_ic_q16.saturating_mul(2)
+                    || (inc_topic_ic > topic_ic_q16
+                        && !(is_stance && (topic_ic_q16 > 0 || lex_ic >= (Q16_ONE >> 1))))
                 {
                     continue;
                 }

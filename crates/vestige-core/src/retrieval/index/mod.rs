@@ -2,6 +2,7 @@
 
 use crate::retrieval::*;
 
+pub(in crate::retrieval) mod kite_typed;
 pub(in crate::retrieval) mod normalize;
 pub(in crate::retrieval) mod policy;
 pub(in crate::retrieval) mod postings;
@@ -102,6 +103,16 @@ pub(in crate::retrieval) struct TurnIx {
     pub(in crate::retrieval) question_clause_ids: DetHashSet<u32>,
     pub(in crate::retrieval) answers_question: bool,
     pub(in crate::retrieval) is_short_reply: bool,
+    /// Bare sub-sentential reply (`<= 3` content tokens) directly answering a prior speaker's question.
+    pub(in crate::retrieval) is_bare_spp: bool,
+    /// Closed-class first-person habitual aspect bit (separates standing habits from one-off events).
+    pub(in crate::retrieval) is_habitual: bool,
+    /// Content term IDs appearing only in 2nd-person ("you"/"your") clauses without 1SG ownership.
+    pub(in crate::retrieval) other_speaker_terms: DetHashSet<u32>,
+    /// Ingest-compiled relative-to-epoch temporal intervals `[v_s, v_e)` resolved against `session_ts`.
+    pub(in crate::retrieval) resolved_timex: Vec<(i64, i64)>,
+    /// 4-bit ModalityMask: `0x01 = ASSERTED`, `0x02 = NEGATED`, `0x04 = HYPOTHETICAL`, `0x08 = INTERROGATIVE`.
+    pub(in crate::retrieval) modality_mask: u8,
     pub(in crate::retrieval) is_backchannel: bool,
     pub(in crate::retrieval) anaphoric: bool,
     pub(in crate::retrieval) is_personal_constraint: bool,
@@ -255,6 +266,18 @@ pub(in crate::retrieval) struct Index {
     pub(in crate::retrieval) spatial_events: Vec<crate::retrieval::graph::torrens::SpatialEvent>,
     /// Lazy cache for corpus-wide Fellegi-Sunter role-entity aliases.
     pub(in crate::retrieval) fellegi_aliases: OnceLock<Vec<(u32, u32)>>,
+    /// Per-speaker standing trait bag (`speaker_lower -> top high-IC (term_id, weight_q16)`),
+    /// gathered from first-person turns with 2x weight on habitual aspect turns.
+    pub(in crate::retrieval) speaker_trait_bags: std::collections::BTreeMap<String, Vec<(u32, u64)>>,
+    /// Lazy KITE upward-cone typed facet index (WordNet 3.1 synsets + Wikidata containers).
+    pub(in crate::retrieval) kite: OnceLock<kite_typed::KiteTypedIndex>,
+}
+
+impl Index {
+    pub(in crate::retrieval) fn kite_index(&self) -> &kite_typed::KiteTypedIndex {
+        self.kite
+            .get_or_init(|| kite_typed::build_kite_typed_index(&self.turns))
+    }
 }
 
 pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Index {
@@ -539,11 +562,148 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
             let qshape = analyze_question(&mut vocab, prose_body, is_question, p.enable_stemming, &speaker_names);
             let is_pure_info_question = qshape.is_pure;
             let anaphoric = raw.iter().take(12).any(|w| ANAPHORS.contains(&w.as_str()));
-            let has_temporal = raw.iter().any(|w| {
-                token_is_temporal_word(w.as_str())
-                    || matches!(w.as_str(), "am" | "pm")
-                    || (w.len() >= 3 && (w.ends_with("st") || w.ends_with("nd") || w.ends_with("rd") || w.ends_with("th")) && w[..w.len()-2].chars().all(|c| c.is_ascii_digit()))
-            });
+            let raw_refs_idx: Vec<&str> = raw.iter().map(String::as_str).collect();
+            let is_habitual =
+                crate::retrieval::seating::standing_constraint_q16::is_habitual_first_person_utterance(
+                    &raw_refs_idx,
+                );
+            // 4-bit ModalityMask (`0x01 = ASSERTED`, `0x02 = NEGATED`, `0x04 = HYPOTHETICAL`, `0x08 = INTERROGATIVE`).
+            // hardcode-scan: closed-class (negation, epistemic/prospective hypothetical modals, interrogative markers)
+            let modality_mask: u8 = {
+                let mut mm: u8 = 0;
+                if is_question {
+                    mm |= 0x08;
+                }
+                let has_neg_m = raw.iter().any(|w| {
+                    matches!(
+                        w.as_str(),
+                        "not" | "never" | "no" | "none" | "neither" | "dont" | "didnt" | "wasnt"
+                            | "werent" | "cant" | "cannot" | "wont" | "havent" | "hasnt" | "hadnt"
+                    )
+                });
+                if has_neg_m {
+                    mm |= 0x02;
+                }
+                let low_body_m = prose_body.to_ascii_lowercase();
+                // hardcode-scan: closed-class (completed past-tense auxiliaries vs prospective markers)
+                let has_past_realis = low_body_m.contains("yesterday")
+                    || low_body_m.contains("last ")
+                    || low_body_m.contains(" ago")
+                    || raw.iter().any(|w| {
+                        matches!(
+                            w.as_str(),
+                            "went" | "did" | "was" | "were" | "had" | "made" | "finished" | "saw"
+                        )
+                    });
+                let is_pure_prospective = (low_body_m.contains("off to go ")
+                    || low_body_m.contains("thinking about ")
+                    || low_body_m.contains("planning to ")
+                    || low_body_m.contains("plan to ")
+                    || low_body_m.contains("gonna ")
+                    || low_body_m.contains("going to ")
+                    || low_body_m.contains("might go ")
+                    || low_body_m.contains("maybe we can"))
+                    && !has_past_realis;
+                if is_pure_prospective {
+                    mm |= 0x04;
+                }
+                if !is_question && !is_pure_prospective {
+                    mm |= 0x01;
+                }
+                mm
+            };
+            // Relative-to-epoch timex compiler at ingest: compile relative dates ("last Saturday",
+            // "two Saturdays ago", "yesterday", "last year") against `ts` into canonical `[v_s, v_e)`
+            // spans and normalized calendar month/year features.
+            let resolved_timex = if ts > 0 {
+                crate::retrieval::graph::bitemporal_heideltime::compile_ingest_timex_anchors(
+                    &raw_refs_idx,
+                    ts,
+                )
+            } else {
+                Vec::new()
+            };
+            if !resolved_timex.is_empty() {
+                let (sess_y, _, _) =
+                    crate::retrieval::graph::bitemporal_heideltime::epoch_ts_to_ymd_tokens(ts);
+                let mut seen_timex_tok: DetHashSet<String> = DetHashSet::default();
+                for &(iv_s, iv_e) in &resolved_timex {
+                    let mid = iv_s + (iv_e - iv_s) / 2;
+                    let (ry, rm, _rd) =
+                        crate::retrieval::graph::bitemporal_heideltime::epoch_ts_to_ymd_tokens(mid);
+                    let y_str = ry.to_string();
+                    if (ry != sess_y || (iv_e - iv_s) <= 45 * 86_400)
+                        && seen_timex_tok.insert(y_str.clone())
+                    {
+                        let yid = vocab.intern(&y_str);
+                        feats.push(Feat {
+                            id: yid,
+                            w: 0.72,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                    }
+                    if (iv_e - iv_s) <= 45 * 86_400 && seen_timex_tok.insert(rm.to_string()) {
+                        let mid_id = vocab.intern(rm);
+                        feats.push(Feat {
+                            id: mid_id,
+                            w: 0.72,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                    }
+                }
+            }
+            // Strict speaker-attributed predicates (named speakers): identify content terms
+            // appearing ONLY in 2nd-person ("you"/"your") clauses without 1st-person ownership.
+            let mut other_speaker_terms: DetHashSet<u32> = DetHashSet::default();
+            if !speaker.is_empty() && speaker != "user" && speaker != "assistant" {
+                let mut own_1sg_terms: DetHashSet<u32> = DetHashSet::default();
+                for clause in prose_body.split(['.', '!', '?', ';']) {
+                    let c_toks = raw_tokens(clause);
+                    if c_toks.is_empty() {
+                        continue;
+                    }
+                    // hardcode-scan: closed-class (1SG and 2SG personal pronouns only)
+                    let has_1sg_c = c_toks.iter().any(|w| {
+                        matches!(w.as_str(), "i" | "my" | "me" | "myself" | "im" | "ive" | "id" | "we" | "our")
+                    });
+                    let has_2sg_c = c_toks.iter().any(|w| {
+                        matches!(w.as_str(), "you" | "your" | "yours" | "yourself" | "youre" | "youve" | "youd" | "youll")
+                    });
+                    if has_2sg_c && !has_1sg_c {
+                        for w in &c_toks {
+                            if is_content(w)
+                                && let Some(cid) = vocab.get(w)
+                            {
+                                other_speaker_terms.insert(cid);
+                            }
+                        }
+                    } else if has_1sg_c {
+                        for w in &c_toks {
+                            if is_content(w)
+                                && let Some(cid) = vocab.get(w)
+                            {
+                                own_1sg_terms.insert(cid);
+                            }
+                        }
+                    }
+                }
+                for owned in own_1sg_terms {
+                    other_speaker_terms.remove(&owned);
+                }
+            }
+            let has_temporal = !resolved_timex.is_empty()
+                || raw.iter().any(|w| {
+                    token_is_temporal_word(w.as_str())
+                        || matches!(w.as_str(), "am" | "pm")
+                        || (w.len() >= 3
+                            && (w.ends_with("st")
+                                || w.ends_with("nd")
+                                || w.ends_with("rd")
+                                || w.ends_with("th"))
+                            && w[..w.len() - 2].chars().all(|c| c.is_ascii_digit()))
+                });
             let has_numeric = prose_body.chars().any(|c| c.is_ascii_digit());
             let has_spatial = !entities.is_empty() && raw.iter().any(|w| closed_locative(w));
             let has_causal = !t.links.is_empty();
@@ -636,6 +796,11 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 question_clause_ids: qshape.clause_ids,
                 answers_question: false,
                 is_short_reply: false,
+                is_bare_spp: false,
+                is_habitual,
+                other_speaker_terms,
+                resolved_timex,
+                modality_mask,
                 is_backchannel,
                 anaphoric,
                 is_personal_constraint,
@@ -693,6 +858,13 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 {
                     turns[b].is_short_reply = true;
                 }
+                if turns[b].answers_question
+                    && !turns[b].is_question
+                    && !turns[b].is_backchannel
+                    && turns[b].content.len() <= 3
+                {
+                    turns[b].is_bare_spp = true;
+                }
             }
         }
     }
@@ -743,6 +915,23 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 sb.add(2, bf, 1.0);
                 turn_own_bags[ti].add(2, bf, 1.0);
                 turn_bags[ti].add(2, bf, 1.0);
+            }
+            // Bare-SPP Ellipsis Fusion: fuse 1-3 word sub-sentential replies ("Barely!",
+            // "Last Tuesday.") with their parent question's inheritable open-class predicates
+            // directly into `turn_own_bags[ti]` at index time so `t_own` & `t_exact_mask`
+            // carry the question's predicate terms onto the gold answer turn.
+            if p.enable_carry && pos > 0 && t.is_bare_spp {
+                let src = &turns[members[pos - 1]];
+                let field = t.field;
+                let spp_feats: Vec<Feat> = src
+                    .feats
+                    .iter()
+                    .copied()
+                    .filter(|f| f.inheritable)
+                    .collect();
+                for f in spp_feats {
+                    turn_own_bags[ti].add_inherited(field, f, 0.65);
+                }
             }
             // In named-speaker dialogues (`LoCoMo`), a follow-up question does NOT state the
             // previous speaker's facts; in `user`/`assistant` dialogues, user follow-up questions
@@ -969,6 +1158,56 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
     let (bridge_vocab, turn_bridge_postings, ppmi_neighbors) =
         postings::build_bridge_postings_and_ppmi(p, &vocab, &turns, &t_own_stats);
 
+    // Speaker-Scoped Standing Trait Bag (named-speaker dialogues):
+    // Gather high-IC predicates from each speaker's first-person declarative turns (`I`/`my`/`me`),
+    // weighting habitual aspect turns 2x and skipping 2nd-person `other_speaker_terms`.
+    let mut speaker_trait_bags: std::collections::BTreeMap<String, Vec<(u32, u64)>> =
+        std::collections::BTreeMap::new();
+    {
+        let ns_u32 = (session_turns.len() as u32).max(1);
+        let trait_df_cap = (ns_u32 * 2 / 3).clamp(3, 28);
+        let mut raw_traits: std::collections::BTreeMap<String, std::collections::BTreeMap<u32, u64>> =
+            std::collections::BTreeMap::new();
+        for (ti, tr) in turns.iter().enumerate() {
+            if tr.is_question
+                || tr.is_backchannel
+                || turn_superseded.get(ti).copied().unwrap_or(false)
+                || tr.speaker.is_empty()
+                || tr.speaker == "user"
+                || tr.speaker == "assistant"
+            {
+                continue;
+            }
+            let sp_key = tr.speaker.to_ascii_lowercase();
+            let toks = raw_tokens(&turn_prose_cache[ti]);
+            // hardcode-scan: closed-class (1SG personal pronouns only)
+            let has_1sg = toks.iter().any(|w| {
+                matches!(w.as_str(), "i" | "my" | "me" | "myself" | "im" | "ive" | "id" | "we" | "our")
+            });
+            if !has_1sg && !tr.is_habitual {
+                continue;
+            }
+            let mult: u64 = if tr.is_habitual { 2 } else { 1 };
+            let entry = raw_traits.entry(sp_key).or_default();
+            for &cid in &tr.content {
+                if tr.other_speaker_terms.contains(&cid) {
+                    continue;
+                }
+                let df = s_stats.df.get(&cid).copied().unwrap_or(0);
+                if (1..=trait_df_cap).contains(&df) {
+                    let ic = crate::retrieval::fusion::aspect_coverage_q16::aspect_ic_q16(df, ns_u32);
+                    *entry.entry(cid).or_insert(0) += ic.saturating_mul(mult);
+                }
+            }
+        }
+        for (sp, map) in raw_traits {
+            let mut vec: Vec<(u32, u64)> = map.into_iter().collect();
+            vec.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            vec.truncate(64);
+            speaker_trait_bags.insert(sp, vec);
+        }
+    }
+
     Index {
         vocab,
         session_ids,
@@ -1012,5 +1251,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
         torrens_superseded,
         spatial_events,
         fellegi_aliases: OnceLock::new(),
+        speaker_trait_bags,
+        kite: OnceLock::new(),
     }
 }

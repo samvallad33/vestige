@@ -96,7 +96,34 @@ pub(in crate::retrieval) fn compute_bipartite_ppr_lifts_q16(
         restart_q16[si] = (w.saturating_mul(Q16_ONE)) / seed_sum;
     }
 
-    let _ = plan;
+    let mut q_term_ids: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let mut s_mask_local = vec![0u64; ns];
+    let n_qg = plan.groups.len().min(64);
+    let mask_limit = if n_qg == 64 {
+        u64::MAX
+    } else if n_qg == 0 {
+        0
+    } else {
+        (1u64 << n_qg) - 1
+    };
+    for qt in &plan.terms {
+        q_term_ids.insert(qt.id);
+        if qt.exact_hit
+            && let Some(g) = qt.group
+            && g < 64
+        {
+            let bit = 1u64 << g;
+            if let Some(post) = ix.s_postings.get(qt.id as usize) {
+                for &si_u32 in post {
+                    let si = si_u32 as usize;
+                    if si < ns {
+                        s_mask_local[si] |= bit;
+                    }
+                }
+            }
+        }
+    }
+
     let mut ent_postings: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (si, ents) in ix.session_entities.iter().enumerate() {
         for &eid in ents {
@@ -118,10 +145,17 @@ pub(in crate::retrieval) fn compute_bipartite_ppr_lifts_q16(
         }
     };
 
-    for sessions in ent_postings.values() {
+    // MemORAI DWPR (2026): query-conditioned edge weights amplify query-relevant entity/rare
+    // bridges by 2.5x while high-DF hubs stay damped by 1/df.
+    for (eid, sessions) in &ent_postings {
         let df = sessions.len() as u32;
         if (ENT_MIN_DF..=ENT_MAX_DF).contains(&df) {
-            let w = (ENT_EDGE_W.saturating_mul(Q16_ONE)) / (df as u64);
+            let base_w = (ENT_EDGE_W.saturating_mul(Q16_ONE)) / (df as u64);
+            let w = if q_term_ids.contains(eid) {
+                base_w.saturating_mul(5) / 2
+            } else {
+                base_w
+            };
             for (i, &sa) in sessions.iter().enumerate() {
                 for &sb in &sessions[(i + 1)..] {
                     add_edge(sa, sb, w);
@@ -129,10 +163,15 @@ pub(in crate::retrieval) fn compute_bipartite_ppr_lifts_q16(
             }
         }
     }
-    for sessions in rare_postings.values() {
+    for (tid, sessions) in &rare_postings {
         let df = sessions.len() as u32;
         if (RARE_MIN_DF..=RARE_MAX_DF).contains(&df) {
-            let w = (RARE_EDGE_W.saturating_mul(Q16_ONE)) / (df as u64);
+            let base_w = (RARE_EDGE_W.saturating_mul(Q16_ONE)) / (df as u64);
+            let w = if q_term_ids.contains(tid) {
+                base_w.saturating_mul(5) / 2
+            } else {
+                base_w
+            };
             for (i, &sa) in sessions.iter().enumerate() {
                 for &sb in &sessions[(i + 1)..] {
                     add_edge(sa, sb, w);
@@ -147,6 +186,14 @@ pub(in crate::retrieval) fn compute_bipartite_ppr_lifts_q16(
                 add_edge(si, prev, w);
             }
         }
+        // EngramRAG (2026) R_SUPERSEDES = 2.5 weight along explicit state-revision edges.
+        if let Some(sups) = ix.session_supersedes_back.get(si) {
+            for &prev in sups {
+                if prev < ns {
+                    add_edge(si, prev, (Q16_ONE * 5) / 2);
+                }
+            }
+        }
         if let Some(prev_ep) = ix.session_episode_prev[si] {
             if prev_ep < ns {
                 add_edge(si, prev_ep, Q16_ONE >> 1);
@@ -157,10 +204,60 @@ pub(in crate::retrieval) fn compute_bipartite_ppr_lifts_q16(
         return out;
     }
 
-    let mut adj: Vec<Vec<(usize, u64)>> = vec![Vec::new(); ns];
+    let mut raw_adj: Vec<Vec<(usize, u64)>> = vec![Vec::new(); ns];
     for ((a, b), w) in pair_w {
-        adj[a].push((b, w));
-        adj[b].push((a, w));
+        raw_adj[a].push((b, w));
+        raw_adj[b].push((a, w));
+    }
+
+    // ISO-RAG (Sep 2026) Localized Cheeger Isoperimetric Edge Mask:
+    // Discrete node volume `v(u) = Q16 / (1 + deg(u))`; compute 1-hop ball volume `V(S_u)`
+    // and 2-hop boundary volume `V(dS_u)` -> local Cheeger ratio `phi_u = V(dS_u) * Q16 / (V(S_u) + 1)`.
+    // Prune hub-leaking edges where `min(phi_u, phi_v) * Q16 < beta * max(phi_u, phi_v)` (`beta = 0.35`),
+    // while always keeping each node's top-2 strongest incident edges so no node is isolated.
+    let node_vol: Vec<u64> = raw_adj
+        .iter()
+        .map(|nbrs| Q16_ONE / (1 + nbrs.len() as u64))
+        .collect();
+    let mut phi_q16 = vec![Q16_ONE; ns];
+    for u in 0..ns {
+        if raw_adj[u].is_empty() {
+            continue;
+        }
+        let mut s_u = std::collections::BTreeSet::new();
+        s_u.insert(u);
+        let mut vol_s = node_vol[u];
+        for &(v, _) in &raw_adj[u] {
+            if s_u.insert(v) {
+                vol_s = vol_s.saturating_add(node_vol[v]);
+            }
+        }
+        let mut bd_seen = std::collections::BTreeSet::new();
+        let mut vol_bd = 0u64;
+        for &(v, _) in &raw_adj[u] {
+            for &(w, _) in &raw_adj[v] {
+                if !s_u.contains(&w) && bd_seen.insert(w) {
+                    vol_bd = vol_bd.saturating_add(node_vol[w]);
+                }
+            }
+        }
+        phi_q16[u] = (vol_bd.saturating_mul(Q16_ONE)) / vol_s.max(1);
+    }
+    const CHEEGER_BETA_Q16: u64 = 22_938; // 0.35 in Q16.16
+    let mut adj: Vec<Vec<(usize, u64)>> = vec![Vec::new(); ns];
+    for u in 0..ns {
+        let mut sorted = raw_adj[u].clone();
+        sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for (idx, &(v, w)) in sorted.iter().enumerate() {
+            let pu = phi_q16[u];
+            let pv = phi_q16[v];
+            let lo = pu.min(pv);
+            let hi = pu.max(pv);
+            let iso_ok = idx < 2 || hi == 0 || lo.saturating_mul(Q16_ONE) >= hi.saturating_mul(CHEEGER_BETA_Q16);
+            if iso_ok {
+                adj[u].push((v, w));
+            }
+        }
     }
 
     let ppr = run_ppr_rwr_q16(ns, &adj, &restart_q16);
@@ -171,21 +268,39 @@ pub(in crate::retrieval) fn compute_bipartite_ppr_lifts_q16(
         .map(|(_, &v)| v)
         .max()
         .unwrap_or(0);
-    if max_non_top0 == 0 {
-        return out;
+    if max_non_top0 > 0 {
+        let coeff_q16 = if multi_or_partial {
+            PPR_COEFF_MULTI_Q16
+        } else {
+            PPR_COEFF_BASE_Q16
+        };
+        for (si, &mass) in ppr.iter().enumerate() {
+            if si != top0 && mass > 0 {
+                let norm_q16 = (mass.saturating_mul(Q16_ONE)) / max_non_top0;
+                out[si] = (((smax_q16.saturating_mul(coeff_q16)) >> Q16_SHIFT)
+                    .saturating_mul(norm_q16))
+                    >> Q16_SHIFT;
+            }
+        }
     }
 
-    let coeff_q16 = if multi_or_partial {
-        PPR_COEFF_MULTI_Q16
-    } else {
-        PPR_COEFF_BASE_Q16
-    };
-    for (si, &mass) in ppr.iter().enumerate() {
-        if si != top0 && mass > 0 {
-            let norm_q16 = (mass.saturating_mul(Q16_ONE)) / max_non_top0;
-            out[si] = (((smax_q16.saturating_mul(coeff_q16)) >> Q16_SHIFT)
-                .saturating_mul(norm_q16))
-                >> Q16_SHIFT;
+    // Group Steiner Tree Subgraph Bridge (G-Retriever `2402.07630` / Group Steiner `2508.20543`):
+    // Connect uncovered query-group terminals through minimum-cost ISO-RAG pruned Steiner paths.
+    if multi_or_partial && n_qg >= 2 {
+        let steiner_cap = (smax_q16.saturating_mul(7_209)) >> Q16_SHIFT; // 0.11 * smax
+        let steiner_lifts = crate::retrieval::graph::group_steiner_q16::compute_group_steiner_lifts_q16(
+            ns,
+            &adj,
+            base_sight_q16,
+            &s_mask_local,
+            mask_limit,
+            top0,
+            steiner_cap,
+        );
+        for si in 0..ns {
+            if si != top0 && steiner_lifts[si] > 0 {
+                out[si] = out[si].saturating_add(steiner_lifts[si]);
+            }
         }
     }
     out

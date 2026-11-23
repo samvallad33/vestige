@@ -47,6 +47,9 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             q_bigrams.insert((pair[0], pair[1]));
         }
     }
+    let g_surp = crate::retrieval::lexical::query_frame_ic::compute_query_surprisal_weights(ix, plan);
+    let slot_kind = crate::retrieval::lexical::query_frame_ic::query_slot_witness_kind(&q.text);
+    let has_surp_contrast = g_surp.iter().any(|&w| (w - 1.0).abs() > 0.02);
     let t_own_prep = prepare_plan(&plan, &ix.t_own_stats, p);
     let t_prep = prepare_plan(&plan, &ix.t_stats, p);
     for ti in collect_posting_candidates(&ix.t_postings, &plan, nt) {
@@ -55,6 +58,31 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         let (mut sc, m, _) = bm25f_prepared(&ix.turn_bags[ti], &plan, &t_prep, &ix.t_stats, p, &fl);
         if sc <= 0.0 && sc_own <= 0.0 {
             continue;
+        }
+        // #1 Meta-Discourse Scaffold Down-Weighting via Corpus-Induced Surprisal Gap:
+        if has_surp_contrast && em_own != 0 {
+            let mut sum_w = 0.0f32;
+            let mut cnt = 0usize;
+            for (gi, &gw) in g_surp.iter().enumerate().take(64) {
+                if (em_own & (1u64 << gi)) != 0 {
+                    sum_w += gw;
+                    cnt += 1;
+                }
+            }
+            if cnt > 0 {
+                let mult = (sum_w / cnt as f32).clamp(0.72, 1.24);
+                sc_own *= mult;
+                sc *= mult;
+            }
+        }
+        // #10 Syntactic Slot-Witness Presence Bonus:
+        if slot_kind != crate::retrieval::lexical::query_frame_ic::SlotWitnessKind::None && sc_own > 0.0 {
+            let sw_q16 = crate::retrieval::lexical::query_frame_ic::slot_witness_bonus_q16(ix, ti, slot_kind);
+            if sw_q16 > 65_536 {
+                let sw_mult = (sw_q16 as f32) / 65_536.0;
+                sc_own *= sw_mult;
+                sc *= sw_mult;
+            }
         }
         let prox = p.enable_proximity && proximity_hit(t.seq.iter(), &plan, p.proximity_span);
         if prox {
@@ -73,13 +101,42 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 sc *= p.preference_boost;
                 sc_own *= p.preference_boost;
             }
-        } else if persona_infer_on && is_structural_personal_turn(ix, ti) {
-            sc *= 1.40;
-            sc_own *= 1.40;
+        } else if persona_infer_on && (is_structural_personal_turn(ix, ti) || (t.is_habitual && !t.is_question)) {
+            let mult = if is_structural_personal_turn(ix, ti) { 1.40 } else { 1.22 };
+            sc *= mult;
+            sc_own *= mult;
+        }
+        // Anderson ACT-R Fan Effect (rare personal-anchor lift on declarative turns):
+        // When a turn matches low-fan (`df <= 3`) exact non-speaker query cues, amplify by
+        // monotone ACT-R fan strength so one-of-a-kind personal anchors outrank high-fan hubs.
+        if sc_own > 0.0 && !t.is_question && !t.is_backchannel && nt >= 16 {
+            let q16_one = crate::retrieval::fusion::aspect_coverage_q16::Q16_ONE;
+            let mut best_fan_q16: u64 = q16_one;
+            for qt in &plan.terms {
+                if !qt.exact_hit || !t.content.contains(&qt.id) {
+                    continue;
+                }
+                let tdf = ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(0);
+                if (1..=3).contains(&tdf) {
+                    let f_q16 = crate::retrieval::graph::actr::actr_fan_strength_q16(tdf, nt as u32);
+                    if f_q16 > best_fan_q16 {
+                        best_fan_q16 = f_q16;
+                    }
+                }
+            }
+            if best_fan_q16 > q16_one {
+                // Bounded gentle scale: up to ~1.09x for fan == 1 personal anchors.
+                let extra = ((best_fan_q16 - q16_one) as f32) / (65_536.0 * 4.0);
+                let fan_mult = 1.0 + extra.min(0.09);
+                sc_own *= fan_mult;
+                sc *= fan_mult;
+            }
         }
         if sc_own > 0.0 {
             let dph_bonus = (crate::retrieval::lexical::dph::dph_bag_q16(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats) as f32) / 65536.0;
-            let add = 0.02 * dph_bonus;
+            // Pillar 7b: Clinchant-Gaussier Log-Logistic Information-Based (`LGD`) sharpening on short turns.
+            let lgd_bonus = (crate::retrieval::lexical::lgd_q16::lgd_bag_q16(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats) as f32) / 65536.0;
+            let add = 0.02 * dph_bonus + 0.018 * lgd_bonus;
             sc_own += add;
             sc += add;
         }
@@ -98,6 +155,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
         if !q_bigrams.is_empty() && t.seq.len() >= 2 {
             let mut bigram_bonus = 0.0f32;
+            let mut ppm_bonus = 0.0f32;
             let mut matched_bi: DetHashSet<(usize, usize)> = DetHashSet::default();
             for win in t.seq.windows(2) {
                 let (ea, sa) = win[0];
@@ -108,13 +166,30 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 ) {
                     if q_bigrams.contains(&(ga, gb)) && matched_bi.insert((ga, gb)) {
                         bigram_bonus += 0.28 * fl.w[t.field.min(2)] * (g_idf_own[ga] + g_idf_own[gb]);
+                        // Order-2 PPM surprisal bonus when contiguous tokens form a rare collocation.
+                        let surp_q16 = crate::retrieval::lexical::ppm_surprisal::ppm_collocation_surprise_q16(ix, ea, eb);
+                        if surp_q16 > (4 * 65_536) {
+                            ppm_bonus += 0.06 * ((surp_q16 as f32) / 65_536.0);
+                        }
                     }
                 }
             }
             if bigram_bonus > 0.0 {
-                t_own[ti] += bigram_bonus;
-                t_turn_raw[ti] += bigram_bonus;
+                t_own[ti] += bigram_bonus + ppm_bonus;
+                t_turn_raw[ti] += bigram_bonus + ppm_bonus;
             }
+        }
+        // #10 1-WL Local Neighborhood Structural Color alignment: mild tie-break boost when
+        // interrogative query archetype aligns with structural slot shape (no shared words needed).
+        let wl_c = crate::retrieval::lexical::ppm_surprisal::wl1_turn_color(ix, ti);
+        let wl_align = !t.is_question
+            && !t.is_backchannel
+            && ((it.sniper_when && (wl_c & (1 << 6)) != 0)
+                || (it.sniper_how_many && (wl_c & (1 << 7)) != 0)
+                || (it.multi_hop && (wl_c & (1 << 11)) != 0 && t.field == 0));
+        if wl_align && t_own[ti] > 0.0 {
+            t_own[ti] *= 1.03;
+            t_turn_raw[ti] *= 1.03;
         }
         t_mask[ti] = m;
         t_exact_mask[ti] = em_own;
