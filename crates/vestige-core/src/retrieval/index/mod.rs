@@ -155,6 +155,10 @@ pub(in crate::retrieval) struct TurnIx {
     pub(in crate::retrieval) raw_links: Vec<TurnLink>,
     /// True when the turn contains an executed structured `[tool_call ...]` receipt block.
     pub(in crate::retrieval) has_tool_call: bool,
+    /// True when any `[tool_call <fn>(...)]` in this turn invokes a state-mutating CRUD verb.
+    pub(in crate::retrieval) tool_has_mutation: bool,
+    /// Executed `[tool_call <fn>(...)]` function names parsed at ingest time (empty on plain chat).
+    pub(in crate::retrieval) tool_names: Vec<String>,
     /// Ingest-time sliding-window within-session coreference entity IDs bound onto
     /// anaphoric follow-up turns (`it`, `there`, `he`, `she`, definite NPs) without
     /// altering BM25F document lengths.
@@ -494,7 +498,36 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
             // Stream 3: Structured `[tool_call ...]` receipt field (counts_len:false, inheritable:false).
             // Keeps entity handles (`ORD-6014`, `BK-1000`), dollar amounts, statuses, and product values
             // searchable without inflating BM25F document length `dl` with serialized JSON boilerplate.
+            let mut tool_names: Vec<String> = Vec::new();
+            let mut tool_has_mutation = false;
             if let Some(receipt) = tool_receipt_opt {
+                // Extract executed `[tool_call <fn>(` names for deterministic CRUD polarity alignment.
+                let mut rest = receipt;
+                while let Some(pos) = rest.find("[tool_call ") {
+                    let after = &rest[pos + "[tool_call ".len()..];
+                    let end = after
+                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-' && c != '.')
+                        .unwrap_or(after.len());
+                    if end > 0 {
+                        let fname = after[..end].to_ascii_lowercase();
+                        // hardcode-scan: closed-class (CRUD state-mutating verb prefixes for tool protocols)
+                        let is_mut = [
+                            "add_", "update_", "process_", "create_", "cancel_", "delete_",
+                            "remove_", "modify_", "edit_", "set_", "change_", "submit_",
+                            "place_", "apply_", "issue_", "refund_", "exchange_", "book_",
+                            "rebook_", "patch_", "post_", "put_", "write_",
+                        ]
+                        .iter()
+                        .any(|p| fname.starts_with(p));
+                        if is_mut {
+                            tool_has_mutation = true;
+                        }
+                        if !tool_names.contains(&fname) {
+                            tool_names.push(fname);
+                        }
+                    }
+                    rest = &after[end..];
+                }
                 let mut seen_rcpt: DetHashSet<u32> = DetHashSet::default();
                 for handle in extract_exact_technical_handles(receipt) {
                     let hid = vocab.intern(&handle);
@@ -929,6 +962,8 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 role_objs,
                 raw_links: t.links.clone(),
                 has_tool_call,
+                tool_has_mutation,
+                tool_names,
                 coref_entities: Vec::new(),
                 body: if replay_dump_path().is_some() {
                     prose_body.to_string()
