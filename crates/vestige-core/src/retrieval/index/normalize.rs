@@ -469,3 +469,133 @@ pub(in crate::retrieval) fn digit_token_set(text: &str) -> DetHashSet<String> {
 pub(in crate::retrieval) fn closed_locative(w: &str) -> bool {
     matches!(w, "in" | "at" | "to" | "from" | "on" | "into" | "over" | "by")
 }
+
+/// Split an ASCII lowercase compound word (`len >= 7`) into two WordNet-attested
+/// content words (`left`, `right`) of length >= 3 (e.g. `roadtrip -> ("road", "trip")`,
+/// `bookshelf -> ("book", "shelf")`), skipping regular derivational/inflectional endings.
+/// hardcode-scan: closed-class (English derivational/inflectional suffixes only).
+pub(in crate::retrieval) fn split_wordnet_compound(w: &str) -> Option<(&str, &str)> {
+    let bytes = w.as_bytes();
+    if bytes.len() < 7 || !bytes.iter().all(|b| b.is_ascii_lowercase()) {
+        return None;
+    }
+    if [
+        "ing", "tion", "sion", "ment", "ness", "able", "ible", "less", "ship", "hood", "ward",
+        "ical", "ious", "eous", "ally", "ated", "ting", "ized", "ised",
+    ]
+    .iter()
+    .any(|suf| w.ends_with(suf))
+    {
+        return None;
+    }
+    let mut best: Option<(&str, &str, usize)> = None;
+    for k in 3..=(bytes.len() - 3) {
+        let left = &w[..k];
+        let right = &w[k..];
+        if !crate::retrieval::query::tokens::is_content(left)
+            || !crate::retrieval::query::tokens::is_content(right)
+        {
+            continue;
+        }
+        if crate::wordnet::senses(left).is_empty() || crate::wordnet::senses(right).is_empty() {
+            continue;
+        }
+        // Prefer balanced splits (larger min(left.len, right.len)).
+        let balance = left.len().min(right.len());
+        if best.is_none_or(|(_, _, b)| balance > b) {
+            best = Some((left, right, balance));
+        }
+    }
+    best.map(|(l, r, _)| (l, r))
+}
+
+/// Deterministic English derivational stem normalization (`-tion/-sion/-ment/-ical/-al/-ity/-ness/-ive/-ous`)
+/// verified strictly against Princeton WordNet 3.1 (`wordnet::senses`), returning
+/// attested base lemmas (e.g. `educational -> ["education", "educate"]`).
+/// hardcode-scan: closed-class (English derivational morphology suffixes only).
+pub(in crate::retrieval) fn derivational_base_stems(w: &str) -> Vec<String> {
+    let bytes = w.as_bytes();
+    if bytes.len() < 6 || !bytes.iter().all(|b| b.is_ascii_lowercase()) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut try_push = |cand: String| {
+        if cand.len() >= 4
+            && cand != w
+            && !crate::wordnet::senses(&cand).is_empty()
+            && !out.contains(&cand)
+        {
+            out.push(cand);
+        }
+    };
+    // hardcode-scan: closed-class (English derivational morphology suffix rules only).
+    const SUFFIX_RULES: &[(&str, &[&str])] = &[
+        ("ational", &["ation", "ate"]),
+        ("ation", &["ate", ""]),
+        ("ition", &["ite", ""]),
+        ("tion", &["te", "t", ""]),
+        ("sion", &["de", "d", "se", ""]),
+        ("ment", &[""]),
+        ("ical", &["ic", "y", ""]),
+        ("ally", &["al", ""]),
+        ("al", &["", "e"]),
+        ("ity", &["", "e"]),
+        ("ness", &[""]),
+        ("ive", &["", "e"]),
+        ("ous", &["", "e", "y"]),
+        ("ist", &["", "ism", "e"]),
+    ];
+    for &(suf, repls) in SUFFIX_RULES {
+        if let Some(base) = w.strip_suffix(suf)
+            && base.len() >= 3
+        {
+            for &rep in repls {
+                try_push(format!("{base}{rep}"));
+            }
+        }
+    }
+    out
+}
+
+/// True when two lowercase ASCII words differ by at most 1 single-character edit
+/// (insertion, deletion, substitution, or adjacent transposition), used strictly
+/// to rescue OOV query typos (`df == 0`, `len >= 6`, e.g. `educaton <-> education`).
+pub(in crate::retrieval) fn ascii_edit_dist_le_1(a: &str, b: &str) -> bool {
+    let ab = a.as_bytes();
+    let bb = b.as_bytes();
+    let la = ab.len();
+    let lb = bb.len();
+    if la.abs_diff(lb) > 1 || la < 5 || lb < 5 {
+        return false;
+    }
+    if la == lb {
+        let mut diffs = Vec::new();
+        for i in 0..la {
+            if ab[i] != bb[i] {
+                diffs.push(i);
+                if diffs.len() > 2 {
+                    return false;
+                }
+            }
+        }
+        return diffs.len() == 1
+            || (diffs.len() == 2
+                && diffs[1] == diffs[0] + 1
+                && ab[diffs[0]] == bb[diffs[1]]
+                && ab[diffs[1]] == bb[diffs[0]]);
+    }
+    let (short, long) = if la < lb { (ab, bb) } else { (bb, ab) };
+    let (mut i, mut j, mut skipped) = (0usize, 0usize, false);
+    while i < short.len() && j < long.len() {
+        if short[i] == long[j] {
+            i += 1;
+            j += 1;
+        } else if !skipped {
+            skipped = true;
+            j += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
