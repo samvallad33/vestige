@@ -490,6 +490,7 @@ pub async fn execute_system_status(
         "fsrsPreview": fsrs_preview,
         // Cognitive
         "cognitiveHealth": cognitive_health,
+        "cognitiveKernel": crate::cognitive_kernel::kernel_telemetry(storage.as_ref()),
         // Automation triggers — Claude uses these to decide when to dream/backup/gc
         "automationTriggers": {
             "lastDreamTimestamp": last_dream.map(|dt| dt.to_rfc3339()),

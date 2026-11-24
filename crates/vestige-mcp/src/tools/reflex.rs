@@ -2375,9 +2375,9 @@ fn compose(g: &mut Global, inp: &Input, lead: &[String]) -> (String, Vec<String>
             }
         }
     }
-    // A belief another session retired goes before background notes.
+    // A belief another session or sibling subagent retired goes before background notes.
     if let Some(ctx) = s.contexts.get(&inp.agent) {
-        for (line, old) in stale::lines(&retired, &inp.session, ctx) {
+        for (line, old) in stale::lines(&retired, &inp.session, &inp.agent, ctx) {
             lines.push((line, Some(format!("{STALE_MARK}{old}"))));
         }
     }
