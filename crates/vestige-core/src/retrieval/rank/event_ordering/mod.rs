@@ -541,7 +541,25 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
         let mut reprojected: Vec<usize> = Vec::with_capacity(target_k);
         let mut secondary_in_sess: Vec<usize> = Vec::new();
         let smax = s_score.iter().copied().fold(0.0f32, f32::max);
+        let strong_eo_sess = final_session_indices
+            .iter()
+            .take(5)
+            .filter(|&&si| smax > 0.0 && s_score.get(si).copied().unwrap_or(0.0) >= 0.42 * smax)
+            .count();
         for (rank_i, &si) in final_session_indices.iter().take(target_k).enumerate() {
+            if rank_i >= strong_eo_sess.max(2)
+                && strong_eo_sess <= 2
+                && !secondary_in_sess.is_empty()
+            {
+                for &sti in &secondary_in_sess {
+                    if reprojected.len() >= 5 {
+                        break;
+                    }
+                    if !reprojected.contains(&sti) {
+                        reprojected.push(sti);
+                    }
+                }
+            }
             if rank_i >= 5 && smax > 0.0 && s_score.get(si).copied().unwrap_or(0.0) < 0.38 * smax {
                 break;
             }
@@ -615,10 +633,15 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
                     reprojected.push(chosen);
                 }
                 if rank_i < 5 {
+                    let max_sec = if strong_eo_sess <= 2 { 3usize } else { 1usize };
+                    let mut added_sec = 0usize;
                     for &uti in &user_turns {
                         if uti != chosen && ctx.t_scene.get(uti).copied().unwrap_or(0.0) > 0.0 {
                             secondary_in_sess.push(uti);
-                            break;
+                            added_sec += 1;
+                            if added_sec >= max_sec {
+                                break;
+                            }
                         }
                     }
                 }

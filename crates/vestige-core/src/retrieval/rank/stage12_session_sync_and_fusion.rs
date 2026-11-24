@@ -2904,6 +2904,93 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             }
         }
 
+        // Universal Anonymous Multi-Session Top-5 Turn Sync (`MSR`, `KU`, `CR`, `TR`):
+        // When `final_session_indices[..5]` holds >= 2 strong distinct sessions (`sight >= 0.45 * smax`)
+        // but `final_turn_indices[..5]` suffers duplicate-session hoarding from `S[0]`, preserve Slot 0
+        // and guarantee each strong Top-5 session gets its best non-backchannel turn in `0..5`.
+        if !is_agg_multi
+            && !is_did_you
+            && !is_pure_pref_stmt
+            && !eff_it.task_under_rules
+            && !eff_it.is_event_sequence
+            && !eff_summary_request(&q.text)
+            && final_turn_indices.len() >= 5
+            && smax > 0.0
+        {
+            let strong_top5_sess: Vec<usize> = final_session_indices
+                .iter()
+                .take(5)
+                .copied()
+                .filter(|&si| !is_rule_only_sess(si) && (s_score[si] + bridge_boost[si]) >= 0.45 * smax)
+                .collect();
+            let mut cur_top5_sess: BTreeSet<usize> = BTreeSet::new();
+            for &ti in final_turn_indices.iter().take(5) {
+                cur_top5_sess.insert(ix.turns[ti].session);
+            }
+            if strong_top5_sess.len() >= 2 && cur_top5_sess.len() < strong_top5_sess.len() {
+                let mut packed: Vec<usize> = Vec::with_capacity(k.max(5));
+                packed.push(final_turn_indices[0]);
+                for &si in &strong_top5_sess {
+                    if packed.len() >= 5 {
+                        break;
+                    }
+                    if packed.iter().any(|&t| ix.turns[t].session == si) {
+                        continue;
+                    }
+                    let best_ti = ix.session_turns[si]
+                        .iter()
+                        .copied()
+                        .filter(|&ti| {
+                            !ix.turns[ti].is_backchannel
+                                && !ix.turns[ti].is_standing_policy
+                                && (is_ku_shape
+                                    || is_have_i
+                                    || !turn_is_superseded(ix, ti))
+                                && t_scene.get(ti).copied().unwrap_or(0.0) > 0.0
+                        })
+                        .max_by(|&a, &b| {
+                            let au = u8::from(
+                                (eff_it.assistant_attribution && ix.turns[a].field == 1)
+                                    || (!eff_it.assistant_attribution
+                                        && ix.turns[a].field == 0
+                                        && !ix.turns[a].is_pure_info_question),
+                            );
+                            let bu = u8::from(
+                                (eff_it.assistant_attribution && ix.turns[b].field == 1)
+                                    || (!eff_it.assistant_attribution
+                                        && ix.turns[b].field == 0
+                                        && !ix.turns[b].is_pure_info_question),
+                            );
+                            let ea = (t_exact_mask.get(a).copied().unwrap_or(0) & q_group_mask).count_ones();
+                            let eb = (t_exact_mask.get(b).copied().unwrap_or(0) & q_group_mask).count_ones();
+                            au.cmp(&bu)
+                                .then_with(|| ea.cmp(&eb))
+                                .then_with(|| {
+                                    t_scene[a]
+                                        .partial_cmp(&t_scene[b])
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                                .then_with(|| b.cmp(&a))
+                        });
+                    if let Some(bt) = best_ti {
+                        packed.push(bt);
+                    }
+                }
+                for &old_ti in &final_turn_indices {
+                    if packed.len() >= k.max(5) {
+                        break;
+                    }
+                    if !packed.contains(&old_ti) {
+                        packed.push(old_ti);
+                    }
+                }
+                if packed.len() >= 5 {
+                    packed.truncate(k.max(5));
+                    final_turn_indices = packed;
+                }
+            }
+        }
+
         // T61 Ultra-Rare Distinctive User-Term Floor (`1 <= user_df <= 2`, e.g. `"subscription"` in c6 IE,
         // `"deck"` in c5 IE):
         // Measures `user_df` (sessions where the USER `tf[0]` used the term, immune to 500-word assistant inflation!).
@@ -4191,7 +4278,12 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             }
         }
         if !merged.is_empty() {
-            merged.truncate(k.max(5));
+            let eo_pool_cap = if crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled(eff_it, &q.text) {
+                96.max(k.max(5))
+            } else {
+                k.max(5)
+            };
+            merged.truncate(eo_pool_cap);
             final_session_indices = merged;
         }
     }
@@ -4205,18 +4297,20 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && !final_session_indices.is_empty()
     {
         let is_sum_sync = eff_summary_request(&q.text);
+        let is_chrono_prog =
+            eff_it.is_event_sequence
+                || crate::retrieval::fusion::summary_silhouette_q16::is_chronological_progression_query(&q.text);
         let target_k = k.max(5);
-        // GeoRAG Multi-Clause Facility Location (`2606.29328`) for `summarization` and `event_ordering`:
-        if is_sum_sync
-            || crate::retrieval::fusion::summary_silhouette_q16::is_chronological_progression_query(&q.text)
-        {
+        // GeoRAG Multi-Clause Facility Location (`2606.29328`) for `summarization` and `event_ordering`
+        // (keeps top-16 multi-clause milestones alive for Matroid 5-era stratification below):
+        if is_sum_sync || is_chrono_prog {
             final_session_indices =
                 crate::retrieval::fusion::summary_silhouette_q16::select_multiclause_facility_sessions_q16(
                     ix,
                     &q.text,
                     &final_session_indices,
                     &s_score,
-                    target_k.max(10),
+                    target_k.max(16),
                     false,
                 );
         }
@@ -4325,7 +4419,9 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         // Pillar 5 (ScalDPP `2604.03240` Incremental Q16 Cholesky MAP-DPP):
         // Break single-cluster redundancy on `event_ordering` while locking Slot 0 (preserve GeoRAG on `summarization`),
         // so Slots `1..target_k` pack orthogonal timeline phases.
-        if !is_sum_sync && final_session_indices.len() >= 4 {
+        // Skip ScalDPP entity-Jaccard repulsion on chronological progression / `event_ordering`
+        // where sibling milestones of the same project legitimately share core entities!
+        if !is_sum_sync && !is_chrono_prog && final_session_indices.len() >= 4 {
             let dpp_cands: Vec<(usize, u64)> = final_session_indices
                 .iter()
                 .take(24)
@@ -4376,6 +4472,14 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 }
                 eff_ts_m[si] = last_ts_m;
             }
+            let mut raw_aspect_bins: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+            for &si in final_session_indices.iter().take(pool_n) {
+                let em = s_exact_mask.get(si).copied().unwrap_or(0);
+                if em != 0 {
+                    raw_aspect_bins.insert(em.trailing_zeros() as usize);
+                }
+            }
+            let single_topic_prog = raw_aspect_bins.len() <= 2;
             let mut m1_bins: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
             let mut m2_bins: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
             let elems: Vec<MatroidElem> = final_session_indices
@@ -4394,10 +4498,17 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         (si.saturating_mul(target_k) / ns_m).min(target_k.saturating_sub(1))
                     };
                     let em = s_exact_mask.get(si).copied().unwrap_or(0);
+                    let strat_ph = (si.saturating_mul(5) / ns_m).min(4);
+                    // Partition single-topic progression milestones across 5 stratigraphic eras
+                    // so `m2_part` never collapses all group-0 gold milestones into a 1-seat cap!
                     let m2_part = if em != 0 {
-                        em.trailing_zeros() as usize
+                        if single_topic_prog {
+                            (em.trailing_zeros() as usize) * 8 + strat_ph
+                        } else {
+                            em.trailing_zeros() as usize
+                        }
                     } else {
-                        100 + (si % 7)
+                        100 + strat_ph
                     };
                     m1_bins.insert(m1_part);
                     m2_bins.insert(m2_part);
@@ -4516,7 +4627,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                                 && ix.turns[best_any].body_for_headers.len() >= 48
                                 && !ix.turns[best_any].is_pure_info_question
                                 && !ix.turns[best_any].is_short_question))
-                        && (force_u || any_bits >= asst_bits || any_sc >= 0.65 * asst_sc);
+                        && (force_u || any_bits > asst_bits || any_sc >= 1.08 * asst_sc);
                     if !keep_user_primary && asst_sc >= 0.55 * any_sc {
                         let pt = (asst_ti != best_any && ix.turns[best_any].field == 0).then_some(best_any);
                         return Some((asst_ti, pt));
@@ -4530,17 +4641,49 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     top5_picks.push(pair);
                 }
             }
+            let strong_sum_sess = final_session_indices
+                .iter()
+                .take(5)
+                .filter(|&&si| smax_sync_d > 0.0 && s_score.get(si).copied().unwrap_or(0.0) >= 0.52 * smax_sync_d)
+                .count();
             let mut used_p0 = false;
+            let mut used_p1 = false;
             for (rank_i, &(chosen, partner)) in top5_picks.iter().enumerate() {
+                if rank_i >= 2
+                    && strong_sum_sess <= 2
+                    && !used_p0
+                    && let Some(&(_, Some(p0))) = top5_picks.first()
+                    && !synced_turns.is_empty()
+                    && t_scene.get(p0).copied().unwrap_or(0.0)
+                        >= 0.50 * t_scene.get(synced_turns[0]).copied().unwrap_or(0.0)
+                {
+                    if !synced_turns.contains(&p0) && synced_turns.len() < target_k {
+                        synced_turns.push(p0);
+                        used_p0 = true;
+                    }
+                }
+                if rank_i >= 3
+                    && strong_sum_sess <= 2
+                    && !used_p1
+                    && let Some(&(_, Some(p1))) = top5_picks.get(1)
+                    && !synced_turns.is_empty()
+                    && t_scene.get(p1).copied().unwrap_or(0.0)
+                        >= 0.50 * t_scene.get(synced_turns[0]).copied().unwrap_or(0.0)
+                {
+                    if !synced_turns.contains(&p1) && synced_turns.len() < target_k {
+                        synced_turns.push(p1);
+                        used_p1 = true;
+                    }
+                }
                 if rank_i == 3
                     && !used_p0
                     && let Some(&(_, Some(p0))) = top5_picks.first()
                     && let Some(&s3) = final_session_indices.get(3)
                     && smax_sync_d > 0.0
-                    && s_score.get(s3).copied().unwrap_or(0.0) < 0.62 * smax_sync_d
+                    && s_score.get(s3).copied().unwrap_or(0.0) < 0.68 * smax_sync_d
                     && !synced_turns.is_empty()
                     && t_scene.get(p0).copied().unwrap_or(0.0)
-                        >= 0.60 * t_scene.get(synced_turns[0]).copied().unwrap_or(0.0)
+                        >= 0.55 * t_scene.get(synced_turns[0]).copied().unwrap_or(0.0)
                 {
                     if !synced_turns.contains(&p0) && synced_turns.len() < target_k {
                         synced_turns.push(p0);
@@ -4552,6 +4695,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 }
                 if let Some(pt) = partner
                     && !(rank_i == 0 && used_p0)
+                    && !(rank_i == 1 && used_p1)
                 {
                     dyad_partners.push(pt);
                 }

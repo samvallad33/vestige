@@ -28,17 +28,21 @@ pub(in crate::retrieval) fn summary_turn_silhouette_score(
     exact_bits: u32,
 ) -> (u8, u32, usize, u64) {
     let t = &ix.turns[ti];
-    let is_substantive_user = u8::from(
-        t.field == 0
-            && !t.is_backchannel
+    let is_substantive = u8::from(
+        !t.is_backchannel
             && !t.is_standing_policy
-            && (!t.is_question || t.content.len() >= 10)
-            && t.body_for_headers.len() >= 36,
+            && ((t.field == 0
+                && (!t.is_question || t.content.len() >= 10)
+                && t.body_for_headers.len() >= 36)
+                || (t.field == 1
+                    && !t.is_question
+                    && exact_bits >= 2
+                    && t.body_for_headers.len() >= 72)),
     );
-    let is_opening = usize::from(turn_pos(ix, ti) == Some(0));
+    let is_opening = usize::from(t.field == 0 && turn_pos(ix, ti) == Some(0));
     let breadth = t.content.len().min(40) + is_opening * 6;
     let sc_q16 = (t_scene.get(ti).copied().unwrap_or(0.0).max(0.0) * 65_536.0) as u64;
-    (is_substantive_user, exact_bits, breadth, sc_q16)
+    (is_substantive, exact_bits, breadth, sc_q16)
 }
 
 /// Spread `sessions` across chronological conversation thirds (`early`, `mid`, `late`) when
