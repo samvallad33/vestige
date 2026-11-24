@@ -567,42 +567,45 @@ pub(in crate::retrieval) fn apply_step13_khipu_turn_bridge(
 /// (`my`, `our`, `i prefer`, `i'd rather`, `rather than`, `instead of`, `i enjoy`, `i like`, `i'm looking for`).
 // hardcode-scan: closed-class (first-person possessive & comparative stance frames)
 pub(in crate::retrieval) fn step14_extract_role_frames(prose_body: &str) -> (Vec<String>, Vec<String>) {
-    if prose_body.trim_end().ends_with('?') {
-        return (Vec::new(), Vec::new());
-    }
     let mut objs: Vec<String> = Vec::new();
-    for clause in prose_body.split(['.', '!', ';', '\n']) {
-        let toks = raw_tokens(clause);
-        if toks.len() < 2 {
+    for sentence in prose_body.split_inclusive(['.', '!', '?', '\n']) {
+        let trimmed = sentence.trim();
+        if trimmed.is_empty() || trimmed.ends_with('?') {
             continue;
         }
-        for i in 0..toks.len() {
-            let w0 = toks[i].as_str();
-            let w1 = toks.get(i + 1).map(String::as_str).unwrap_or("");
-            let span_start = if matches!(w0, "my" | "our") {
-                Some(i + 1)
-            } else if w0 == "prefer"
-                || (matches!(w0, "rather" | "instead") && matches!(w1, "than" | "of"))
-                || (matches!(w0, "i" | "i'd" | "i'm") && matches!(w1, "like" | "enjoy" | "love" | "use"))
-            {
-                Some(if matches!(w1, "than" | "of" | "like" | "enjoy" | "love" | "use") {
-                    i + 2
+        for clause in trimmed.split(';') {
+            let toks = raw_tokens(clause);
+            if toks.len() < 2 {
+                continue;
+            }
+            for i in 0..toks.len() {
+                let w0 = toks[i].as_str();
+                let w1 = toks.get(i + 1).map(String::as_str).unwrap_or("");
+                let span_start = if matches!(w0, "my" | "our") {
+                    Some(i + 1)
+                } else if w0 == "prefer"
+                    || (matches!(w0, "rather" | "instead") && matches!(w1, "than" | "of"))
+                    || (matches!(w0, "i" | "i'd" | "i'm") && matches!(w1, "like" | "enjoy" | "love" | "use"))
+                {
+                    Some(if matches!(w1, "than" | "of" | "like" | "enjoy" | "love" | "use") {
+                        i + 2
+                    } else {
+                        i + 1
+                    })
                 } else {
-                    i + 1
-                })
-            } else {
-                None
-            };
-            if let Some(st) = span_start {
-                let mut taken = 0usize;
-                for tok in toks.iter().skip(st).take(5) {
-                    if is_content(tok) && tok.len() >= 3 {
-                        if !objs.contains(tok) {
-                            objs.push(tok.clone());
-                        }
-                        taken += 1;
-                        if taken >= 3 {
-                            break;
+                    None
+                };
+                if let Some(st) = span_start {
+                    let mut taken = 0usize;
+                    for tok in toks.iter().skip(st).take(5) {
+                        if is_content(tok) && tok.len() >= 3 {
+                            if !objs.contains(tok) {
+                                objs.push(tok.clone());
+                            }
+                            taken += 1;
+                            if taken >= 3 {
+                                break;
+                            }
                         }
                     }
                 }

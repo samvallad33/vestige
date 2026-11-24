@@ -893,7 +893,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             }));
     let asst_attr_eff = !has_named_speakers_eff
         && !is_monologue_corpus
-        && ix.turns.len() >= 24
+        && ix.turns.len() >= 4
         && has_retro_asst_cue;
     let eff_it = QueryIntent {
         preference: it.preference || pref_live_eff,

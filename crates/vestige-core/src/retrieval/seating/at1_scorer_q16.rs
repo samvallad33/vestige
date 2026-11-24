@@ -3351,7 +3351,9 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
                 if !t0_is_stray_rule && trc.session != s_head {
                     continue;
                 }
-                if !ctx.eff_it.assistant_attribution && trc.field != 0 {
+                if !ctx.eff_it.assistant_attribution
+                    && (trc.field != 0 || trc.is_pure_info_question)
+                {
                     continue;
                 }
                 let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
@@ -3365,6 +3367,42 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
             }
             if let Some((win_slot, _, _)) = head_slot {
                 final_turn_indices[..=win_slot].rotate_right(1);
+            } else if !ctx.eff_it.assistant_attribution
+                && let Some(members) = ix.session_turns.get(s_head)
+            {
+                let mut best_direct: Option<(usize, u32, u64)> = None;
+                for &tc in members {
+                    if tc == t0_cur {
+                        continue;
+                    }
+                    let trc = &ix.turns[tc];
+                    if trc.field != 0
+                        || trc.is_pure_info_question
+                        || trc.is_backchannel
+                        || trc.is_standing_policy
+                        || turn_is_superseded(ix, tc)
+                    {
+                        continue;
+                    }
+                    let ownc =
+                        ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+                    let exc =
+                        (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+                    if exc == 0 {
+                        continue;
+                    }
+                    let sync_ok = t0_is_stray_rule
+                        || (exc > ex0_c && ownc > 0);
+                    if sync_ok && best_direct.is_none_or(|(_, be, bo)| (exc, ownc) > (be, bo)) {
+                        best_direct = Some((tc, exc, ownc));
+                    }
+                }
+                if let Some((win_ti, _, _)) = best_direct {
+                    if let Some(pos) = final_turn_indices.iter().position(|&x| x == win_ti) {
+                        final_turn_indices.remove(pos);
+                    }
+                    final_turn_indices.insert(0, win_ti);
+                }
             }
         }
     }

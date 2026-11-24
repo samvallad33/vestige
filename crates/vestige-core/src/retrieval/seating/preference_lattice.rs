@@ -142,7 +142,8 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
         || eff_it.sniper_how_many
         || eff_summary_request(query)
         || c2_named_session(ix, final_turn_indices[0])
-        || ix.session_turns.len() < 16
+        || ix.session_turns.len() < 2
+        || ix.turns.len() < 16
     {
         return;
     }
