@@ -312,6 +312,47 @@ pub(in crate::retrieval) fn apply_speaker_subject_slot0_promotion(
     }
     let head_non_sp = t_exact_mask.get(head0).copied().unwrap_or(0) & non_sp_mask;
 
+    // Adversarial Presupposition Shield: if `head0` (declarative Partner B) is the sole
+    // witness of a rare non-speaker query group (`df <= 8`) absent from all turns of the
+    // queried speaker and exceeds max queried-speaker `t_own` IC by >= 0.5, preserve `head0`.
+    let mut rare_non_sp_mask = 0u64;
+    let nt_u32 = ix.turns.len().max(1) as u32;
+    for qt in &plan.terms {
+        if !qt.exact_hit {
+            continue;
+        }
+        let Some(g) = qt.group else {
+            continue;
+        };
+        if g >= 64 || (non_sp_mask & (1u64 << g)) == 0 {
+            continue;
+        }
+        let df = ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(nt_u32);
+        if df <= 8 {
+            rare_non_sp_mask |= 1u64 << g;
+        }
+    }
+    let mut union_queried_rare_mask = 0u64;
+    let mut max_queried_own = 0.0f32;
+    for (ti, t) in ix.turns.iter().enumerate() {
+        if c2_query_mentions_speaker(query, &t.speaker)
+            && !c2_speaker_conjoined(query, &t.speaker)
+        {
+            union_queried_rare_mask |=
+                t_exact_mask.get(ti).copied().unwrap_or(0) & rare_non_sp_mask;
+            let o = t_own.get(ti).copied().unwrap_or(0.0);
+            if o > max_queried_own {
+                max_queried_own = o;
+            }
+        }
+    }
+    if !ix.turns[head0].is_pure_info_question
+        && ((head_non_sp & rare_non_sp_mask) & !union_queried_rare_mask) != 0
+        && head_own >= max_queried_own + 0.5
+    {
+        return;
+    }
+
     let mut best: Option<(usize, u32, f32)> = None;
     for slot in 1..list.len().min(5) {
         let cand = list[slot];

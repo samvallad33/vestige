@@ -2881,6 +2881,29 @@ pub(in crate::retrieval) fn extract_pool_features_q16(
     let deficit_i32 = (max_other_sp_ic as i64 - max_queried_sp_ic as i64)
         .clamp(-524_288, 524_288) as i32;
 
+    let mut rare_q_mask = 0u64;
+    for qt in &plan.terms {
+        if !qt.exact_hit {
+            continue;
+        }
+        let Some(g) = qt.group else {
+            continue;
+        };
+        if g >= 64 || (spec.non_sp_mask & (1u64 << g)) == 0 {
+            continue;
+        }
+        let df = ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(nt_u32);
+        if df <= 8 {
+            rare_q_mask |= 1u64 << g;
+        }
+    }
+    let mut union_queried_sp_rare_mask = 0u64;
+    for idx in 0..n {
+        if sp_states[idx] > 0 {
+            union_queried_sp_rare_mask |= prose_masks[idx] & rare_q_mask;
+        }
+    }
+
     let mut incoming_rsb: BTreeMap<usize, i32> = BTreeMap::new();
     for &src_ti in final_turn_indices.iter().take(5) {
         if let Some(ai) = ix.turns[src_ti].answers {
@@ -2970,14 +2993,97 @@ pub(in crate::retrieval) fn extract_pool_features_q16(
         }
         f[14] = wn_hits;
 
+        let mut partner_q_pm1 = 0u64;
+        if let Some(members) = ix.session_turns.get(sess)
+            && let Some(pos) = members.iter().position(|&m| m == ti)
+        {
+            let mut triad_mask = p_non_sp;
+            if pos >= 1 {
+                let prv1 = members[pos - 1];
+                let (pm1, _) = turn_prose_and_blip_masks(prv1);
+                triad_mask |= pm1 & spec.non_sp_mask;
+                if ix.turns[prv1].is_question && ix.turns[prv1].speaker != t.speaker {
+                    if ix.turns[prv1].is_pure_info_question {
+                        partner_q_pm1 = pm1 & spec.non_sp_mask;
+                    }
+                    let ow1 = ieee754_bits_to_q16(t_own.get(prv1).copied().unwrap_or(0.0).to_bits());
+                    f[26] = ((ow1.saturating_mul(65_536)) / max_own).min(65_536) as i32;
+                }
+            }
+            if pos >= 2 {
+                let prv2 = members[pos - 2];
+                let (pm2, bm2) = turn_prose_and_blip_masks(prv2);
+                let ow2 = ieee754_bits_to_q16(t_own.get(prv2).copied().unwrap_or(0.0).to_bits());
+                let ow2_norm = ((ow2.saturating_mul(65_536)) / max_own).min(65_536) as i32;
+                if ix.turns[prv2].is_question {
+                    f[27] = ow2_norm;
+                    triad_mask |= pm2 & spec.non_sp_mask;
+                }
+                if !ix.turns[prv2].blip_feats.is_empty()
+                    && ix.turns[prv2].speaker == t.speaker
+                    && t.blip_feats.is_empty()
+                    && !t.is_question
+                {
+                    f[28] = ow2_norm.max(if (pm2 | bm2) & spec.non_sp_mask != 0 {
+                        32_768
+                    } else {
+                        0
+                    });
+                    triad_mask |= (pm2 | bm2) & spec.non_sp_mask;
+                }
+                if t.anaphoric
+                    && (t_own.get(prv2).copied().unwrap_or(0.0) > 0.0
+                        || t_own.get(members[pos - 1]).copied().unwrap_or(0.0) > 0.0)
+                {
+                    f[30] = 1;
+                }
+            }
+            if !t.is_question && pos + 1 < members.len() {
+                let nxt1 = members[pos + 1];
+                let (pm_n1, _) = turn_prose_and_blip_masks(nxt1);
+                triad_mask |= pm_n1 & spec.non_sp_mask;
+            }
+            if !t.is_question && pos + 2 < members.len() {
+                let nxt2 = members[pos + 2];
+                if ix.turns[nxt2].anaphoric {
+                    let own_n2 =
+                        ieee754_bits_to_q16(t_own.get(nxt2).copied().unwrap_or(0.0).to_bits());
+                    f[29] = ((own_n2.saturating_mul(65_536)) / max_own).min(65_536) as i32;
+                }
+            }
+            f[31] = if spec.non_sp_cnt > 0 {
+                ((triad_mask.count_ones() as u64 * 65_536) / (spec.non_sp_cnt as u64)) as i32
+            } else {
+                65_536
+            };
+        }
+
         let sp_st = sp_states[idx];
         f[15] = sp_st;
-        let has_own_topic = p_non_sp != 0 || wn_hits > 0;
+        let inherited_partner_topic =
+            !t.is_question && !t.is_backchannel && partner_q_pm1 != 0;
+        let eff_topic_mask = p_non_sp
+            | if inherited_partner_topic {
+                partner_q_pm1
+            } else {
+                0
+            };
+        let has_own_topic = eff_topic_mask != 0 || wn_hits > 0;
+        let adv_rare_witness = sp_st < 0
+            && ((p_non_sp & rare_q_mask) & !union_queried_sp_rare_mask) != 0
+            && prose_ics[idx] > max_queried_sp_ic.saturating_add(32_768);
         f[16] = if sp_st > 0 && has_own_topic {
-            f[8] + 16_384
+            let eff_cov = if spec.non_sp_cnt > 0 {
+                ((eff_topic_mask.count_ones() as u64 * 65_536) / (spec.non_sp_cnt as u64)) as i32
+            } else {
+                65_536
+            };
+            eff_cov + 16_384
         } else if sp_st > 0 && !has_own_topic && b_non_sp == 0 && max_pool_prose_ic > 0 {
             -65_536
-        } else if sp_st < 0 && max_queried_sp_ic == 0 && prose_ics[idx] > 0 {
+        } else if adv_rare_witness
+            || (sp_st < 0 && max_queried_sp_ic == 0 && prose_ics[idx] > 0)
+        {
             f[8] + 32_768
         } else {
             0
@@ -3061,67 +3167,6 @@ pub(in crate::retrieval) fn extract_pool_features_q16(
                     && !t.has_temporal
                     && t.entities.is_empty()),
         );
-
-        if let Some(members) = ix.session_turns.get(sess)
-            && let Some(pos) = members.iter().position(|&m| m == ti)
-        {
-            let mut triad_mask = p_non_sp;
-            if pos >= 1 {
-                let prv1 = members[pos - 1];
-                let (pm1, _) = turn_prose_and_blip_masks(prv1);
-                triad_mask |= pm1 & spec.non_sp_mask;
-                if ix.turns[prv1].is_question && ix.turns[prv1].speaker != t.speaker {
-                    let ow1 = ieee754_bits_to_q16(t_own.get(prv1).copied().unwrap_or(0.0).to_bits());
-                    f[26] = ((ow1.saturating_mul(65_536)) / max_own).min(65_536) as i32;
-                }
-            }
-            if pos >= 2 {
-                let prv2 = members[pos - 2];
-                let (pm2, bm2) = turn_prose_and_blip_masks(prv2);
-                let ow2 = ieee754_bits_to_q16(t_own.get(prv2).copied().unwrap_or(0.0).to_bits());
-                let ow2_norm = ((ow2.saturating_mul(65_536)) / max_own).min(65_536) as i32;
-                if ix.turns[prv2].is_question {
-                    f[27] = ow2_norm;
-                    triad_mask |= pm2 & spec.non_sp_mask;
-                }
-                if !ix.turns[prv2].blip_feats.is_empty()
-                    && ix.turns[prv2].speaker == t.speaker
-                    && t.blip_feats.is_empty()
-                    && !t.is_question
-                {
-                    f[28] = ow2_norm.max(if (pm2 | bm2) & spec.non_sp_mask != 0 {
-                        32_768
-                    } else {
-                        0
-                    });
-                    triad_mask |= (pm2 | bm2) & spec.non_sp_mask;
-                }
-                if t.anaphoric
-                    && (t_own.get(prv2).copied().unwrap_or(0.0) > 0.0
-                        || t_own.get(members[pos - 1]).copied().unwrap_or(0.0) > 0.0)
-                {
-                    f[30] = 1;
-                }
-            }
-            if !t.is_question && pos + 1 < members.len() {
-                let nxt1 = members[pos + 1];
-                let (pm_n1, _) = turn_prose_and_blip_masks(nxt1);
-                triad_mask |= pm_n1 & spec.non_sp_mask;
-            }
-            if !t.is_question && pos + 2 < members.len() {
-                let nxt2 = members[pos + 2];
-                if ix.turns[nxt2].anaphoric {
-                    let own_n2 =
-                        ieee754_bits_to_q16(t_own.get(nxt2).copied().unwrap_or(0.0).to_bits());
-                    f[29] = ((own_n2.saturating_mul(65_536)) / max_own).min(65_536) as i32;
-                }
-            }
-            f[31] = if spec.non_sp_cnt > 0 {
-                ((triad_mask.count_ones() as u64 * 65_536) / (spec.non_sp_cnt as u64)) as i32
-            } else {
-                65_536
-            };
-        }
 
         let is_sup = !spec.past_override
             && (turn_is_superseded(ix, ti)
@@ -4394,6 +4439,43 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             new_turns.push(ti);
         }
     }
+    // Post-GBDT Partner Q -> Queried Speaker Answer Promotion:
+    // When Slot 0 is an unqueried partner's question (`is_question && feats[i0][15] < 0`)
+    // and the immediately following turn in the same session is a declarative, non-backchannel,
+    // non-superseded reply by a queried speaker, promote that direct answer to Slot 0.
+    if new_turns.len() >= 2 {
+        let t0 = new_turns[0];
+        if ix.turns[t0].is_pure_info_question
+            && let Some(i0) = pool.iter().position(|&x| x == t0)
+            && feats[i0][15] < 0
+            && feats[i0][16] == 0
+        {
+            let s0_t = ix.turns[t0].session;
+            if let Some(members) = ix.session_turns.get(s0_t)
+                && let Some(p0) = members.iter().position(|&m| m == t0)
+                && p0 + 1 < members.len()
+            {
+                let nxt = members[p0 + 1];
+                let nt_tr = &ix.turns[nxt];
+                let nxt_is_queried = if let Some(inxt) = pool.iter().position(|&x| x == nxt) {
+                    feats[inxt][15] > 0 && feats[inxt][32] == 0
+                } else {
+                    !turn_is_superseded(ix, nxt)
+                        && !nt_tr.speaker.is_empty()
+                        && c2_query_mentions_speaker(&q.text, &nt_tr.speaker)
+                };
+                if nxt_is_queried && !nt_tr.is_question && !nt_tr.is_backchannel {
+                    if let Some(pos) = new_turns.iter().position(|&x| x == nxt) {
+                        new_turns.remove(pos);
+                    }
+                    new_turns.insert(0, nxt);
+                    if new_turns.len() > target_len {
+                        new_turns.truncate(target_len);
+                    }
+                }
+            }
+        }
+    }
     // Post-GBDT Same-Session Self-Payload Arbiter on Named Dialogues:
     // When Rank 1 (`t0`) and a same-session nearby declarative (`tc`, `|pos| <= 2`) are within
     // `<= 24_576` Q16 GBDT margin, prefer the originating self-payload turn over a question/echo opener.
@@ -4489,7 +4571,11 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                 hit
             };
             let mut sp_win: Option<(usize, i32, i64)> = None;
-            if feats[i0][15] < 0 {
+            let t0_adv_protected = feats[i0][15] < 0
+                && feats[i0][16] > 0
+                && !ix.turns[t0].is_pure_info_question
+                && !turn_only_other(t0);
+            if feats[i0][15] < 0 && !t0_adv_protected {
                 let q_toks_sp = raw_tokens(&q.text);
                 let q_refs_sp: Vec<&str> = q_toks_sp.iter().map(String::as_str).collect();
                 let is_od_infer_sp =
