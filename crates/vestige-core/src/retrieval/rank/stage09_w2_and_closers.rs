@@ -15,8 +15,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let is_monologue_corpus = ctx.is_monologue_corpus;
     let cond_rule_turns = &ctx.cond_rule_turns;
     let standing_rules = &ctx.standing_rules;
-    let s_score = &ctx.s_score;
-    let s_mask = &ctx.s_mask;
     let t_own = &ctx.t_own;
     let t_scene = &ctx.t_scene;
     let t_mask = &ctx.t_mask;
@@ -32,9 +30,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         &it
     };
     crate::retrieval::seating::apply_w2_milestone_admission(ix, seq_intent, &mut final_turn_indices, &t_scene);
-
-    // [W2-083 / W2-084] Summary Lead & Breadth Seats (Quantile Trajectory Pooling)
-    crate::retrieval::seating::apply_w2_quantile_trajectory_seating(ix, &q.text, seq_intent, &mut final_turn_indices, &t_scene);
 
     // [W2-028 / W2-031] StandingRegister constraint posting & assistant-echo swap
     crate::retrieval::seating::apply_w2_standing_register_seat(ix, &q.text, &plan, &mut final_turn_indices, &t_exact_mask);
@@ -152,23 +147,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         &t_scene,
         &t_own,
         &t_exact_mask,
-    );
-
-    // Consolidated Vault Closers (`S8-002`, `acta_secretary_inversion`, `W2-059`, `W2-075`,
-    // `W2-087`, `S6-003`, `W2-086`, `S8-004`, `S7-041`, `S1-071`, `S8-008`, gated `S8-001`):
-    crate::retrieval::seating::apply_vault_closers(
-        ix,
-        &plan,
-        &eff_it,
-        &q.text,
-        &mut final_turn_indices,
-        &final_session_indices,
-        &t_scene,
-        &t_own,
-        &t_exact_mask,
-        &s_mask,
-        &s_score,
-        k,
     );
 
     // Wave 7 S1-071 Informative Turn Priority: short confirmations yield to substantive declaratives

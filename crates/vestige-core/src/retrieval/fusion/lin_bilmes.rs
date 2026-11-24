@@ -879,33 +879,12 @@ pub(in crate::retrieval) fn select_submodular_sessions(
                 }
             }
         }
-        let xq_picks = select_xquad_residual_sessions_q16(
+        let sub_picks = select_xquad_residual_sessions_q16(
             &cands,
             &aspect_weights_q16,
             k.max(12),
             (Q16_ONE * 11) / 20,
         );
-        // #7 Hypergraph Minimum Hitting Set + #8 Integer Pivoted Cholesky IC + #12 Rissanen MDL:
-        // Interleave Cholesky-orthogonal uncovered-facet picks after Slot 0 so near-duplicate
-        // sessions cannot hoard Slots 2..5 while preserving Slot 0 and xQuAD relevance.
-        let chol_picks = crate::retrieval::fusion::hypergraph_mdl_q16::select_pivoted_cholesky_hypergraph_mdl_q16(
-            &cands,
-            &aspect_weights_q16,
-            k.max(12),
-        );
-        let mut sub_picks: Vec<usize> = Vec::with_capacity(k.max(12));
-        for idx_mix in 0..xq_picks.len().max(chol_picks.len()) {
-            if let Some(&s_xq) = xq_picks.get(idx_mix)
-                && !sub_picks.contains(&s_xq)
-            {
-                sub_picks.push(s_xq);
-            }
-            if let Some(&s_ch) = chol_picks.get(idx_mix)
-                && !sub_picks.contains(&s_ch)
-            {
-                sub_picks.push(s_ch);
-            }
-        }
         let mut used_episodes: BTreeSet<u32> = selected.iter().map(|&si| episode_of[si]).collect();
         let mut ep_pool: Vec<usize> = sub_picks
             .into_iter()

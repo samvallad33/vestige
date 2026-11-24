@@ -232,7 +232,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let smax = s_score.iter().cloned().fold(0.0f32, f32::max);
     let mut bridge_boost = vec![0.0f32; ns];
     let mut s_ord_base = order(&s_score, &ix.session_ts);
-    if p.enable_ppr && ns > 5 && smax > 0.0 {
+    if p.enable_ppr && ns >= 4 && !pref_on && smax > 0.0 {
         if let Some(&top0) = s_ord_base.first() {
             let anchors: Vec<usize> = s_ord_base
                 .iter()
@@ -469,20 +469,63 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
     }
 
+    // Disclosure-scoped KITE upward-cone session lift on preference/advisory frames (`pref_on`):
+    // unlocks zero-overlap prose preferences (`BEAM PF`, `LME SSP`, `MAB SSP`, `ConvoMem implicit`)
+    // without letting entity-co-occurrence PPR bridge zero-overlap factual distractors.
+    if pref_on && !eff_it.is_event_sequence && !eff_it.task_under_rules && ns >= 2 && smax > 0.0 {
+        let smax_pf_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(smax.to_bits());
+        let empty_sp: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let (kite_s_pf, kite_t_pf) = crate::retrieval::index::kite_typed::score_kite_typed_facet_meet_q16(
+            ix,
+            &plan,
+            &q.text,
+            &empty_sp,
+            0,
+            smax_pf_q16,
+        );
+        for (si, &kq) in kite_s_pf.iter().enumerate() {
+            if kq == 0 || si >= ns {
+                continue;
+            }
+            let has_disc = ix.session_turns[si].iter().any(|&ti| {
+                let tr = &ix.turns[ti];
+                tr.field == 0
+                    && !tr.is_question
+                    && (tr.has_prose_disclosure || tr.is_personal_constraint || tr.is_habitual)
+                    && kite_t_pf.get(ti).copied().unwrap_or(0) > 0
+            });
+            if has_disc {
+                let lift = ((kq as f32) / 65_536.0).min(0.42 * smax);
+                if lift > bridge_boost[si] {
+                    bridge_boost[si] = lift;
+                }
+            }
+        }
+        let tmax_ref = lexical_tmax.max(0.01);
+        let tmax_sess_ref = lexical_tmax_sess.max(0.01);
+        for (ti, &ktq) in kite_t_pf.iter().enumerate() {
+            if ktq == 0 || ti >= nt {
+                continue;
+            }
+            let tr = &ix.turns[ti];
+            if tr.field == 0
+                && !tr.is_question
+                && (tr.has_prose_disclosure || tr.is_personal_constraint || tr.is_habitual)
+            {
+                let frac = ((ktq as f32) / (smax_pf_q16.max(1) as f32)).min(1.0);
+                t_scene[ti] += (0.40 * tmax_ref * frac).min(0.40 * tmax_ref);
+                t_scene_sess[ti] += (0.40 * tmax_sess_ref * frac).min(0.40 * tmax_sess_ref);
+            }
+        }
+    }
+
     if !eff_it.is_event_sequence
         && !eff_summary_request(&q.text)
         && !pref_on
         && !eff_it.task_under_rules
-        && ns > 5
+        && ns >= 4
         && smax > 0.0
     {
-        let pre_sight_q16: Vec<u64> = (0..ns)
-            .map(|si| {
-                crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
-                    (s_score[si] + bridge_boost[si]).to_bits(),
-                )
-            })
-            .collect();
         let lex_only_q16: Vec<u64> = s_score
             .iter()
             .map(|&v| crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(v.to_bits()))
@@ -512,59 +555,18 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 && n_q_groups >= 4
                 && !eff_it.multi_hop
                 && top0_lex.saturating_mul(9) >= top1_lex.saturating_mul(10));
-        let multi_or_partial = eff_it.multi_hop || !top0_full_cov || !invariant_crisp_lock;
 
-        // The ungated associative RSB/PPMI walk is calibrated for named dialogue only; on
-        // user/assistant streams it pulls later RSB neighbours forward (see index_tests RSB guard).
-        if has_named_speakers_eff {
-            associative_multihop_bridge_q16::apply_multihop_open_domain_session_lift(
-                ix,
-                plan,
-                it,
-                eff_it,
-                &s_score,
-                s_exact_mask,
-                &s_ord_base,
-                smax,
-                &mut bridge_boost,
-            );
-        }
         let top0_ceiling_q16 = (crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
             (s_score[top0] + bridge_boost[top0]).to_bits(),
         )
         .saturating_mul(9))
             / 10;
 
-        let ppr_lifts = crate::retrieval::graph::ppr_rwr::compute_bipartite_ppr_lifts_q16(
-            ix,
-            plan,
-            multi_or_partial,
-            &pre_sight_q16,
-            &s_ord_base,
-            smax_q16,
-        );
-        let tlm_lifts =
-            crate::retrieval::lexical::translation_lm::compute_translation_lm_lifts_q16(
-                ix,
-                plan,
-                multi_or_partial,
-                s_exact_mask,
-                top0,
-                smax_q16,
-            );
         let tp_lifts = crate::retrieval::lexical::bm25tp::compute_session_bm25tp_lifts_q16(
             ix,
             plan,
             s_exact_mask,
             top0,
-            smax_q16,
-        );
-        let swanson_lifts = crate::retrieval::graph::swanson_abc::compute_swanson_abc_lifts_q16(
-            ix,
-            plan,
-            multi_or_partial,
-            &pre_sight_q16,
-            &s_ord_base,
             smax_q16,
         );
         let fs_lifts =
@@ -581,144 +583,16 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 top0,
                 smax_q16,
             );
-        let broker_lifts =
-            crate::retrieval::graph::freeman_brokerage::compute_freeman_brokerage_lifts_q16(
-                ix,
-                plan,
-                s_exact_mask,
-                &s_ord_base,
-                smax_q16,
-            );
-        let shepard_lifts =
-            crate::retrieval::graph::shepard_citations::compute_shepard_citator_lifts_q16(
-                ix,
-                it,
-                &s_ord_base,
-                smax_q16,
-            );
-        let lachmann_lifts =
-            crate::retrieval::graph::lachmann_stemma::compute_lachmann_stemma_lifts_q16(
-                ix,
-                s_exact_mask,
-                top0,
-                smax_q16,
-            );
-        let pmest_lifts =
-            crate::retrieval::graph::ranganathan_pmest::compute_ranganathan_pmest_lifts_q16(
-                ix,
-                plan,
-                s_exact_mask,
-                top0,
-                smax_q16,
-            );
-        let hist_lifts =
-            crate::retrieval::graph::historiography_source::compute_historiography_witness_lifts_q16(
-                ix,
-                plan,
-                top0,
-                smax_q16,
-            );
-
-        // Domain C (Step 6A — Lavrenko & Croft RM3 / Swanson ABC):
-        // Extract top-12 cross-session (`df >= 2`) high-IC bridge entities from Hop-1 top-3 sessions
-        // via `two_hop_rm3_ppr::extract_rm3_bridge_entities_q16`, then score Hop-2 candidate sessions.
-        let rm3_lifts: Vec<u64> = {
-            use crate::retrieval::fusion::aspect_coverage_q16::{aspect_ic_q16, Q16_ONE};
-            use crate::retrieval::graph::two_hop_rm3_ppr::extract_rm3_bridge_entities_q16;
-            use std::collections::{BTreeMap, BTreeSet};
-
-            let ns_u32 = (ns as u32).max(1);
-            let max_bridge_df = (ns_u32 / 3).clamp(2, 24);
-            let mut q_term_set: BTreeSet<u32> = BTreeSet::new();
-            for qt in &plan.terms {
-                q_term_set.insert(qt.id);
-            }
-            let mut term_df: BTreeMap<u32, u32> = BTreeMap::new();
-            let mut term_ic_q16: BTreeMap<u32, u64> = BTreeMap::new();
-            let mut hop1_vecs: Vec<(usize, u64, Vec<(u32, u64)>)> = Vec::new();
-            for &h1_si in s_ord_base.iter().take(3) {
-                let h1_sc = pre_sight_q16.get(h1_si).copied().unwrap_or(0);
-                if h1_sc == 0 {
-                    continue;
-                }
-                let mut tf_map: BTreeMap<u32, u64> = BTreeMap::new();
-                for &tid in &ix.session_content[h1_si] {
-                    let df = ix.s_stats.df.get(&tid).copied().unwrap_or(0);
-                    if (2..=max_bridge_df).contains(&df) {
-                        *tf_map.entry(tid).or_insert(0) += 1;
-                        term_df.insert(tid, df);
-                        term_ic_q16.entry(tid).or_insert_with(|| aspect_ic_q16(df, ns_u32));
-                    }
-                }
-                for &eid in &ix.session_entities[h1_si] {
-                    let df = ix.s_stats.df.get(&eid).copied().unwrap_or(0);
-                    if (2..=max_bridge_df).contains(&df) {
-                        *tf_map.entry(eid).or_insert(0) += 2;
-                        term_df.insert(eid, df);
-                        term_ic_q16.entry(eid).or_insert_with(|| aspect_ic_q16(df, ns_u32));
-                    }
-                }
-                let pairs: Vec<(u32, u64)> = tf_map.into_iter().collect();
-                if !pairs.is_empty() {
-                    hop1_vecs.push((h1_si, h1_sc, pairs));
-                }
-            }
-            let hop1_refs: Vec<(usize, u64, &[(u32, u64)])> = hop1_vecs
-                .iter()
-                .map(|(si, sc, v)| (*si, *sc, v.as_slice()))
-                .collect();
-            let bridges = extract_rm3_bridge_entities_q16(
-                &hop1_refs,
-                &q_term_set,
-                &term_df,
-                &term_ic_q16,
-                12,
-            );
-            let mut raw = vec![0u64; ns];
-            let mut max_raw = 0u64;
-            if !bridges.is_empty() {
-                for si in 0..ns {
-                    if si == top0 {
-                        continue;
-                    }
-                    let mut sum = 0u64;
-                    let mut hits = 0usize;
-                    for (&bid, &bw) in &bridges {
-                        if ix.session_content[si].contains(&bid) || ix.session_entities[si].contains(&bid) {
-                            sum = sum.saturating_add(bw);
-                            hits += 1;
-                        }
-                    }
-                    if hits >= 2 || (hits == 1 && (s_exact_mask[si] & !top0_mask_bits & q_full_mask) != 0) {
-                        raw[si] = sum;
-                        if sum > max_raw {
-                            max_raw = sum;
-                        }
-                    }
-                }
-            }
-            if max_raw > 0 {
-                let cap_rm3 = ((smax_q16 as u128).saturating_mul(Q16_ONE as u128 / 4) >> 16) as u64;
-                crate::retrieval::fusion::pit_commensuration_q16::fuse_channels_pit_nqc_q16(
-                    ns,
-                    &[(&raw, Q16_ONE)],
-                    10,
-                    cap_rm3,
-                )
-            } else {
-                vec![0u64; ns]
-            }
-        };
 
         // Co-Witness Cross-Lexical & Bounded Downward Hyponym Voter (`Q16.16`):
         // Bridges uncovered query groups via WordNet 3.1 (full neighbors + bounded 1-hop hyponyms + gloss),
         // GeoNames, ConceptNet 5.7, and Roget 1911; fires ONLY when >= 2 distinct query groups are
         // co-witnessed in `si != top0` with >= 1 newly bridged uncovered group.
         let mut cw_turn_ids: Vec<(usize, Vec<u32>)> = Vec::new();
-        let cowitness_lifts: Vec<u64> = if ns <= 512 && !plan.groups.is_empty() {
+        let cowitness_lifts: Vec<u64> = if !plan.groups.is_empty() {
             let mut lifts = vec![0u64; ns];
             let ns_u32 = (ns as u32).max(1);
-            let max_cw_df = (ns_u32 / 5).clamp(2, 12);
+            let max_cw_df = (ns_u32 / 6).clamp(2, 32);
             let q_toks_cw = raw_tokens(&q.text);
             let q_has_us = q_toks_cw
                 .windows(2)
@@ -851,24 +725,55 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             vec![0u64; ns]
         };
 
-        // Unified evidence-scaled budget: modules vote, but only sessions that add a query group
-        // missing from top0 may receive a combined lift capped at 0.30 * sight(top0).
-        let hist_vote: &[u64] = if has_named_speakers_eff { &hist_lifts } else { &[] };
+        // C11: Deformed Bethe-Hessian Resolvent above Kesten-Stigum `r_c` + Non-Hermitian Hatano-Nelson
+        // Causal Transport + Marchenko-Pastur Random Matrix Bulk Deflation for 100K-1M haystacks.
+        let pre_sight_q16: Vec<u64> = (0..ns)
+            .map(|si| {
+                crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                    (s_score[si] + bridge_boost[si]).to_bits(),
+                )
+            })
+            .collect();
+        let mut bethe_lifts =
+            crate::retrieval::graph::bethe_hatano_mp_q16::compute_bethe_hessian_session_lifts_q16(
+                ix,
+                &pre_sight_q16,
+                top0,
+                smax_q16,
+            );
+        if ns >= 16 {
+            let mp_pool_len = s_ord_base.len().min(32);
+            crate::retrieval::graph::bethe_hatano_mp_q16::deflate_marchenko_pastur_ambient_q16(
+                ix,
+                &s_ord_base[..mp_pool_len],
+                &mut bethe_lifts,
+            );
+        }
+        // hardcode-scan: closed-class (retrospective causal interrogatives)
+        let q_low_hn = q.text.to_ascii_lowercase();
+        let hn_forward = !(q_low_hn.starts_with("why ")
+            || q_low_hn.contains(" why ")
+            || q_low_hn.contains("because ")
+            || q_low_hn.contains("before "));
+        let hatano_lifts =
+            crate::retrieval::graph::bethe_hatano_mp_q16::compute_hatano_nelson_causal_lifts_q16(
+                ix,
+                &pre_sight_q16,
+                &s_ord_base,
+                smax_q16,
+                hn_forward,
+            );
+
+        // Unified evidence-scaled budget: clean surviving voters (`bm25tp`, `fellegi_sunter`,
+        // `centering`, `cowitness`, `bethe_hatano_mp`), capped at 0.30 * sight(top0).
         let budget_lifts = unified_evidence_lift_budget_q16(
             &[
                 (true, &tp_lifts),
-                (false, &ppr_lifts),
-                (false, &tlm_lifts),
-                (false, &rm3_lifts),
-                (false, &swanson_lifts),
                 (false, &fs_lifts),
                 (false, &centering_lifts),
-                (false, &broker_lifts),
-                (false, &shepard_lifts),
-                (false, &lachmann_lifts),
-                (false, &pmest_lifts),
                 (false, &cowitness_lifts),
-                (false, hist_vote),
+                (false, &bethe_lifts),
+                (false, &hatano_lifts),
             ],
             s_exact_mask,
             q_full_mask,
@@ -930,23 +835,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     }
                 }
             }
-        }
-        // On partial-coverage / multi-hop queries (`!invariant_crisp_lock`), also let strong 2-hop RM3
-        // bridge sessions without direct missing-group overlap enter Top-5..10 (bounded at <= 0.16 * top0).
-        if !invariant_crisp_lock && (eff_it.multi_hop || !top0_full_cov) {
-            let rm3_soft_cap = (top0_ceiling_q16 / 6).max(1);
-            let rm3_soft: Vec<u64> = rm3_lifts
-                .iter()
-                .map(|&v| v.min(rm3_soft_cap))
-                .collect();
-            apply_rule8_capped_q16_lifts(
-                &rm3_soft,
-                top0,
-                top0_ceiling_q16,
-                true,
-                &s_score,
-                &mut bridge_boost,
-            );
         }
 
         // Domain D (Step 7B — Berger & Lafferty 1999 Speaker Translation LM + Full WordNet 3.1 +
@@ -1631,7 +1519,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let lex_tmax_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(lexical_tmax.to_bits());
     let smax_prop_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(smax.to_bits());
     if !eff_it.is_event_sequence
-        && !pref_on
         && !eff_it.task_under_rules
         && smax_prop_q16 > 0
         && lex_tmax_q16 > 0
@@ -1811,355 +1698,6 @@ fn apply_rule8_capped_q16_lifts(
         };
         if lift_q16 > 0 {
             bridge_boost[si] += (lift_q16 as f32) / Q16_SCALE_F32;
-        }
-    }
-}
-
-/// Domain-agnostic `Q16.16` associative session lift for Multi-Hop and Open-Domain recall.
-///
-/// Combines four strictly domain-agnostic signals from the index:
-/// 1. Corpus-IC weighted `ix.ppmi_neighbors` co-occurrence bridge (2x weight on uncovered query groups),
-/// 2. 1-hop WordNet conceptual bridge via `ix.bridge_vocab` + `ix.turn_bridge_postings`,
-/// 3. 2-hop damped backward walk over `session_rsb_back`, `session_supersedes_back`, and `session_episode_prev`,
-/// 4. Rule-8 crisp-peak ceiling protecting Single-Hop and Adversarial Rank-1 (`top0`) from dethronement.
-mod associative_multihop_bridge_q16 {
-    use super::*;
-    use crate::retrieval::fusion::kemeny_mrf::{ieee754_bits_to_q16, log2_u64_q16};
-    use std::collections::BTreeSet;
-
-    /// Unit `1.0` in unsigned `Q16.16` fixed-point math (`2^16`).
-    const Q16_ONE: u64 = 65_536;
-    /// Fractional shift width (`16`).
-    const Q16_SHIFT: u32 = 16;
-    /// Maximum anchor sessions seeded for 2-hop RSB/supersession/episode pull (`3`).
-    const MAX_ANCHOR_SESSIONS: usize = 3;
-    /// Maximum PPMI neighbors inspected per query term (`12`).
-    const MAX_PPMI_NEIGHBORS_PER_TERM: usize = 12;
-    /// Maximum WordNet lemmas inspected per query group (`16`).
-    const MAX_WN_LEMMAS_PER_GROUP: usize = 16;
-    /// Fusion weight for Corpus-IC PPMI bridge (`3/8` = `24_576` in `Q16.16`).
-    const WEIGHT_PPMI_Q16: u64 = 24_576;
-    /// Fusion weight for 1-hop WordNet conceptual bridge (`3/8` = `24_576` in `Q16.16`).
-    const WEIGHT_WORDNET_Q16: u64 = 24_576;
-    /// Fusion weight for 2-hop RSB / supersession / episode bridge (`2/8` = `16_384` in `Q16.16`).
-    const WEIGHT_RSB_2HOP_Q16: u64 = 16_384;
-    /// Lift coefficient on multi-hop or partial-coverage queries (`0.52` in `Q16.16`).
-    const LIFT_COEFF_MULTI_Q16: u64 = 34_079;
-    /// Lift coefficient on full-coverage queries (`0.28` in `Q16.16`).
-    const LIFT_COEFF_BASE_Q16: u64 = 18_350;
-    /// Rule-8 crisp-peak protection ceiling (`9/10` of incumbent `top0` total sight).
-    const RULE8_CEILING_NUM: u64 = 9;
-    const RULE8_CEILING_DEN: u64 = 10;
-    /// Crisp-peak Top-1 over Top-2 dominance ratio (`4:3`, matching NQC guard).
-    const CRISP_PEAK_NUM: u64 = 4;
-    const CRISP_PEAK_DEN: u64 = 3;
-
-    /// Pure integer `Q16.16` fusion of normalized `(ppmi, wordnet, rsb_2hop)` scores with Rule-8 cap.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn fuse_associative_lift_q16(
-        ppmi_raw: &[u64],
-        wn_raw: &[u64],
-        rsb_raw: &[u64],
-        smax_q16: u64,
-        coeff_q16: u64,
-        top0: usize,
-        top0_sight_q16: u64,
-        crisp_peak_lock: bool,
-        base_sight_q16: &[u64],
-    ) -> Vec<u64> {
-        let ns = ppmi_raw.len();
-        let mut out = vec![0u64; ns];
-        if ns == 0 || smax_q16 == 0 {
-            return out;
-        }
-        let max_ppmi = ppmi_raw.iter().copied().max().unwrap_or(0);
-        let max_wn = wn_raw.iter().copied().max().unwrap_or(0);
-        let max_rsb = rsb_raw.iter().copied().max().unwrap_or(0);
-        if max_ppmi == 0 && max_wn == 0 && max_rsb == 0 {
-            return out;
-        }
-        let ceiling_q16 = (top0_sight_q16.saturating_mul(RULE8_CEILING_NUM)) / RULE8_CEILING_DEN;
-
-        for si in 0..ns {
-            if si == top0 {
-                continue;
-            }
-            let n_ppmi = if max_ppmi > 0 {
-                (ppmi_raw[si].saturating_mul(Q16_ONE)) / max_ppmi
-            } else {
-                0
-            };
-            let n_wn = if max_wn > 0 {
-                (wn_raw[si].saturating_mul(Q16_ONE)) / max_wn
-            } else {
-                0
-            };
-            let n_rsb = if max_rsb > 0 {
-                (rsb_raw[si].saturating_mul(Q16_ONE)) / max_rsb
-            } else {
-                0
-            };
-            let fused_norm_q16 = ((n_ppmi.saturating_mul(WEIGHT_PPMI_Q16)) >> Q16_SHIFT)
-                .saturating_add((n_wn.saturating_mul(WEIGHT_WORDNET_Q16)) >> Q16_SHIFT)
-                .saturating_add((n_rsb.saturating_mul(WEIGHT_RSB_2HOP_Q16)) >> Q16_SHIFT);
-            if fused_norm_q16 == 0 {
-                continue;
-            }
-            let mut lift_q16 = (((smax_q16.saturating_mul(coeff_q16)) >> Q16_SHIFT)
-                .saturating_mul(fused_norm_q16))
-                >> Q16_SHIFT;
-
-            // Rule-8 crisp-peak ceiling: never allow associative lift to push `si` past `0.9 * sight(top0)`.
-            if crisp_peak_lock {
-                let allowed = ceiling_q16.saturating_sub(base_sight_q16[si]);
-                if lift_q16 > allowed {
-                    lift_q16 = allowed;
-                }
-            }
-            out[si] = lift_q16;
-        }
-        out
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn apply_multihop_open_domain_session_lift(
-        ix: &Index,
-        plan: &QueryPlan,
-        it: &QueryIntent,
-        eff_it: &QueryIntent,
-        s_score: &[f32],
-        s_exact_mask: &[u64],
-        s_ord_base: &[usize],
-        smax: f32,
-        bridge_boost: &mut [f32],
-    ) {
-        let ns = ix.session_turns.len();
-        let Some(&top0) = s_ord_base.first() else {
-            return;
-        };
-        if ns <= 5 || top0 >= ns {
-            return;
-        }
-
-        let total_groups = plan.groups.len().min(64);
-        let q_mask = if total_groups == 64 {
-            u64::MAX
-        } else if total_groups == 0 {
-            0
-        } else {
-            (1u64 << total_groups) - 1
-        };
-        let top0_mask = s_exact_mask.get(top0).copied().unwrap_or(0) & q_mask;
-        let top0_full_cov = q_mask != 0 && top0_mask == q_mask;
-
-        let base_sight_q16: Vec<u64> = (0..ns)
-            .map(|si| ieee754_bits_to_q16((s_score[si] + bridge_boost[si]).to_bits()))
-            .collect();
-        let top0_sight_q16 = base_sight_q16[top0];
-        let top1_sight_q16 = s_ord_base
-            .get(1)
-            .and_then(|&s1| base_sight_q16.get(s1).copied())
-            .unwrap_or(0);
-        let crisp_peak_lock = top0_sight_q16.saturating_mul(CRISP_PEAK_DEN)
-            >= top1_sight_q16.saturating_mul(CRISP_PEAK_NUM)
-            || (top0_full_cov
-                && total_groups >= 4
-                && !eff_it.multi_hop
-                && top0_sight_q16.saturating_mul(9) >= top1_sight_q16.saturating_mul(10));
-
-        let max_partner_df = ((ns / 3).max(2)) as u32;
-        let mut ppmi_raw = vec![0u64; ns];
-        let mut wn_raw = vec![0u64; ns];
-        let mut rsb_raw = vec![0u64; ns];
-
-        // 1. Corpus-IC weighted PPMI neighbor bridge (2x weight on query groups missing from `top0`).
-        let mut seen_qids: BTreeSet<u32> = BTreeSet::new();
-        for qt in &plan.terms {
-            let Some(g) = qt.group else {
-                continue;
-            };
-            if g >= 64 || !seen_qids.insert(qt.id) {
-                continue;
-            }
-            let Some(neighbors) = ix.ppmi_neighbors.get(&qt.id) else {
-                continue;
-            };
-            let q_df = ix.s_stats.df.get(&qt.id).copied().unwrap_or(1).max(1) as u64;
-            let q_ic_q16 = log2_u64_q16(((ns as u64) + 1) / q_df.min(ns as u64)).max(Q16_ONE >> 2);
-            let uncov_mult = if (top0_mask & (1u64 << g)) == 0 { 2u64 } else { 1u64 };
-
-            for &(partner_id, ppmi_w) in neighbors.iter().take(MAX_PPMI_NEIGHBORS_PER_TERM) {
-                let p_df = ix.s_stats.df.get(&partner_id).copied().unwrap_or(0);
-                if p_df == 0 || p_df > max_partner_df {
-                    continue;
-                }
-                let pw_q16 = ieee754_bits_to_q16(ppmi_w.to_bits());
-                if pw_q16 == 0 {
-                    continue;
-                }
-                let contrib_q16 = ((pw_q16.saturating_mul(q_ic_q16)) >> Q16_SHIFT)
-                    .saturating_mul(uncov_mult);
-                if let Some(postings) = ix.s_postings.get(partner_id as usize) {
-                    for &si_u32 in postings {
-                        let si = si_u32 as usize;
-                        if si < ns && si != top0 {
-                            ppmi_raw[si] = ppmi_raw[si].saturating_add(contrib_q16);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. 1-hop WordNet conceptual bridge via `ix.bridge_vocab` + `ix.turn_bridge_postings`.
-        for (g, g_word) in plan.groups.iter().take(64).enumerate() {
-            let uncov_mult = if (top0_mask & (1u64 << g)) == 0 { 2u64 } else { 1u64 };
-            let mut hit_sessions: BTreeSet<usize> = BTreeSet::new();
-            for lemma in crate::retrieval::graph::bridge::wordnet_lemmas_with_morph(g_word)
-                .into_iter()
-                .take(MAX_WN_LEMMAS_PER_GROUP)
-            {
-                let mut cand_bids = [None; 2];
-                cand_bids[0] = ix.bridge_vocab.get(lemma);
-                let st_l = stem_term(&stem(lemma));
-                cand_bids[1] = ix.bridge_vocab.get(&st_l);
-                for bid in cand_bids.into_iter().flatten() {
-                    if let Some(tlist) = ix.turn_bridge_postings.get(bid as usize) {
-                        for &ti_u32 in tlist {
-                            let ti = ti_u32 as usize;
-                            if let Some(t) = ix.turns.get(ti) {
-                                let si = t.session;
-                                if si < ns
-                                    && si != top0
-                                    && (s_exact_mask[si] & (1u64 << g)) == 0
-                                {
-                                    hit_sessions.insert(si);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            let hit_df = hit_sessions.len() as u32;
-            if hit_df > 0 && hit_df <= max_partner_df {
-                let wn_ic_q16 = log2_u64_q16(((ns as u64) + 1) / (hit_df as u64))
-                    .max(Q16_ONE >> 2)
-                    .saturating_mul(uncov_mult);
-                for si in hit_sessions {
-                    wn_raw[si] = wn_raw[si].saturating_add(wn_ic_q16);
-                }
-            }
-        }
-
-        // 3. 2-hop damped backward RSB + supersession + episode pull from top anchors.
-        let anchors: Vec<usize> = s_ord_base
-            .iter()
-            .copied()
-            .filter(|&si| si < ns && base_sight_q16[si].saturating_mul(5) >= top0_sight_q16.saturating_mul(2))
-            .take(MAX_ANCHOR_SESSIONS)
-            .collect();
-        for &anc in &anchors {
-            let mut hop1: BTreeSet<usize> = BTreeSet::new();
-            for &(deg, prev_si) in &ix.session_rsb_back[anc] {
-                if prev_si < ns && prev_si != top0 {
-                    let w = Q16_ONE / (deg.max(2) as u64);
-                    rsb_raw[prev_si] = rsb_raw[prev_si].saturating_add(w);
-                    hop1.insert(prev_si);
-                }
-            }
-            if !it.current_state {
-                for &prev_si in &ix.session_supersedes_back[anc] {
-                    if prev_si < ns && prev_si != top0 {
-                        rsb_raw[prev_si] = rsb_raw[prev_si].saturating_add(Q16_ONE >> 1);
-                        hop1.insert(prev_si);
-                    }
-                }
-            }
-            if let Some(prev_ep) = ix.session_episode_prev[anc] {
-                if prev_ep < ns && prev_ep != top0 {
-                    rsb_raw[prev_ep] = rsb_raw[prev_ep].saturating_add(Q16_ONE >> 1);
-                    hop1.insert(prev_ep);
-                }
-            }
-            // Hop 2 (damped 0.5x in Q16.16)
-            for mid in hop1 {
-                for &(deg, prev2) in &ix.session_rsb_back[mid] {
-                    if prev2 < ns && prev2 != top0 && prev2 != anc {
-                        let w = (Q16_ONE / (deg.max(2) as u64)) >> 1;
-                        rsb_raw[prev2] = rsb_raw[prev2].saturating_add(w);
-                    }
-                }
-                if !it.current_state {
-                    for &prev2 in &ix.session_supersedes_back[mid] {
-                        if prev2 < ns && prev2 != top0 && prev2 != anc {
-                            rsb_raw[prev2] = rsb_raw[prev2].saturating_add(Q16_ONE >> 2);
-                        }
-                    }
-                }
-                if let Some(prev2) = ix.session_episode_prev[mid] {
-                    if prev2 < ns && prev2 != top0 && prev2 != anc {
-                        rsb_raw[prev2] = rsb_raw[prev2].saturating_add(Q16_ONE >> 2);
-                    }
-                }
-            }
-        }
-
-        let smax_q16 = ieee754_bits_to_q16(smax.to_bits());
-        let coeff_q16 = if eff_it.multi_hop || !top0_full_cov {
-            LIFT_COEFF_MULTI_Q16
-        } else {
-            LIFT_COEFF_BASE_Q16
-        };
-        let lifts_q16 = fuse_associative_lift_q16(
-            &ppmi_raw,
-            &wn_raw,
-            &rsb_raw,
-            smax_q16,
-            coeff_q16,
-            top0,
-            top0_sight_q16,
-            crisp_peak_lock,
-            &base_sight_q16,
-        );
-        const Q16_SCALE_F32: f32 = 65_536.0;
-        for (si, &lift_q16) in lifts_q16.iter().enumerate() {
-            if lift_q16 > 0 {
-                let lift_f32 = (lift_q16 as f32) / Q16_SCALE_F32;
-                bridge_boost[si] += lift_f32;
-            }
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn test_associative_lift_promotes_multihop_and_respects_rule8_ceiling() {
-            // top0 = 0 has sight 10.0; session 1 is a crisp runner-up at 6.0;
-            // session 2 sits low at 2.0 but carries strong PPMI + WordNet + RSB support.
-            let smax_q16 = 10 * Q16_ONE;
-            let base = vec![10 * Q16_ONE, 6 * Q16_ONE, 2 * Q16_ONE, 2 * Q16_ONE];
-            let ppmi = vec![0, 0, 2 * Q16_ONE, 0];
-            let wn = vec![0, 0, 2 * Q16_ONE, 0];
-            let rsb = vec![0, 0, Q16_ONE, 0];
-
-            let lifts = fuse_associative_lift_q16(
-                &ppmi,
-                &wn,
-                &rsb,
-                smax_q16,
-                LIFT_COEFF_MULTI_Q16,
-                0,
-                base[0],
-                true, // Rule 8 crisp-peak lock active
-                &base,
-            );
-            // Session 2 rises cleanly above session 1 (2.0 + 5.2 = 7.2 > 6.0)
-            assert!(base[2] + lifts[2] > base[1]);
-            // Rule 8 lock: session 2 stays strictly below 0.90 * sight(top0) = 9.0
-            assert!(base[2] + lifts[2] <= (base[0] * RULE8_CEILING_NUM) / RULE8_CEILING_DEN);
-            // Unrelated session 3 receives zero lift
-            assert_eq!(lifts[3], 0);
         }
     }
 }

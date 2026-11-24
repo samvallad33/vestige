@@ -178,10 +178,17 @@ pub(in crate::retrieval) fn apply_w2_standing_register_seat(
 
     // Explicit `"would you suggest"` / `"would you recommend"` preference consultation in long chats:
     // promote domain-matched compound preference directive (`"I prefer..."`, `"I'd like to..."`) directly to Slot 0!
+    let dir_kratzer =
+        crate::retrieval::seating::afriat_kratzer_garp_q16::analyze_kratzer_searle_turn(
+            &ix.turns[dir_ti],
+        );
     if explicit_pref_consult
         && ix.turns.len() >= 64
         && best_hits >= 1
         && ix.preference_directive_turns.contains(&dir_ti)
+        && !(dir_kratzer.point
+            == crate::retrieval::seating::afriat_kratzer_garp_q16::IllocPoint::Directive
+            && ix.turns[dir_ti].is_pure_info_question)
     {
         let orig_len = final_turn_indices.len();
         if let Some(existing) = final_turn_indices.iter().position(|&t| t == dir_ti) {

@@ -28,7 +28,13 @@ pub(in crate::retrieval) fn build_kite_typed_index(turns: &[TurnIx]) -> KiteType
 
     // Cap per-conversation indexing budget for very large multi-thousand-turn corpora while
     // keeping full coverage on dialogue corpora (LoCoMo ~400-700 turns, BEAM ~300-600 turns/conv).
-    let max_words_per_turn = if turns.len() > 1500 { 8usize } else { 14usize };
+    let max_words_per_turn = if turns.len() > 8_000 {
+        22usize
+    } else if turns.len() > 1_500 {
+        28usize
+    } else {
+        36usize
+    };
 
     for (ti, tr) in turns.iter().enumerate() {
         if tr.is_backchannel || tr.is_question || tr.is_standing_policy {

@@ -288,6 +288,40 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
         return;
     }
 
+    // C13: Afriat-Varian GARP Transitive Closure + Fostel-Scarf-Todd Utility + Kratzer-Searle Force Lattice
+    {
+        let cand_tis: Vec<usize> = active_prefs.iter().map(|x| x.0).collect();
+        let cand_ic: Vec<u64> = active_prefs
+            .iter()
+            .map(|x| x.2.saturating_add(x.3))
+            .collect();
+        let ak_utilities =
+            crate::retrieval::seating::afriat_kratzer_garp_q16::score_afriat_kratzer_candidates_q16(
+                ix, &cand_tis, &cand_ic,
+            );
+        for (entry, &ak_q16) in active_prefs.iter_mut().zip(ak_utilities.iter()) {
+            let k_prof =
+                crate::retrieval::seating::afriat_kratzer_garp_q16::analyze_kratzer_searle_turn(
+                    &ix.turns[entry.0],
+                );
+            if k_prof.point
+                == crate::retrieval::seating::afriat_kratzer_garp_q16::IllocPoint::Directive
+                && ix.turns[entry.0].is_pure_info_question
+                && !entry.4
+            {
+                entry.1 = 0;
+            } else if ak_q16 > 0 {
+                let capped = ((ak_q16 >> 2) as u64)
+                    .min(entry.2.saturating_mul(2).max(Q16_ONE >> 2));
+                entry.1 = entry.1.saturating_add(capped);
+            }
+        }
+        active_prefs.retain(|e| e.1 > 0 || e.4);
+        if active_prefs.is_empty() {
+            return;
+        }
+    }
+
     // Sort active preferences: weighted topic + lexicon + stance key -> scene/own score -> recency.
     active_prefs.sort_by(|a, b| {
         b.1.cmp(&a.1)

@@ -11,71 +11,12 @@
 //! lexical weight strictly exceeds the sum of all auxiliary weights, making lexical rank-1
 //! a mathematically guaranteed Condorcet winner.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::retrieval::fusion::aspect_coverage_q16::Q16_ONE;
 
 /// Canonical RRF smoothing constant `k = 60` (Cormack et al. 2009).
 const RRF_K: u64 = 60;
-
-/// Extract top-`max_bridges` high-IC RM1/RM3 bridge entities from Hop-1 seed sessions.
-/// Only entities occurring in `>= 2` corpus sessions (`df >= 2`) and absent from the
-/// original query `query_terms` qualify as bridges (zero single-session noise).
-pub(in crate::retrieval) fn extract_rm3_bridge_entities_q16(
-    hop1_sessions: &[(usize, u64, &[(u32, u64)])],
-    query_terms: &BTreeSet<u32>,
-    term_df: &BTreeMap<u32, u32>,
-    term_ic_q16: &BTreeMap<u32, u64>,
-    max_bridges: usize,
-) -> BTreeMap<u32, u64> {
-    let mut out: BTreeMap<u32, u64> = BTreeMap::new();
-    if hop1_sessions.is_empty() || max_bridges == 0 {
-        return out;
-    }
-    let total_prior: u64 = hop1_sessions
-        .iter()
-        .map(|&(_, sc, _)| sc)
-        .fold(0u64, u64::saturating_add)
-        .max(1);
-
-    let mut rm1_acc: BTreeMap<u32, u64> = BTreeMap::new();
-    for &(_sid, sc_q16, terms) in hop1_sessions {
-        if sc_q16 == 0 {
-            continue;
-        }
-        let doc_len: u64 = terms
-            .iter()
-            .map(|&(_, tf)| tf)
-            .fold(0u64, u64::saturating_add)
-            .max(1);
-        let p_doc = (((sc_q16 as u128) << 16) / (total_prior as u128)) as u64;
-        for &(tid, tf) in terms {
-            if query_terms.contains(&tid) {
-                continue;
-            }
-            if term_df.get(&tid).copied().unwrap_or(0) < 2 {
-                continue;
-            }
-            let p_w_d = (((tf as u128) << 16) / (doc_len as u128)) as u64;
-            let ic = term_ic_q16.get(&tid).copied().unwrap_or(0);
-            let contrib = (((p_doc as u128).saturating_mul(p_w_d as u128) >> 16)
-                .saturating_mul(ic as u128)
-                >> 16) as u64;
-            if contrib > 0 {
-                let e = rm1_acc.entry(tid).or_insert(0);
-                *e = e.saturating_add(contrib);
-            }
-        }
-    }
-
-    let mut ranked: Vec<(u32, u64)> = rm1_acc.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    ranked.truncate(max_bridges);
-    for (tid, w) in ranked {
-        out.insert(tid, w);
-    }
-    out
-}
 
 /// Lexical-Anchored Weighted RRF followed by a single pass of Weighted Local Kemenization
 /// over candidate pool `pool` (`|pool| <= 24`).
@@ -191,24 +132,5 @@ mod tests {
         // When lexical coverage is incomplete, 3 agreeing aux rankers CAN promote 30.
         let out_open = lexical_anchored_rrf_kemeny_q16(&pool, &lex, &aux, false);
         assert_eq!(out_open[0], 30);
-    }
-
-    #[test]
-    fn rm3_extracts_only_cross_session_high_ic_bridges() {
-        let s0_terms = [(1u32, 2u64), (2u32, 3u64), (3u32, 5u64)];
-        let mut q = BTreeSet::new();
-        q.insert(1); // already in query
-        let mut df = BTreeMap::new();
-        df.insert(1, 3);
-        df.insert(2, 2); // valid bridge (df >= 2)
-        df.insert(3, 1); // singleton noise (df < 2)
-        let mut ic = BTreeMap::new();
-        ic.insert(1, Q16_ONE * 3);
-        ic.insert(2, Q16_ONE * 4);
-        ic.insert(3, Q16_ONE * 5);
-        let bridges = extract_rm3_bridge_entities_q16(&[(0, Q16_ONE, &s0_terms)], &q, &df, &ic, 4);
-        assert!(bridges.contains_key(&2));
-        assert!(!bridges.contains_key(&1));
-        assert!(!bridges.contains_key(&3));
     }
 }

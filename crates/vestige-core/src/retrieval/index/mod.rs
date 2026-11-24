@@ -116,6 +116,8 @@ pub(in crate::retrieval) struct TurnIx {
     pub(in crate::retrieval) is_backchannel: bool,
     pub(in crate::retrieval) anaphoric: bool,
     pub(in crate::retrieval) is_personal_constraint: bool,
+    /// Closed-class 1st-person prose personal state/disclosure flag (preserves `is_personal_constraint` contract).
+    pub(in crate::retrieval) has_prose_disclosure: bool,
     pub(in crate::retrieval) has_temporal: bool,
     pub(in crate::retrieval) has_numeric: bool,
     pub(in crate::retrieval) has_spatial: bool,
@@ -898,6 +900,26 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                     }
                 }
             }
+            // Closed-class 1st-person prose personal state/disclosure detector (zero topic words):
+            // hardcode-scan: closed-class (1st-person pronouns and stative/possessive/experiencer auxiliaries)
+            let has_prose_disclosure = field == 0
+                && !is_pure_info_question
+                && !is_backchannel
+                && !is_standing_policy
+                && (is_personal_constraint
+                    || is_habitual
+                    || (raw_refs_idx.iter().take(8).any(|&w| {
+                        matches!(
+                            w,
+                            "i" | "im" | "i'm" | "ive" | "i've" | "id" | "i'd" | "my" | "our" | "we" | "we're" | "we've"
+                        )
+                    }) && raw_refs_idx.iter().any(|&w| {
+                        matches!(
+                            w,
+                            "am" | "im" | "i'm" | "have" | "ive" | "i've" | "had" | "got" | "my" | "our"
+                                | "cant" | "can't" | "cannot" | "dont" | "don't" | "never" | "avoid" | "without"
+                        )
+                    }) && content.len() >= 2));
             let is_initiative = field == 0
                 && !is_standing_policy
                 && !anaphoric
@@ -969,6 +991,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 is_backchannel,
                 anaphoric,
                 is_personal_constraint,
+                has_prose_disclosure,
                 has_temporal,
                 has_numeric,
                 has_spatial,
@@ -1305,11 +1328,8 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
             .iter()
             .take(16)
             .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
-    let (torrens_records, torrens_superseded, spatial_events) = if is_monologue_stream {
-        crate::retrieval::graph::torrens::build_torrens_and_spatial_index(&turn_prose_cache, &turns)
-    } else {
-        (Vec::new(), vec![false; turns.len()], Vec::new())
-    };
+    let (torrens_records, torrens_superseded, spatial_events) =
+        crate::retrieval::graph::torrens::build_torrens_and_spatial_index(&turn_prose_cache, &turns);
 
     let mut turn_superseded = if is_monologue_stream {
         torrens_superseded.clone()

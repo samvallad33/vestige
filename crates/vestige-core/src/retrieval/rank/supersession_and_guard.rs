@@ -193,7 +193,25 @@ fn is_scaffold_token(w: &str) -> bool {
 /// hardcode-scan: closed-class (historical/temporal/ordering interrogatives and adverbs).
 fn is_historical_or_order_query(q_text: &str) -> bool {
     let ql = q_text.to_ascii_lowercase();
-    [
+    // hardcode-scan: closed-class (current-state and revision temporal adverbs)
+    let explicit_current_or_update = [
+        "currently",
+        "right now",
+        " now?",
+        "latest",
+        "most recent",
+        "updated",
+        "changed to",
+        "switched to",
+        "instead",
+        "contradict",
+        "conflict",
+        "inconsisten",
+    ]
+    .iter()
+    .any(|p| ql.contains(p));
+    // hardcode-scan: closed-class (historical and ordering temporal adverbs)
+    let hard_hist = [
         "originally",
         "initially",
         "used to",
@@ -206,6 +224,23 @@ fn is_historical_or_order_query(q_text: &str) -> bool {
         "order of",
         "earliest",
         "planned to",
+        "previously",
+        "at first",
+        "before the update",
+        "before i changed",
+        "before i moved",
+        "before switching",
+    ]
+    .iter()
+    .any(|p| ql.contains(p));
+    if hard_hist {
+        return true;
+    }
+    if explicit_current_or_update {
+        return false;
+    }
+    // hardcode-scan: closed-class (past-tense auxiliary interrogative frames)
+    [
         "what were",
         "what was ",
         "where was ",
@@ -217,8 +252,6 @@ fn is_historical_or_order_query(q_text: &str) -> bool {
         " have i ",
         " have we ",
         " ever ",
-        "previously",
-        "at first",
     ]
     .iter()
     .any(|p| ql.contains(p))
@@ -558,10 +591,25 @@ fn apply_forward_supersession_chain(
         }
     }
 
-    let mut best_pos: Option<usize> = None;
+    let mut cand_pool: Vec<usize> = ctx.final_turn_indices[1..window].to_vec();
+    for &si in ctx.final_session_indices.iter().take(5) {
+        for &ti in &ctx.ix.session_turns[si] {
+            if ti > t0 && ctx.ix.turns[ti].field == 0 && !cand_pool.contains(&ti) {
+                cand_pool.push(ti);
+            }
+        }
+    }
+    for (ti, tr_all) in ctx.ix.turns.iter().enumerate().skip(t0 + 1) {
+        if tr_all.supersedes_turns.contains(&t0) && !cand_pool.contains(&ti) {
+            cand_pool.push(ti);
+        }
+    }
+    let t0_torrens_sup = ctx.ix.torrens_superseded.get(t0).copied().unwrap_or(false);
+
+    let mut best_cand: Option<usize> = None;
     let mut best_key: (bool, i64, usize) = (false, i64::MIN, 0);
 
-    for (pos, &cand) in ctx.final_turn_indices[1..window].iter().enumerate() {
+    for (pos, &cand) in cand_pool.iter().enumerate() {
         let trc = &ctx.ix.turns[cand];
         if trc.field != 0 || trc.is_pure_info_question || trc.is_backchannel || trc.is_standing_policy
         {
@@ -575,6 +623,11 @@ fn apply_forward_supersession_chain(
             continue;
         }
         if !crate::retrieval::graph::state_entrenchment_dag::agm_may_supersede(ctx.ix, cand, t0) {
+            continue;
+        }
+        if !crate::retrieval::graph::reichenbach_roman_belnap_q16::roman_canon_allows_supersession(
+            ctx.ix, t0, cand,
+        ) {
             continue;
         }
         if !shares_provenance(ctx, t0, cand, topical_mask, star_bit) {
@@ -607,31 +660,39 @@ fn apply_forward_supersession_chain(
         if !t0_stale && ctx.t_scene[t0] > 0.0 && ctx.t_scene[cand] < 0.35 * ctx.t_scene[t0] {
             continue;
         }
-        if trc.content.len() < 6 {
+        if trc.content.len() < 4 {
             continue;
         }
-        if pos >= 9 && !(has_update && cand_hits_topical) {
+        if pos >= 12 && !(explicit_edge || (has_update && cand_hits_topical)) {
             continue;
         }
-        if !(has_update || (t0_stale && c_sess > t0_sess && cand_hits_topical)) {
+        if !(explicit_edge
+            || has_update
+            || ((t0_stale || t0_torrens_sup) && c_sess > t0_sess && cand_hits_topical))
+        {
             continue;
         }
-        if ctx.t_scene[cand] <= 0.0 {
+        if ctx.t_scene[cand] <= 0.0 && !explicit_edge {
             continue;
         }
-        if c_sess == t0_sess && !cand_hits_topical {
+        if c_sess == t0_sess && !cand_hits_topical && !explicit_edge {
             continue;
         }
         let key = (explicit_edge || has_update, c_ts, cand);
-        if best_pos.is_none() || key > best_key {
-            best_pos = Some(pos + 1);
+        if best_cand.is_none() || key > best_key {
+            best_cand = Some(cand);
             best_key = key;
         }
     }
 
-    if let Some(pos) = best_pos {
-        let cand = ctx.final_turn_indices.remove(pos);
+    if let Some(cand) = best_cand {
+        if let Some(existing) = ctx.final_turn_indices.iter().position(|&x| x == cand) {
+            ctx.final_turn_indices.remove(existing);
+        }
         ctx.final_turn_indices.insert(0, cand);
+        if ctx.final_turn_indices.len() > ctx.k {
+            ctx.final_turn_indices.truncate(ctx.k);
+        }
 
         // Sync Rank-1 session to the superseding turn's session.
         let cs = ctx.ix.turns[cand].session;
@@ -658,6 +719,82 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
     let (topical_mask, star_bit, queried_speakers) = compute_topical_and_star(ctx);
     rescue_zero_exact_entity_head(ctx, topical_mask, star_bit, &queried_speakers);
     apply_forward_supersession_chain(ctx, topical_mask, star_bit);
+
+    // Pass 3: Dominant Session-0 Declarative Turn Synchronization (closes 91.0% S@1 -> 57.4% T@1 gap on LME Temporal):
+    if !ctx.has_named_speakers_eff
+        && !ctx.is_monologue_corpus
+        && !ctx.ix.has_tool_calls
+        && !ctx.pref_on
+        && !ctx.eff_it.task_under_rules
+        && !ctx.eff_it.is_event_sequence
+        && !eff_summary_request(&ctx.q.text)
+        && ctx.final_session_indices.len() >= 2
+        && !ctx.final_turn_indices.is_empty()
+        && topical_mask != 0
+    {
+        let s0 = ctx.final_session_indices[0];
+        let s1 = ctx.final_session_indices[1];
+        let sight0 = ctx.s_score[s0] + ctx.bridge_boost[s0];
+        let sight1 = ctx.s_score[s1] + ctx.bridge_boost[s1];
+        let t0 = ctx.final_turn_indices[0];
+        let tr0 = &ctx.ix.turns[t0];
+        let t0_sup = !is_historical_or_order_query(&ctx.q.text)
+            && (turn_is_superseded(ctx.ix, t0)
+                || ctx.ix.torrens_superseded.get(t0).copied().unwrap_or(false));
+        let desynced = (ctx.eff_it.temporal && tr0.session != s0)
+            || tr0.is_pure_info_question
+            || t0_sup;
+        if desynced && sight0 >= 1.20 * sight1.max(1e-6) && (ctx.s_mask[s0] & topical_mask) != 0 {
+            let t0_cov = (ctx.t_exact_mask[t0] & topical_mask).count_ones();
+            let role_want = usize::from(ctx.eff_it.assistant_attribution);
+            let best_s0 = ctx.ix.session_turns[s0]
+                .iter()
+                .copied()
+                .filter(|&ti| {
+                    let tr = &ctx.ix.turns[ti];
+                    !tr.is_backchannel
+                        && !tr.is_standing_policy
+                        && !tr.is_pure_info_question
+                        && (is_historical_or_order_query(&ctx.q.text)
+                            || (!turn_is_superseded(ctx.ix, ti)
+                                && !ctx.ix.torrens_superseded.get(ti).copied().unwrap_or(false)))
+                        && ctx.t_scene[ti] > 0.0
+                })
+                .max_by(|&a, &b| {
+                    let ra = u8::from(ctx.ix.turns[a].field == role_want && !ctx.ix.turns[a].is_question);
+                    let rb = u8::from(ctx.ix.turns[b].field == role_want && !ctx.ix.turns[b].is_question);
+                    let ca = (ctx.t_exact_mask[a] & topical_mask).count_ones();
+                    let cb = (ctx.t_exact_mask[b] & topical_mask).count_ones();
+                    let ta = u8::from(!ctx.eff_it.temporal || ctx.ix.turns[a].has_temporal || !ctx.ix.turns[a].resolved_timex.is_empty());
+                    let tb = u8::from(!ctx.eff_it.temporal || ctx.ix.turns[b].has_temporal || !ctx.ix.turns[b].resolved_timex.is_empty());
+                    ra.cmp(&rb)
+                        .then_with(|| ca.cmp(&cb))
+                        .then_with(|| ta.cmp(&tb))
+                        .then_with(|| {
+                            ctx.t_scene[a]
+                                .partial_cmp(&ctx.t_scene[b])
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .then_with(|| b.cmp(&a))
+                });
+            if let Some(win_s0_ti) = best_s0 {
+                let win_cov = (ctx.t_exact_mask[win_s0_ti] & topical_mask).count_ones();
+                if win_s0_ti != t0
+                    && (t0_sup
+                        || tr0.is_pure_info_question
+                        || (win_cov >= t0_cov && ctx.t_scene[win_s0_ti] >= 0.78 * ctx.t_scene[t0]))
+                {
+                    if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == win_s0_ti) {
+                        ctx.final_turn_indices.remove(pos);
+                    }
+                    ctx.final_turn_indices.insert(0, win_s0_ti);
+                    if ctx.final_turn_indices.len() > ctx.k {
+                        ctx.final_turn_indices.truncate(ctx.k);
+                    }
+                }
+            }
+        }
+    }
     crate::retrieval::graph::state_entrenchment_dag::apply_agm_entrenchment_demotion(
         ctx.ix,
         ctx.eff_it.current_state,

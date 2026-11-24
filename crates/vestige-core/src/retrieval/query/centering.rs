@@ -60,7 +60,7 @@ pub(in crate::retrieval) fn compute_centering_coherence_lifts_q16(
 ) -> Vec<u64> {
     let ns = ix.session_turns.len();
     let mut out = vec![0u64; ns];
-    if ns <= 5 || top0 >= ns || smax_q16 == 0 {
+    if ns < 2 || top0 >= ns || smax_q16 == 0 {
         return out;
     }
     let speakers: BTreeSet<String> = ix.turns.iter().filter(|t| !t.speaker.is_empty())

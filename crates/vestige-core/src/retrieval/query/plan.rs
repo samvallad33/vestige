@@ -417,6 +417,7 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
                 let mut nick_ids: Vec<u32> = Vec::new();
                 for plen in [2usize, 3, 4] {
                     if plen < w.len()
+                        && w.is_char_boundary(plen)
                         && let Some(nid) = ix.vocab.get(&w[..plen])
                         && (1..=nick_df_max).contains(&corpus_df(nid))
                     {
@@ -701,18 +702,30 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
         }
     }
 
-    // CamelCase & snake/hyphen reverse query expansion (`localStorage` -> `local`, `storage` at 0.55).
+    // CamelCase & snake/hyphen reverse query expansion (`localStorage` -> `local`, `storage` at 0.55),
+    // PLUS exact hyphenated/underscored tech-compound focal preservation (`Flask-Login` -> `flasklogin`
+    // at 1.35 + `exact_hit: true` + `focal_ids` when corpus-rare so compound packages beat high-DF parts).
+    let compound_df_cap = ((n_docs / 4) as u32).max(4);
     for raw_word in q.text.split_whitespace() {
         let word = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
         if word.is_empty() {
             continue;
         }
-        for (part, _) in surface_aux_tokens(word) {
+        let is_hyphen_compound = word.contains('-');
+        for (idx_aux, (part, _)) in surface_aux_tokens(word).into_iter().enumerate() {
             if seen_toks.contains(&part) {
                 continue;
             }
             if let Some(id) = ix.vocab.get(&part) {
-                terms.push(QTerm { id, weight: 0.55, group: None, exact_hit: false });
+                let df = corpus_df(id);
+                if is_hyphen_compound && idx_aux == 0 && (1..=compound_df_cap).contains(&df) {
+                    terms.push(QTerm { id, weight: 0.95, group: None, exact_hit: true });
+                    if df <= 2 {
+                        focal_ids.insert(id);
+                    }
+                } else {
+                    terms.push(QTerm { id, weight: 0.55, group: None, exact_hit: false });
+                }
             }
         }
     }
@@ -885,7 +898,35 @@ pub(crate) fn find_unique_typo_fallback(vocab_names: &[String], w: &str) -> Opti
             }
         }
     }
-    found.map(|(id, _)| id)
+    if let Some((id, _)) = found {
+        return Some(id);
+    }
+    // Step 9B: Unique orthographic prefix-abbreviation fallback (`"educaton"`/`"education"` -> `"edu"`,
+    // `"psychology"` -> `"psych"`, `"department"` -> `"dept"`). Restricted strictly to non-WordNet
+    // 3..=5 char ASCII lowercase abbreviations that are an exact prefix of `w` (`len >= 6`), preventing
+    // false matches against ordinary English words (`"cat"` != `"category"`).
+    let mut abbrev_found: Option<u32> = None;
+    for (id, cand) in vocab_names.iter().enumerate() {
+        let cb = cand.as_bytes();
+        if !(3..=5).contains(&cb.len())
+            || cb[0] != first
+            || cb.starts_with(b"\x01")
+            || !cb.iter().all(|b| b.is_ascii_lowercase())
+        {
+            continue;
+        }
+        if !w.starts_with(cand.as_str()) || !is_content(cand) {
+            continue;
+        }
+        if !crate::wordnet::senses(cand).is_empty() {
+            continue;
+        }
+        if abbrev_found.is_some() {
+            return None;
+        }
+        abbrev_found = Some(id as u32);
+    }
+    abbrev_found
 }
 
 /// Step 9A wiring in plan_query: a zero-DF query word (no exact, stem, or nick hit) maps to
@@ -912,5 +953,52 @@ pub(in crate::retrieval) fn step9_push_typo_fallback(
             terms.push(QTerm { id: cs_id, weight: 0.65, group: Some(g), exact_hit: false });
             group_of.insert(cs_id, g);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn orthographic_prefix_abbreviation_resolves_educaton_to_edu_without_english_false_positives() {
+        let vocab = vec!["hello".to_string(), "edu".to_string(), "cat".to_string()];
+        assert_eq!(find_unique_typo_fallback(&vocab, "educaton"), Some(1));
+        assert_eq!(find_unique_typo_fallback(&vocab, "category"), None);
+    }
+
+    #[test]
+    fn hyphenated_tech_compound_becomes_exact_focal_anchor() {
+        let sessions = vec![
+            Session {
+                id: "s0".into(),
+                date: String::new(),
+                timestamp: 1000,
+                turns: vec![Turn {
+                    id: "t0".into(),
+                    role: "user".into(),
+                    content: "We configured Flask-Login for session auth.".into(),
+                    ..Default::default()
+                }],
+            },
+            Session {
+                id: "s1".into(),
+                date: String::new(),
+                timestamp: 2000,
+                turns: vec![Turn {
+                    id: "t1".into(),
+                    role: "user".into(),
+                    content: "Flask routing works for static pages.".into(),
+                    ..Default::default()
+                }],
+            },
+        ];
+        let p = Params::default();
+        let ix = build_index(&sessions, &p);
+        let q = Query { text: "How did we configure Flask-Login?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &p);
+        let compound_id = ix.vocab.get("flasklogin").expect("flasklogin indexed");
+        assert!(plan.focal_ids.contains(&compound_id));
+        assert!(plan.terms.iter().any(|t| t.id == compound_id && t.exact_hit && t.weight >= 0.9));
     }
 }

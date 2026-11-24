@@ -650,10 +650,17 @@ pub(in crate::retrieval) fn build_torrens_and_spatial_index(
         };
         extract_spatial_events(prose, ti, &mut spatial_events);
 
-        if t.is_question {
+        if t.is_question || t.is_standing_policy {
             continue;
         }
-        if let Some(rec) = parse_torrens_sentence(prose, ti) {
+        if let Some(mut rec) = parse_torrens_sentence(prose, ti) {
+            // Scope functional keys per named speaker in multi-party chats so Speaker A never supersedes Speaker B:
+            if !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant" {
+                let mut sp_key = t.speaker.to_ascii_lowercase().into_bytes();
+                sp_key.push(b':');
+                sp_key.extend_from_slice(&rec.key_hash.to_le_bytes());
+                rec.key_hash = fnv1a_u64(&sp_key);
+            }
             if let Some((prev_ti, prev_val)) = title_holder.get(&rec.key_hash) {
                 if *prev_ti < ti && turns[*prev_ti].session <= t.session && *prev_val != rec.val_phrase {
                     torrens_superseded[*prev_ti] = true;

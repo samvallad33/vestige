@@ -395,7 +395,7 @@ impl SpeakerNickIndex {
         ordered.sort();
         for name in ordered {
             for len in 2..=5 {
-                if name.len() < len + NICK_TAIL {
+                if name.len() < len + NICK_TAIL || !name.is_char_boundary(len) {
                     continue;
                 }
                 let p = &name[..len];

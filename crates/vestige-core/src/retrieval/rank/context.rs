@@ -126,6 +126,8 @@ pub(in crate::retrieval) struct RankCtx<'a> {
     pub(in crate::retrieval) deficit_b: bool,
     pub(in crate::retrieval) torrens_locked_head: bool,
     pub(in crate::retrieval) implicit_disclosure_locked: bool,
+    pub(in crate::retrieval) ghostcurrent:
+        crate::retrieval::graph::ghostcurrent_mdl_q16::GhostCurrentResult,
 
     // Optional diagnostic 5-Gate Waterfall snapshots (empty unless VESTIGE_WATERFALL_LOG is set)
     pub(in crate::retrieval) wf_g1_s10: Vec<String>,

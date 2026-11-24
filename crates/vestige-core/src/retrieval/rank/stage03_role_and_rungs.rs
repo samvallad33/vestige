@@ -895,10 +895,13 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && !is_monologue_corpus
         && ix.turns.len() >= 4
         && has_retro_asst_cue;
-    let closed_class_mh = has_named_speakers_eff
+    let closed_class_mh = !is_monologue_corpus
+        && ix.session_turns.len() >= 3
         && !it.temporal
         && !it.sniper_when
         && !seq_mode_eff
+        && !pref_live_eff
+        && !task_live_eff
         && crate::retrieval::graph::hashimoto_tripartite_q16::closed_class_plural_or_collective_mh(
             &q_toks_eff,
         );
