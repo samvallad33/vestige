@@ -234,6 +234,48 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         );
     }
 
+    // Q16.16 Shannon Echo & Zero-Surprise Dampener (`Q16_QUARTER = 0.25x` turn prior):
+    // quarantines high-echo subordinate deontic restatements (`rho_echo >= 0.70`),
+    // zero-surprise polar acks (`IC_novel < 1.0 bit`), and unqueried synthetic time headers.
+    let has_named_s2 = ix
+        .turns
+        .iter()
+        .take(32)
+        .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
+    for ti in 0..ix.turns.len() {
+        if t_own[ti] <= 0.0 && t_turn_raw[ti] <= 0.0 {
+            continue;
+        }
+        if crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+            ix, ti, &q.text,
+        ) {
+            t_own[ti] *= 0.25;
+            t_raw[ti] *= 0.25;
+            t_turn_raw[ti] *= 0.25;
+            continue;
+        }
+        if !has_named_s2
+            && !plan.rare_entity_ids.is_empty()
+            && plan.rare_entity_ids.iter().any(|rid| {
+                ix.turns[ti].content.contains(rid)
+                    || ix.turns[ti].entities.contains(rid)
+                    || ix.turns[ti].feats.iter().any(|f| f.id == *rid)
+            })
+        {
+            t_own[ti] *= 1.48;
+            t_raw[ti] *= 1.48;
+            t_turn_raw[ti] *= 1.48;
+        }
+        if !plan.excluded_ids.is_empty()
+            && t_exact_mask[ti] == 0
+            && ix.turns[ti].content.iter().any(|id| plan.excluded_ids.contains(id))
+        {
+            t_own[ti] *= 0.25;
+            t_raw[ti] *= 0.25;
+            t_turn_raw[ti] *= 0.25;
+        }
+    }
+
     ctx.s_score = s_score;
     ctx.t_own = t_own;
     ctx.t_raw = t_raw;

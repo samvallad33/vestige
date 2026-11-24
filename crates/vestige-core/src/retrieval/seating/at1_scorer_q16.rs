@@ -3566,13 +3566,53 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
             .iter()
             .any(|w| matches!(w.as_str(), "between" | "across" | "compare" | "compared" | "both"));
 
+    // Protect a condition-matched StandingRule OR an active user preference directive already
+    // seated at Slot 0 on procedural/advice queries so downstream Condorcet never undoes Wave 3!
+    {
+        let t0_guard = final_turn_indices[0];
+        let t0_cond_rule = ix.turns[t0_guard].is_standing_policy
+            && !turn_is_superseded(ix, t0_guard)
+            && ix
+                .standing_rules
+                .iter()
+                .any(|r| r.turn == t0_guard && rule_condition_matches(ix, r, ctx.plan, &q_toks));
+        let is_adv_or_pref_q = !is_history_or_agg
+            && !ctx.eff_it.temporal
+            && !ctx.eff_it.is_event_sequence
+            && (ctx.eff_it.preference
+                || crate::retrieval::seating::constraint_density_q16::is_advice_or_preference_query(
+                    &ctx.q.text,
+                )
+                || q_low.starts_with("can you help me ")
+                || q_low.starts_with("can you walk me through")
+                || q_low.starts_with("can you show me how")
+                || q_low.starts_with("can you explain step by step")
+                || q_low.starts_with("i'm planning ")
+                || q_low.starts_with("i'm looking ")
+                || q_low.starts_with("i'm working on ")
+                || q_low.starts_with("i'm trying to ")
+                || q_low.starts_with("i'm preparing ")
+                || q_low.starts_with("i want to set up "));
+        let t0_active_pref = is_adv_or_pref_q
+            && ix.preference_directive_turns.contains(&t0_guard)
+            && !turn_is_superseded(ix, t0_guard);
+        if t0_cond_rule || t0_active_pref {
+            return;
+        }
+    }
+
     // 0. Session-to-Turn Slot-0 Coherence Sync (`!has_named_speakers_eff`):
     //    When Rank-1 turn `t0` is a stray standing-policy rule on a non-rule query OR belongs
     //    to a lower-ranked session while `final_session_indices[0]`'s turn sits in Slots `1..5`
     //    with comparable/better coverage, seat `final_session_indices[0]`'s turn at Rank 1.
     if let Some(&s_head) = final_session_indices.first() {
         let t0_cur = final_turn_indices[0];
-        let t0_is_stray_rule = ix.turns[t0_cur].is_standing_policy && !ctx.eff_it.task_under_rules;
+        let t0_is_stray_rule = ix.turns[t0_cur].is_standing_policy
+            && !ctx.eff_it.task_under_rules
+            && !ix
+                .standing_rules
+                .iter()
+                .any(|r| r.turn == t0_cur && rule_condition_matches(ix, r, ctx.plan, &q_toks));
         if t0_is_stray_rule || ix.turns[t0_cur].session != s_head {
             let own0_c = ieee754_bits_to_q16(ctx.t_own.get(t0_cur).copied().unwrap_or(0.0).to_bits());
             let ex0_c = (ctx.t_exact_mask.get(t0_cur).copied().unwrap_or(0) & q_mask_full).count_ones();
@@ -4381,12 +4421,18 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                 });
             let t0_is_decoy = crate::retrieval::seating::habitus_energy_q16::is_status_metric_decoy(
                 &ix.turns[t0].body_for_headers,
+            ) || crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                ix, t0, &q.text,
             );
+            let t0_is_active_pref = ix.preference_directive_turns.contains(&t0)
+                && !turn_is_superseded(ix, t0);
             let t0_weak_scope = !t0_cond_matched_rule
+                && !t0_is_active_pref
                 && (ix.turns[t0].field == 1
                     || (u0 < 0 && !ix.turns[t0].is_standing_policy)
                     || crate::retrieval::fusion::summary_silhouette_q16::is_short_ack_question(ix, t0)
-                    || (is_genuine_pref_q && (ix.turns[t0].is_standing_policy || t0_is_decoy)))
+                    || (is_genuine_pref_q
+                        && (ix.turns[t0].is_standing_policy || t0_is_decoy || ex0 <= 1)))
                 && !(ix.turns[t0].is_standing_policy && !is_genuine_pref_q);
             if t0_weak_scope {
                 let mut best_h: Option<(i64, u64, u32, usize)> = None;
@@ -4398,12 +4444,17 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                     if is_genuine_pref_q && trc.is_standing_policy {
                         continue;
                     }
-                    if crate::retrieval::seating::habitus_energy_q16::is_status_metric_decoy(&trc.body_for_headers) {
+                    if crate::retrieval::seating::habitus_energy_q16::is_status_metric_decoy(&trc.body_for_headers)
+                        || crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                            ix, tc, &q.text,
+                        )
+                    {
                         continue;
                     }
                     let uc = crate::retrieval::seating::habitus_energy_q16::habitus_scope_utility_q16(ix, tc, true);
                     let beats_stray_policy = is_genuine_pref_q && ix.turns[t0].is_standing_policy;
-                    if !beats_stray_policy && !t0_is_decoy && uc <= u0 {
+                    let tc_is_pref = ix.preference_directive_turns.contains(&tc);
+                    if !beats_stray_policy && !t0_is_decoy && !tc_is_pref && uc <= u0 {
                         continue;
                     }
                     let dc = crate::retrieval::seating::constraint_density_q16::deontic_directive_density_q16(
@@ -4411,10 +4462,18 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                     );
                     let ownc = ieee754_bits_to_q16(t_own.get(tc).copied().unwrap_or(0.0).to_bits());
                     let exc = (t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_h).count_ones();
-                    let min_pct = if beats_stray_policy || t0_is_decoy { 55 } else { 75 };
-                    let rel_ok = ownc > 0
-                        && ownc.saturating_mul(100) >= own0.saturating_mul(min_pct)
-                        && (exc >= 1 && (beats_stray_policy || t0_is_decoy || exc >= ex0 || dc >= d0.saturating_add(2_500)));
+                    let min_pct = if beats_stray_policy || t0_is_decoy || tc_is_pref { 45 } else { 75 };
+                    let deontic_pref_unlock = (ex0 == 0 || beats_stray_policy || t0_is_decoy)
+                        && (tc_is_pref || dc >= d0.saturating_add(4_000));
+                    let rel_ok = deontic_pref_unlock
+                        || (ownc > 0
+                            && ownc.saturating_mul(100) >= own0.saturating_mul(min_pct)
+                            && exc >= 1
+                            && (beats_stray_policy
+                                || t0_is_decoy
+                                || tc_is_pref
+                                || exc >= ex0
+                                || dc >= d0.saturating_add(2_500)));
                     if rel_ok {
                         let key = (uc, dc, exc, slot);
                         if best_h.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
@@ -4422,21 +4481,27 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                         }
                     }
                 }
-                if let Some((_, _, _, win_slot)) = best_h {
+                if let Some((_, _, win_exc, win_slot)) = best_h {
                     let win_sess = ix.turns[final_turn_indices[win_slot]].session;
-                    if win_slot < 5 {
-                        final_turn_indices[..=win_slot].rotate_right(1);
+                    // Two-Tier Co-Seating Shield: if Slot 0 holds strong multi-group episodic hits
+                    // (`ex0 >= 2`) and winner has 0 exact hits, co-seat at Slot 1 instead of replacing Slot 0.
+                    let target_slot = if ex0 >= 2 && win_exc == 0 && !t0_is_decoy && ix.turns[t0].field == 0 {
+                        1usize.min(final_turn_indices.len().saturating_sub(1))
                     } else {
+                        0usize
+                    };
+                    if win_slot > target_slot {
                         let win_ti = final_turn_indices.remove(win_slot);
-                        final_turn_indices.insert(0, win_ti);
+                        final_turn_indices.insert(target_slot, win_ti);
                         final_turn_indices.truncate(k.max(5));
                     }
                     if win_sess != s0 {
                         let sw = final_session_indices.len().min(5);
                         if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
-                            && spos > 0
+                            && spos > target_slot
                         {
-                            final_session_indices[..=spos].rotate_right(1);
+                            let mv_s = final_session_indices.remove(spos);
+                            final_session_indices.insert(target_slot, mv_s);
                         }
                     }
                 }
@@ -4548,6 +4613,13 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
     }
 
     let mut scores: Vec<i64> = feats.iter().map(eval_at1_gbdt_q16).collect();
+    for (i, &ti) in pool.iter().enumerate() {
+        if crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+            ix, ti, &q.text,
+        ) {
+            scores[i] = scores[i].saturating_sub(48_000);
+        }
+    }
 
     // #6 Co-Hyponym Sibling Mismatch Penalty (guarded by `any_cand_matches_qw` so
     // false-premise Adversarial source passages are NEVER penalized when the queried
@@ -5190,6 +5262,14 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                 }
             }
         }
+        if sp_set_w17.is_empty()
+            && let Some(det_sp) =
+                crate::retrieval::lexical::tier_bridge_q16::detect_single_subject_speaker(
+                    ix, plan, &q.text,
+                )
+        {
+            sp_set_w17.push(det_sp);
+        }
         let single_sp_w17: Option<&str> = if sp_set_w17.len() == 1 {
             Some(sp_set_w17[0].as_str())
         } else {
@@ -5301,16 +5381,32 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             }
             sc
         };
+        let wd_hyp_insts: Vec<&'static str> = q_hyp_target
+            .as_deref()
+            .map(|h| crate::wikidata::direct_instances_of(h, 16))
+            .unwrap_or_default();
         let hyp_score_turn = |ti: usize| -> u32 {
             let Some(ref hyp) = q_hyp_target else {
                 return 0;
             };
             let mut sc = 0u32;
             for tw in raw_tokens(&ix.turns[ti].body_for_headers) {
-                if tw.len() < 4 || q_toks_w17.iter().any(|qw| qw == &tw) {
+                if tw.len() < 3 || !is_content(&tw) || q_toks_w17.iter().any(|qw| qw == &tw) {
                     continue;
                 }
-                if tw == *hyp || crate::wordnet::heyting_implication_ic_q16(&tw, hyp) > 0 {
+                let sing = tw
+                    .strip_suffix("es")
+                    .or_else(|| tw.strip_suffix('s'))
+                    .filter(|s| s.len() >= 3);
+                let wd_hit = wd_hyp_insts.iter().any(|inst| {
+                    inst.split_ascii_whitespace()
+                        .any(|p| p == tw || sing.is_some_and(|sg| p == sg))
+                });
+                if tw == *hyp
+                    || wd_hit
+                    || crate::wordnet::heyting_implication_ic_q16(&tw, hyp) > 0
+                    || sing.is_some_and(|sg| crate::wordnet::heyting_implication_ic_q16(sg, hyp) > 0)
+                {
                     sc = sc.saturating_add(1);
                 }
             }
@@ -5336,6 +5432,25 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
         for &si in final_session_indices.iter().take(5) {
             for &ti in &ix.session_turns[si] {
                 if !cand_turns_w17.contains(&ti) {
+                    cand_turns_w17.push(ti);
+                }
+            }
+        }
+        if ex0_nonsp == 0
+            && let Some(sp) = single_sp_w17
+            && !cand_turns_w17.iter().any(|&ti| {
+                !ix.turns[ti].is_question
+                    && !ix.turns[ti].is_backchannel
+                    && ix.turns[ti].speaker.eq_ignore_ascii_case(sp)
+                    && (geo_score_turn(ti) > 0 || hyp_score_turn(ti) > 0)
+            })
+        {
+            for (ti, tr) in ix.turns.iter().enumerate() {
+                if !tr.is_question
+                    && !tr.is_backchannel
+                    && tr.speaker.eq_ignore_ascii_case(sp)
+                    && !cand_turns_w17.contains(&ti)
+                {
                     cand_turns_w17.push(ti);
                 }
             }
@@ -5375,11 +5490,13 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                     .unwrap_or(i64::MIN / 2);
                 let geo_ok = gain_geo
                     && exc_ns >= ex0_nonsp
-                    && (tscc >= 0.65 * tsc0 || gsc_c.saturating_add(24_000) >= gsc0_w17);
+                    && ((ex0_nonsp == 0 && tscc >= 0.20 * tsc0)
+                        || tscc >= 0.65 * tsc0
+                        || gsc_c.saturating_add(24_000) >= gsc0_w17);
                 let hyp_ok = gain_hyp
                     && exc_ns >= ex0_nonsp
-                    && tscc >= 0.72 * tsc0
-                    && gsc_c.saturating_add(22_000) >= gsc0_w17;
+                    && ((ex0_nonsp == 0 && tscc >= 0.20 * tsc0)
+                        || (tscc >= 0.72 * tsc0 && gsc_c.saturating_add(22_000) >= gsc0_w17));
                 if geo_ok || hyp_ok {
                     let key = (gc * 2 + hc, exc_ns, ieee754_bits_to_q16(tscc.to_bits()), tc);
                     if best_ans.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {

@@ -96,6 +96,25 @@ pub(in crate::retrieval) fn apply_w2_standing_register_seat(
     } else {
         &ix.standing_directive_turns
     };
+    let q_toks_w2 = raw_tokens(q_text);
+    let mut q_lex_nbr_ids: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    if explicit_pref_consult && !ix.preference_directive_turns.is_empty() {
+        for gw in plan.groups.iter().take(8) {
+            if gw.starts_with('\u{1}') || !is_content(gw) {
+                continue;
+            }
+            for (nb, _) in crate::wordnet::full_lexicon_neighbors(gw).into_iter().take(12) {
+                if let Some(id) = ix.vocab.get(nb) {
+                    q_lex_nbr_ids.insert(id);
+                }
+            }
+            for (nb, _) in crate::conceptnet::two_hop_neighbors(gw, 8) {
+                if let Some(id) = ix.vocab.get(nb) {
+                    q_lex_nbr_ids.insert(id);
+                }
+            }
+        }
+    }
     let check_already_seated = |dti: usize| -> bool {
         if explicit_pref_consult {
             final_turn_indices.first() == Some(&dti)
@@ -143,6 +162,23 @@ pub(in crate::retrieval) fn apply_w2_standing_register_seat(
             .filter(|id| turn_ents.contains(id))
             .count();
         if hits == 0 && c2_policy_inflects_query(ix, dti, plan) {
+            hits = 1;
+        }
+        if hits == 0 && ix.turns[dti].is_standing_policy {
+            if ix
+                .standing_rules
+                .iter()
+                .any(|r| r.turn == dti && rule_condition_matches(ix, r, plan, &q_toks_w2))
+            {
+                hits = 1;
+            }
+        }
+        if hits == 0
+            && ic_sc == 0
+            && !q_lex_nbr_ids.is_empty()
+            && ix.preference_directive_turns.contains(&dti)
+            && turn_ents.iter().any(|id| q_lex_nbr_ids.contains(id))
+        {
             hits = 1;
         }
         if hits == 0 && ic_sc == 0 {

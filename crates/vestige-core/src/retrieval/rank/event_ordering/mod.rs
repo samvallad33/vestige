@@ -609,11 +609,26 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
                 .iter()
                 .copied()
                 .filter(|&ti| {
-                    ix.turns[ti].field == 0
-                        && !ix.turns[ti].is_backchannel
-                        && !ix.turns[ti].is_standing_policy
+                    let t = &ix.turns[ti];
+                    t.field == 0
+                        && !t.is_backchannel
+                        && !t.is_standing_policy
+                        && !crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                            ix, ti, query,
+                        )
                 })
                 .collect();
+            if user_turns.is_empty() {
+                user_turns = members
+                    .iter()
+                    .copied()
+                    .filter(|&ti| {
+                        ix.turns[ti].field == 0
+                            && !ix.turns[ti].is_backchannel
+                            && !ix.turns[ti].is_standing_policy
+                    })
+                    .collect();
+            }
             if user_turns.is_empty() {
                 user_turns = members
                     .iter()

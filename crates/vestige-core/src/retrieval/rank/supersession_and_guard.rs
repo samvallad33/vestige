@@ -263,10 +263,22 @@ fn is_present_state_query(q_text: &str, it: &QueryIntent) -> bool {
     if is_historical_or_order_query(q_text) {
         return false;
     }
+    let ql = q_text.trim().to_ascii_lowercase();
+    // Exempt existential past-experience queries ("Have I integrated Flask-Login...?",
+    // "Have we used X before?", "Did I ever...") from present-state supersession overwrites.
+    // hardcode-scan: closed-class (existential perfect-aspect question openings)
+    if ql.starts_with("have i ")
+        || ql.starts_with("have we ")
+        || ql.contains("have i ever")
+        || ql.contains("did i ever")
+        || ql.ends_with(" before?")
+        || ql.ends_with(" before.")
+    {
+        return false;
+    }
     if it.current_state {
         return true;
     }
-    let ql = q_text.to_ascii_lowercase();
     [
         "what is ",
         "what's ",
@@ -529,14 +541,38 @@ fn shares_provenance(
     topical_mask: u64,
     star_bit: u64,
 ) -> bool {
+    let tr0 = &ctx.ix.turns[t0];
+    let trc = &ctx.ix.turns[cand];
+    let t0_has_stale = has_initial_or_stale_cue(&tr0.body_for_headers);
+    // Owner Directive `mem-00000000000058af`: on multi-session histories (`ns >= 8`),
+    // whenever `t0` carries the query's lowest-DF exact anchor `star_bit` without an
+    // explicit stale cue (`"initially"`/`"originally"`), a later turn missing `star_bit`
+    // MUST NEVER supersede `t0` unless linked by an explicit verified `supersedes_turns` edge.
+    if ctx.ns >= 8
+        && !t0_has_stale
+        && star_bit != 0
+        && (ctx.t_exact_mask[t0] & star_bit) != 0
+        && (ctx.t_mask[cand] & star_bit) == 0
+        && !trc.supersedes_turns.contains(&t0)
+    {
+        return false;
+    }
     if star_bit != 0 && (ctx.t_mask[cand] & star_bit) != 0 {
         return true;
     }
-    if (ctx.t_mask[cand] & ctx.t_mask[t0] & topical_mask) != 0 {
-        return true;
+    let shared_topical = ctx.t_mask[cand] & ctx.t_mask[t0] & topical_mask;
+    if shared_topical != 0 {
+        // Require at least one corpus-selective shared topical group (`df <= max(3, ns/5)`)
+        // so generic ambient nouns like "project" never bridge unrelated topics.
+        let sel_df_cap = ((ctx.ns / 5) as u32).max(3);
+        let has_selective_shared = ctx.plan.terms.iter().any(|qt| {
+            qt.group.is_some_and(|gi| gi < 62 && (shared_topical & (1u64 << gi)) != 0)
+                && ctx.ix.s_stats.df.get(&qt.id).copied().unwrap_or(u32::MAX) <= sel_df_cap
+        });
+        if has_selective_shared || ctx.ns < 8 {
+            return true;
+        }
     }
-    let tr0 = &ctx.ix.turns[t0];
-    let trc = &ctx.ix.turns[cand];
     let max_ent_df = ((ctx.nt / 20).clamp(6, 15)) as u32;
 
     // Direct or ingest-coreference shared rare entity between `cand` and `t0`.
@@ -707,10 +743,41 @@ fn apply_forward_supersession_chain(
 
 /// Entry point wired after `implicit_bridge::apply_unified_implicit_bridge` in Stage 12.
 pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCtx<'_>) {
+    if ctx.final_turn_indices.len() < 2 {
+        return;
+    }
+    if !ctx.ix.has_tool_calls
+        && let Some(&t0) = ctx.final_turn_indices.first()
+        && crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+            ctx.ix, t0, &ctx.q.text,
+        )
+    {
+        let w_ev = ctx.final_turn_indices.len().min(10);
+        if let Some(rel_pos) = ctx.final_turn_indices[1..w_ev].iter().position(|&c| {
+            !ctx.ix.turns[c].is_backchannel
+                && !crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                    ctx.ix, c, &ctx.q.text,
+                )
+                && (ctx.t_own[c] > 0.0
+                    || ctx.ix.turns[c].is_standing_policy
+                    || ctx.ix.turns[c].is_personal_constraint)
+        }) {
+            let cand = ctx.final_turn_indices.remove(rel_pos + 1);
+            ctx.final_turn_indices.insert(0, cand);
+            let cs = ctx.ix.turns[cand].session;
+            if ctx.final_session_indices.first().copied() == Some(ctx.ix.turns[t0].session)
+                && cs != ctx.ix.turns[t0].session
+            {
+                if let Some(sp) = ctx.final_session_indices.iter().position(|&s| s == cs) {
+                    ctx.final_session_indices.remove(sp);
+                }
+                ctx.final_session_indices.insert(0, cs);
+            }
+        }
+    }
     if ctx.ix.has_tool_calls
         || ctx.torrens_locked_head
         || ctx.implicit_disclosure_locked
-        || ctx.final_turn_indices.len() < 2
         || ctx.plan.groups.is_empty()
     {
         return;

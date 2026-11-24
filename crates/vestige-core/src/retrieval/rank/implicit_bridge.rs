@@ -1202,6 +1202,14 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
             return false;
         }
     };
+    let advice_q = is_implicit_advice_frame(&ctx.q.text);
+    let profile_q = !advice_q
+        && !ctx.eff_it.temporal
+        && is_personal_profile_recall_query(&ctx.q.text);
+    if !advice_q && !profile_q {
+        return false;
+    }
+
     if pairs.iter().any(|&(_, _, ack)| ack)
         || (!ctx.final_turn_indices.is_empty()
             && pairs
@@ -1209,14 +1217,6 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
                 .any(|&(u, a, _)| u == ctx.final_turn_indices[0] || a == ctx.final_turn_indices[0]))
     {
         ctx.implicit_disclosure_locked = true;
-    }
-
-    let advice_q = is_implicit_advice_frame(&ctx.q.text);
-    let profile_q = !advice_q
-        && !ctx.eff_it.temporal
-        && is_personal_profile_recall_query(&ctx.q.text);
-    if !advice_q && !profile_q {
-        return false;
     }
 
     let empty_sp = DetHashSet::default();

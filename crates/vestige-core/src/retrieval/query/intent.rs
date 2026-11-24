@@ -21,6 +21,10 @@ pub(in crate::retrieval) struct QueryPlan {
     /// term id -> group, for proximity scanning
     pub(in crate::retrieval) group_of: DetHashMap<u32, usize>,
     pub(in crate::retrieval) focal_ids: DetHashSet<u32>,
+    /// Closed-class excluded NP term/stem IDs ("other than X", "besides X", "apart from X", "except X")
+    pub(in crate::retrieval) excluded_ids: DetHashSet<u32>,
+    /// Corpus-rare (`1 <= s_df <= 2`) exact proper/hyphenated entity IDs (`Flask-Login`, `\u{1}ent:*`)
+    pub(in crate::retrieval) rare_entity_ids: Vec<u32>,
 }
 
 /// Normalize punctuation (preserving internal apostrophes in contractions like `i'm` / `don't`)

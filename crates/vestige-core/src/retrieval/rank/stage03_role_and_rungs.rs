@@ -99,6 +99,14 @@ fn apply_scene_refinements(
             }
         }
         let t = &ix.turns[ti];
+        if t_scene[ti] > 0.0
+            && crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                ix, ti, &q.text,
+            )
+        {
+            t_scene[ti] *= 0.18;
+            continue;
+        }
         if policy_boost_ok && t.is_standing_policy && live_policy_turns.contains(&ti) && t_scene[ti] > 0.0 {
             t_scene[ti] *= 2.5;
         }
@@ -809,6 +817,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             || q_trim_low.starts_with("can you help me")
             || q_trim_low.starts_with("can you walk me through")
             || q_trim_low.starts_with("can you explain")
+            || q_trim_low.starts_with("can you show me how")
+            || q_trim_low.starts_with("i'm preparing ")
+            || q_trim_low.starts_with("i\u{2019}m preparing ")
+            || q_trim_low.starts_with("i want to set up ")
             || q_trim_low.contains("where do you think i should")
             || q_trim_low.contains("would you suggest")
             || q_trim_low.contains("can you suggest")
@@ -819,10 +831,14 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             || q_trim_low.contains("what would you suggest")
             || q_trim_low.contains("how would you suggest"));
     let is_how_what_task_shape = q_trim_low.starts_with("how should i ")
+        || q_trim_low.starts_with("how do i ")
         || q_trim_low.starts_with("what should i ")
+        || q_trim_low.starts_with("what steps do i ")
+        || q_trim_low.starts_with("what steps should i ")
         || q_trim_low.starts_with("how can i ")
         || q_trim_low.starts_with("what are ")
         || q_trim_low.starts_with("if i")
+        || (q_trim_low.contains("which ") && q_trim_low.contains(" should i"))
         || is_when_participial;
     let has_compact_rule_register = !ix.standing_rules.is_empty();
     // hardcode-scan: closed-class (1st-person possessive pronouns gating personal advice vs general rules)

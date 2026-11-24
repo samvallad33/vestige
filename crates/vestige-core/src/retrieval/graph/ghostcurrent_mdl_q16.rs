@@ -793,6 +793,21 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
         || ctx.ix.turns[h0].has_tool_call
         || ctx.eff_it.is_event_sequence;
     let pref_guard = ctx.eff_it.preference || ctx.pref_on;
+    let ql_gc = ctx.q.text.trim().to_ascii_lowercase();
+    let is_factual_past_gc = ql_gc.contains("did i ")
+        || ql_gc.contains("did we ")
+        || ql_gc.contains("have i ")
+        || ql_gc.contains("what is my ")
+        || ql_gc.contains("when did ")
+        || ql_gc.starts_with("how many ")
+        || ql_gc.starts_with("how long ");
+    let allow_standing_policy_gc = !is_factual_past_gc
+        && !pref_guard
+        && (ctx.eff_it.task_under_rules
+            || ql_gc.starts_with("how do i ")
+            || ql_gc.starts_with("how should i ")
+            || ql_gc.starts_with("what are the different ways")
+            || (ql_gc.contains("which ") && ql_gc.contains(" should i")));
 
     // Case 1: Proven live-leaf terminating h0's own forward supersession chain (strictly on current-state queries
     // where the live leaf shares query topic coverage so unrelated revision links never hijack IF/IE/MSR/KU heads)
@@ -805,7 +820,7 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
                 && !turn_is_superseded(ctx.ix, leaf)
                 && !ctx.ix.turns[leaf].is_pure_info_question
                 && !ctx.ix.turns[leaf].is_backchannel
-                && !ctx.ix.turns[leaf].is_standing_policy
+                && (allow_standing_policy_gc || !ctx.ix.turns[leaf].is_standing_policy)
         })
     } else {
         None
@@ -826,7 +841,7 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
                 || turn_is_superseded(ctx.ix, best_ti)
                 || ctx.ix.turns[best_ti].is_pure_info_question
                 || ctx.ix.turns[best_ti].is_backchannel
-                || ctx.ix.turns[best_ti].is_standing_policy
+                || (!allow_standing_policy_gc && ctx.ix.turns[best_ti].is_standing_policy)
             {
                 return None;
             }
