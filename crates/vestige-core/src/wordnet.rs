@@ -51,6 +51,8 @@ struct Tables {
     parents: HashMap<u32, Vec<u32>>,
     /// synset -> direct hyponym synsets (inverse of `parents`).
     children: HashMap<u32, Vec<u32>>,
+    /// synset -> direct noun antonym synsets (`!`, e.g. `brother <-> sister`, `father <-> mother`).
+    antonyms: HashMap<u32, Vec<u32>>,
     /// synset -> part/member holonym synsets (`#p`, `#m`) and container chains.
     holonyms: HashMap<u32, Vec<u32>>,
     /// synset -> part/member meronym & instance-hyponym synsets (`%p`, `%m`, `~i`).
@@ -73,6 +75,8 @@ struct Tables {
     instance_surnames: HashMap<String, Vec<u32>>,
     /// Rare gloss word -> synsets whose WordNet definition contains that word (`married` -> `[husband, wife, ...]`).
     gloss_to_synsets: HashMap<String, Vec<u32>>,
+    /// Synset offset -> WordNet 3.1 `lex_filenum` (`0..=44`, 41 lexicographer supersenses).
+    synset_lex_filenum: HashMap<u32, u8>,
 }
 
 fn push_unique<T: PartialEq>(v: &mut Vec<T>, x: T) {
@@ -101,6 +105,11 @@ fn parse(data: &str) -> Tables {
         let Some(own) = f.first().and_then(|s| s.parse::<u32>().ok()) else {
             continue;
         };
+        if let Some(lf) = f.get(1).and_then(|s| s.parse::<u8>().ok())
+            && lf < 64
+        {
+            out.synset_lex_filenum.insert(own, lf);
+        }
         let Some(w_cnt) = f.get(3).and_then(|s| usize::from_str_radix(s, 16).ok()) else {
             continue;
         };
@@ -131,6 +140,9 @@ fn parse(data: &str) -> Tables {
                 push_unique(out.meronyms.entry(o).or_default(), own);
             } else if *sym == "%p" || *sym == "%m" || *sym == "~i" {
                 push_unique(out.meronyms.entry(own).or_default(), o);
+            } else if *sym == "!" {
+                push_unique(out.antonyms.entry(own).or_default(), o);
+                push_unique(out.antonyms.entry(o).or_default(), own);
             }
         }
         for i in 0..w_cnt {
@@ -699,6 +711,21 @@ const NOUN_DETACH: &[(&str, &str)] = &[
     ("ies", "y"),
     ("s", ""),
 ];
+
+/// Bitmask of WordNet 3.1 `lex_filenum` supersenses (`0..=44`) attested by `word`'s noun synsets.
+/// Enables `O(1)` bitwise semantic-class intersection (`(q_ss & doc_ss) != 0`) at zero lexical overlap.
+pub fn supersense_mask(word: &str) -> u64 {
+    let tbl = table();
+    let mut mask = 0u64;
+    for &syn in senses(word) {
+        if let Some(&lf) = tbl.synset_lex_filenum.get(&syn)
+            && lf < 64
+        {
+            mask |= 1u64 << lf;
+        }
+    }
+    mask
+}
 
 /// The noun synsets `word` (or normalized space-separated multi-word phrase) belongs to,
 /// after morphy's detachment rules.
@@ -1530,6 +1557,271 @@ pub fn class_to_instances(class_word: &str, max_depth: usize) -> Vec<&'static st
     out
 }
 
+/// Strict mutually exclusive WordNet 3.1 co-hyponym siblings and direct noun antonyms
+/// (e.g., `brother` <-> `sister` via `!`, `wednesday` <-> `tuesday` via specific hypernym
+/// parent `desc_count <= 35`, `children.len() <= 24`). Excludes synonyms of `word` and returns
+/// empty for generic nouns without tight sibling sets or noun antonyms.
+pub fn strict_co_hyponym_siblings(word: &str) -> Vec<&'static str> {
+    let key = word.to_ascii_lowercase();
+    if key.len() < 3 {
+        return Vec::new();
+    }
+    let t = table();
+    let Some(senses) = t.senses.get(&key) else {
+        return Vec::new();
+    };
+    if senses.is_empty() {
+        return Vec::new();
+    }
+    let mut own_syns: Vec<u32> = senses.clone();
+    own_syns.sort_unstable();
+    let mut own_lemmas: Vec<&'static str> = Vec::new();
+    for &s in &own_syns {
+        if let Some(ls) = t.lemmas.get(&s) {
+            for l in ls {
+                own_lemmas.push(l.as_str());
+            }
+        }
+    }
+    let mut out: Vec<&'static str> = Vec::new();
+    // 1. Direct WordNet 3.1 noun antonyms (`!`, e.g., brother <-> sister, father <-> mother).
+    for &s in &own_syns {
+        if let Some(ants) = t.antonyms.get(&s) {
+            for &ant in ants {
+                if own_syns.binary_search(&ant).is_ok() {
+                    continue;
+                }
+                if let Some(ls) = t.lemmas.get(&ant) {
+                    for l in ls {
+                        if l.len() >= 3 && l.as_str() != key && !own_lemmas.contains(&l.as_str()) {
+                            out.push(l.as_str());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 2. Tight co-hyponym siblings under specific immediate hypernym parents (`senses <= 4`).
+    if senses.len() <= 4 {
+        for &s in &own_syns {
+            let Some(parents) = t.parents.get(&s) else {
+                continue;
+            };
+            for &p in parents {
+                let desc = t.desc_count.get(&p).copied().unwrap_or(u32::MAX);
+                if desc > 35 {
+                    continue;
+                }
+                let Some(children) = t.children.get(&p) else {
+                    continue;
+                };
+                if children.len() < 2 || children.len() > 24 {
+                    continue;
+                }
+                for &sib in children {
+                    if own_syns.binary_search(&sib).is_ok() {
+                        continue;
+                    }
+                    if let Some(ls) = t.lemmas.get(&sib) {
+                        for l in ls {
+                            if l.len() >= 3 && l.as_str() != key && !own_lemmas.contains(&l.as_str()) {
+                                out.push(l.as_str());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// #3 Finite Heyting Algebra Asymmetric Subsumption (`turn_word => query_word`):
+/// Scores intuitionistic lattice implication asymmetrically over the WordNet 3.1 hypernym DAG:
+/// - `100`: `turn_word == query_word` or share a synset
+/// - `82..=96`: `turn_word` is a specific hyponym/instance of `query_word` (`turn_word <= query_word`,
+///   e.g. `cappuccino => coffee`, `violin => instrument`, `husband => spouse`), scaled by Resnik IC
+/// - `38`: inverse (`query_word < turn_word`, generic hypernym in turn)
+/// - `0`: unrelated in the 3-hop finite Heyting sublattice.
+pub fn heyting_implication_ic_q16(turn_word: &str, query_word: &str) -> u16 {
+    let tw = turn_word.to_ascii_lowercase();
+    let qw = query_word.to_ascii_lowercase();
+    if tw.len() < 3 || qw.len() < 3 {
+        return 0;
+    }
+    if tw == qw {
+        return 100;
+    }
+    let t = table();
+    let (Some(t_syns), Some(q_syns)) = (t.senses.get(&tw), t.senses.get(&qw)) else {
+        return 0;
+    };
+    if t_syns.iter().any(|s| q_syns.contains(s)) {
+        return 98;
+    }
+    // Check upward closure from `turn_word` (`tw <= qw`: specific turn entails general query facet).
+    let mut frontier: Vec<u32> = t_syns.clone();
+    for hop in 1..=3usize {
+        let mut next: Vec<u32> = Vec::new();
+        for s in frontier {
+            if let Some(ps) = t.parents.get(&s) {
+                for &p in ps {
+                    if q_syns.contains(&p) {
+                        let desc = t.desc_count.get(&p).copied().unwrap_or(500);
+                        let ic_bonus: u16 = if desc <= 25 {
+                            12
+                        } else if desc <= 120 {
+                            8
+                        } else {
+                            2
+                        };
+                        let base: u16 = match hop {
+                            1 => 84,
+                            2 => 76,
+                            _ => 68,
+                        };
+                        return (base + ic_bonus).min(96);
+                    }
+                    if !next.contains(&p) {
+                        next.push(p);
+                    }
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    // Check downward (`qw < tw`: turn only has a broader superordinate, much weaker implication).
+    for &qs in q_syns {
+        if let Some(ps) = t.parents.get(&qs)
+            && ps.iter().any(|p| t_syns.contains(p))
+        {
+            return 38;
+        }
+    }
+    0
+}
+
+/// Mutual-Hypernym / Co-Instance Sibling Resonance (#2):
+/// Walks upward 1..=2 hops from `word` to specific (non-root, `desc_count <= 45`) synsets
+/// and gathers sibling / co-instance lemmas under that exact Least Common Subsumer
+/// (e.g., `vivaldi -> classical_composer -> bach/mozart`, `camping -> outdoor_sport`).
+pub fn lcs_sibling_resonance(word: &str, max_out: usize) -> Vec<(&'static str, u16)> {
+    let w = word.to_ascii_lowercase();
+    if w.len() < 3 || max_out == 0 {
+        return Vec::new();
+    }
+    let t = table();
+    let Some(syns) = t.senses.get(&w) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(&'static str, u16)> = Vec::new();
+    let mut seen: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
+    for &s in syns.iter().take(4) {
+        let Some(ps) = t.parents.get(&s) else {
+            continue;
+        };
+        for &p in ps {
+            let desc = t.desc_count.get(&p).copied().unwrap_or(999);
+            if desc > 45 {
+                continue;
+            }
+            let w_score: u16 = if desc <= 12 { 82 } else { 70 };
+            if let Some(plems) = t.lemmas.get(&p) {
+                for pl in plems {
+                    let pls = pl.as_str();
+                    if pls != w && pls.len() >= 3 && seen.insert(pls) {
+                        out.push((pls, w_score));
+                        if out.len() >= max_out {
+                            return out;
+                        }
+                    }
+                }
+            }
+            if let Some(kids) = t.children.get(&p) {
+                for &kid in kids.iter().take(12) {
+                    if kid == s {
+                        continue;
+                    }
+                    if let Some(klems) = t.lemmas.get(&kid) {
+                        for kl in klems.iter().take(2) {
+                            let kls = kl.as_str();
+                            if kls != w && kls.len() >= 3 && seen.insert(kls) {
+                                out.push((kls, w_score.saturating_sub(4)));
+                                if out.len() >= max_out {
+                                    return out;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Bipartite Gloss-Hypernym Dual-Bridge (#8):
+/// Given an abstract query word, walks its high-IC gloss tokens (`len >= 4`, `senses <= 4`)
+/// and retrieves specific hyponym/synset lemmas whose definitions or parents interlock with
+/// those gloss facets.
+pub fn dual_gloss_hypernym_bridge(q_word: &str, max_out: usize) -> Vec<(&'static str, u16)> {
+    let w = q_word.to_ascii_lowercase();
+    if w.len() < 4 || max_out == 0 {
+        return Vec::new();
+    }
+    let t = table();
+    let g_toks = gloss_tokens_of(&w);
+    if g_toks.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<(&'static str, u16)> = Vec::new();
+    let mut seen: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
+    for gt in g_toks.into_iter().take(8) {
+        if gt.len() < 4 || gt == w {
+            continue;
+        }
+        let Some(gsyns) = t.senses.get(gt) else {
+            continue;
+        };
+        if gsyns.len() > 5 {
+            continue;
+        }
+        if seen.insert(gt) {
+            out.push((gt, 72));
+            if out.len() >= max_out {
+                return out;
+            }
+        }
+        for &gs in gsyns.iter().take(2) {
+            let desc = t.desc_count.get(&gs).copied().unwrap_or(999);
+            if desc > 60 {
+                continue;
+            }
+            if let Some(kids) = t.children.get(&gs) {
+                for &kid in kids.iter().take(6) {
+                    if let Some(klems) = t.lemmas.get(&kid) {
+                        for kl in klems.iter().take(1) {
+                            let kls = kl.as_str();
+                            if kls.len() >= 4 && kls != w && seen.insert(kls) {
+                                out.push((kls, 66));
+                                if out.len() >= max_out {
+                                    return out;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1622,5 +1914,24 @@ mod tests {
         assert!(vegan_mono.contains(&"meat"), "vegan -> vegetarian -> meat missing: {vegan_mono:?}");
         let sushi_mono = direct_mono_gloss_concepts("sushi");
         assert!(sushi_mono.contains(&"fish"), "sushi -> fish missing: {sushi_mono:?}");
+    }
+
+    #[test]
+    fn strict_co_hyponym_siblings_separates_mutually_exclusive_peers() {
+        let wed_sibs = strict_co_hyponym_siblings("wednesday");
+        assert!(wed_sibs.contains(&"tuesday"), "expected tuesday sibling of wednesday: {wed_sibs:?}");
+        assert!(!wed_sibs.contains(&"wednesday"));
+        let bro_sibs = strict_co_hyponym_siblings("brother");
+        assert!(bro_sibs.contains(&"sister"), "expected sister sibling of brother: {bro_sibs:?}");
+        assert!(strict_co_hyponym_siblings("thing").is_empty());
+    }
+
+    #[test]
+    fn heyting_implication_is_asymmetric_specific_to_general() {
+        let up = heyting_implication_ic_q16("cappuccino", "coffee");
+        let down = heyting_implication_ic_q16("coffee", "cappuccino");
+        assert!(up >= 80, "expected specific => general implication >= 80, got {up}");
+        assert!(up > down, "expected asymmetric Heyting implication ({up} > {down})");
+        assert_eq!(heyting_implication_ic_q16("cappuccino", "cappuccino"), 100);
     }
 }

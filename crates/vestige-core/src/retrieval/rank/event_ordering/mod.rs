@@ -2,6 +2,7 @@
 //! Vilain-Kautz / Verhagen transitive closure, Eades-Lin-Smyth `GreedyFAS`, and
 //! exact `5! = 120` Kendall `tau-b` minimum-violation linear extension.
 
+pub(in crate::retrieval) mod chen_signature;
 pub(in crate::retrieval) mod topic_thread;
 
 use super::context::RankCtx;
@@ -352,12 +353,15 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
             let has_init = ix.session_turns[si]
                 .iter()
                 .any(|&ti| ix.turns[ti].is_initiative);
-            let shares_topic = topic_ids.is_empty()
-                || topic_ids.iter().any(|&tid| {
+            let topic_hits = topic_ids
+                .iter()
+                .filter(|&&tid| {
                     ix.session_content[si].contains(&tid)
                         || ix.session_entities[si].contains(&tid)
                         || ix.session_bags[si].tf[0].contains_key(&tid)
-                });
+                })
+                .count();
+            let shares_topic = topic_ids.is_empty() || topic_hits >= topic_ids.len().min(2);
             if has_init && shares_topic {
                 covered_q[q_bin] = true;
                 promoted_idx.push(si);
@@ -397,7 +401,7 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
                 && l_c.saturating_mul(4) >= s0_lex.saturating_mul(3))
                 || (explicit_seq_q
                     && m_c != 0
-                    && l_c.saturating_mul(5) >= s0_lex.saturating_mul(3)))
+                    && l_c.saturating_mul(2) >= s0_lex))
     });
     let start_idx = usize::from(!can_reorder_head);
     let cands: Vec<usize> = final_session_indices[start_idx..total_m].to_vec();
@@ -440,6 +444,25 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
         }
     }
 
+    // Precompute Chen entity novelty + topic density for Lévy signed area & Transfer Entropy (#1, #11).
+    let mut topic_vec = vec![0u64; m];
+    let mut nov_vec = vec![0u64; m];
+    let mut seen_chen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let max_s_q16 = cands
+        .iter()
+        .map(|&si| ieee754_bits_to_q16(s_score.get(si).copied().unwrap_or(0.0).to_bits()))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    for (idx, &si) in cands.iter().enumerate() {
+        let sc_q = ieee754_bits_to_q16(s_score.get(si).copied().unwrap_or(0.0).to_bits());
+        topic_vec[idx] = (((sc_q as u128) << 16) / (max_s_q16 as u128)).min(Q16_ONE as u128) as u64;
+        nov_vec[idx] = chen_signature::session_entity_novelty_q16(ix, si, &seen_chen);
+        for &eid in &ix.session_entities[si] {
+            seen_chen.insert(eid);
+        }
+    }
+
     // Build skew-symmetric pairwise Fabula Precedence Matrix `pref[a][b]` (`> 0` => `a` before `b`).
     let mut pref = vec![vec![0i64; m]; m];
     for a in 0..m {
@@ -448,7 +471,15 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
         for b in (a + 1)..m {
             let sb = cands[b];
             let tsb = ix.session_ts.get(sb).copied().unwrap_or(0);
-            let mut net_ab = 0i64;
+            let mut net_ab = chen_signature::chen_levy_transfer_precedence_q16(
+                ix,
+                sa,
+                sb,
+                topic_vec[a],
+                topic_vec[b],
+                nov_vec[a],
+                nov_vec[b],
+            );
 
             // 1. Causal RSB & Strata bitemporal supersession (`later -> earlier` proves `earlier < later`).
             let b_points_to_a = ix.session_rsb_back[sb].iter().any(|&(_, p)| p == sa)
@@ -563,7 +594,7 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
             if !user_turns.is_empty() {
                 let open_u = user_turns[0];
                 let open_sc = ctx.t_scene.get(open_u).copied().unwrap_or(0.0);
-                let chosen = if max_u_sc <= 0.0 || open_sc >= 0.45 * max_u_sc {
+                let chosen = if max_u_sc <= 0.0 || open_sc >= 0.30 * max_u_sc {
                     open_u
                 } else {
                     user_turns

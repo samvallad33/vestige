@@ -44,7 +44,7 @@ pub(in crate::retrieval) fn select_submodular_sessions(
             apply_rsb_retroactive_backfill_q16, bipartite_entity_session_ppr_q16, ThreadSessionNode,
         };
         use crate::retrieval::fusion::aspect_coverage_q16::{
-            aspect_ic_q16, select_summary_aspect_sessions_q16, AspectSessionCand, Q16_ONE,
+            aspect_ic_q16, select_xquad_residual_sessions_q16, AspectSessionCand, Q16_ONE,
         };
         use crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16;
         use std::collections::{BTreeMap, BTreeSet};
@@ -202,6 +202,28 @@ pub(in crate::retrieval) fn select_submodular_sessions(
             for (lem, _) in crate::conceptnet::two_hop_neighbors(aw, 8) {
                 add_al(lem);
             }
+            for cont in crate::wikidata::upward_containers(aw, 1).into_iter().take(4) {
+                for part in cont.split_ascii_whitespace() {
+                    if part.len() >= 4 {
+                        add_al(part);
+                    }
+                }
+            }
+        }
+        let kite = ix.kite_index();
+        for aw in &q_rare_anchor_words {
+            if let Some(post) = kite.concept_postings.get(aw.as_str()) {
+                for &(ti, _) in post.iter().take(16) {
+                    if ti < ix.turns.len() && !ix.turns[ti].is_standing_policy {
+                        for &cid in ix.turns[ti].content.iter().take(6) {
+                            let df = ix.s_stats.df.get(&cid).copied().unwrap_or(0);
+                            if (1..=(ns_u32 / 4).max(3)).contains(&df) {
+                                rare_anchor_lex_ids.insert(cid);
+                            }
+                        }
+                    }
+                }
+            }
         }
         let mut incipit_turn: Vec<Option<usize>> = vec![None; ns];
         let mut incipit_raw: Vec<u64> = vec![0; ns];
@@ -302,6 +324,41 @@ pub(in crate::retrieval) fn select_submodular_sessions(
             });
             if !f_words.is_empty() && has_distinctive_facet_tok && facets.len() < 6 {
                 facets.push(f_words);
+            }
+        }
+        // Implicit high-IC topic-term facets for xQuAD when no explicit comma/including list exists.
+        let has_explicit_facets = facets.len() >= 2;
+        if !has_explicit_facets {
+            let mut imp_toks: Vec<(u64, String)> = Vec::new();
+            let mut seen_imp: BTreeSet<String> = BTreeSet::new();
+            for w in raw_tokens(topic_slice) {
+                if !is_content(&w) || w.len() < 3 {
+                    continue;
+                }
+                let st = stem(&w);
+                if !seen_imp.insert(st) {
+                    continue;
+                }
+                let df = ix
+                    .vocab
+                    .get(&w)
+                    .and_then(|id| ix.s_stats.df.get(&id).copied())
+                    .or_else(|| {
+                        ix.vocab
+                            .get(&stem_term(&stem(&w)))
+                            .and_then(|id| ix.s_stats.df.get(&id).copied())
+                    })
+                    .unwrap_or(0);
+                if (1..=max_facet_df).contains(&df) {
+                    imp_toks.push((aspect_ic_q16(df, ns_u32), w));
+                }
+            }
+            imp_toks.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            if imp_toks.len() >= 2 {
+                facets.clear();
+                for (_, w) in imp_toks.into_iter().take(5) {
+                    facets.push(vec![w]);
+                }
             }
         }
         // Score every non-policy session against each enumeration facet (2x on incipit, 1x on session content).
@@ -615,11 +672,11 @@ pub(in crate::retrieval) fn select_submodular_sessions(
                 let off = epoch_offset[si];
                 let is_facet_peak = n_facets > 0 && (0..n_facets).any(|fi| facet_scores[fi][si] > 0 && facet_scores[fi][si] == facet_max[fi]);
                 if off <= 8 {
-                    tot = (tot.saturating_mul(135)) / 100;
+                    tot = (tot.saturating_mul(128)) / 100;
                 } else if off <= 13 {
-                    tot = (tot.saturating_mul(115)) / 100;
+                    tot = (tot.saturating_mul(112)) / 100;
                 } else if off >= 18 && !is_facet_peak {
-                    tot = (tot.saturating_mul(42)) / 100;
+                    tot = (tot.saturating_mul(78)) / 100;
                 }
             }
             fused_q16[si] = tot;
@@ -792,10 +849,10 @@ pub(in crate::retrieval) fn select_submodular_sessions(
         }
 
         // T03 Hard 1-Seat-Per-Facet Guarantee (round-robin apportionment) before submodular aspect cover:
-        // Guarantees each enumerated facet ("verify right angles", "calculate areas", "understand medians")
-        // gets its strongest distinct session into the Top-5 cut before general submodular fill.
+        // Only pre-seed slots ahead of Rank 1 for explicit multi-clause enumeration facets; for
+        // implicit topic facets, let xQuAD anchor Slot 0 by pure max relevance and diversify Slots 1..k.
         let mut selected: Vec<usize> = Vec::with_capacity(pool_cap);
-        if n_facets >= 2 {
+        if has_explicit_facets && n_facets >= 2 {
             let mut era_counts: BTreeMap<i64, usize> = BTreeMap::new();
             for fi in 0..n_facets {
                 if selected.len() >= k.min(4) {
@@ -822,7 +879,33 @@ pub(in crate::retrieval) fn select_submodular_sessions(
                 }
             }
         }
-        let sub_picks = select_summary_aspect_sessions_q16(&cands, &aspect_weights_q16, k.max(12), Q16_ONE.saturating_mul(10));
+        let xq_picks = select_xquad_residual_sessions_q16(
+            &cands,
+            &aspect_weights_q16,
+            k.max(12),
+            (Q16_ONE * 11) / 20,
+        );
+        // #7 Hypergraph Minimum Hitting Set + #8 Integer Pivoted Cholesky IC + #12 Rissanen MDL:
+        // Interleave Cholesky-orthogonal uncovered-facet picks after Slot 0 so near-duplicate
+        // sessions cannot hoard Slots 2..5 while preserving Slot 0 and xQuAD relevance.
+        let chol_picks = crate::retrieval::fusion::hypergraph_mdl_q16::select_pivoted_cholesky_hypergraph_mdl_q16(
+            &cands,
+            &aspect_weights_q16,
+            k.max(12),
+        );
+        let mut sub_picks: Vec<usize> = Vec::with_capacity(k.max(12));
+        for idx_mix in 0..xq_picks.len().max(chol_picks.len()) {
+            if let Some(&s_xq) = xq_picks.get(idx_mix)
+                && !sub_picks.contains(&s_xq)
+            {
+                sub_picks.push(s_xq);
+            }
+            if let Some(&s_ch) = chol_picks.get(idx_mix)
+                && !sub_picks.contains(&s_ch)
+            {
+                sub_picks.push(s_ch);
+            }
+        }
         let mut used_episodes: BTreeSet<u32> = selected.iter().map(|&si| episode_of[si]).collect();
         let mut ep_pool: Vec<usize> = sub_picks
             .into_iter()

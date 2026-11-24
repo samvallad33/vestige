@@ -86,6 +86,60 @@ pub fn two_hop_neighbors(word: &str, max_out: usize) -> Vec<(&'static str, u16)>
     out
 }
 
+/// Reciprocal-link expansion filter: keeps a 2-hop ConceptNet neighbor `dst` for `word`
+/// only when supported by a direct 1-hop assertion, a reciprocal back-edge (`dst -> word`),
+/// or >= 2 independent intermediate 2-hop paths. Stops 2-hop synonym drift.
+pub fn reciprocal_two_hop_neighbors(word: &str, max_out: usize) -> Vec<(&'static str, u16)> {
+    let g = graph();
+    let mut scores: HashMap<&'static str, u16> = HashMap::new();
+    let mut path_counts: HashMap<&'static str, u8> = HashMap::new();
+
+    if let Some(edges) = g.fwd.get(word) {
+        for &(dst, w) in edges.iter().take(6) {
+            if dst != word {
+                let e = scores.entry(dst).or_insert(0);
+                *e = (*e).max(w);
+                *path_counts.entry(dst).or_insert(0) = 2;
+            }
+            if let Some(hop2) = g.fwd.get(dst) {
+                for &(dst2, w2) in hop2.iter().take(3) {
+                    if dst2 != word && dst2 != dst {
+                        let has_back = g
+                            .fwd
+                            .get(dst2)
+                            .is_some_and(|b| b.iter().any(|&(x, _)| x == word || x == dst));
+                        let hw = w.min(w2) / if has_back { 2 } else { 3 };
+                        if hw > 0 {
+                            let cnt = path_counts.entry(dst2).or_insert(0);
+                            *cnt = cnt.saturating_add(1 + u8::from(has_back));
+                            let e = scores.entry(dst2).or_insert(0);
+                            *e = (*e).max(hw);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(edges) = g.rev.get(word) {
+        for &(src, w) in edges.iter().take(6) {
+            if src != word && w > 0 {
+                let e = scores.entry(src).or_insert(0);
+                *e = (*e).max(w);
+                *path_counts.entry(src).or_insert(0) = 2;
+            }
+        }
+    }
+
+    let mut out: Vec<(&'static str, u16)> = scores
+        .into_iter()
+        .filter(|&(cand, _)| path_counts.get(cand).copied().unwrap_or(0) >= 2)
+        .collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    out.truncate(max_out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,5 +159,13 @@ mod tests {
         let n2 = two_hop_neighbors("accommodation", 8);
         assert_eq!(n1, n2);
         assert!(!n1.is_empty(), "expected ConceptNet neighbors for accommodation");
+    }
+
+    #[test]
+    fn reciprocal_two_hop_filters_single_path_drift() {
+        let all = two_hop_neighbors("accommodation", 16);
+        let rec = reciprocal_two_hop_neighbors("accommodation", 16);
+        assert!(!rec.is_empty());
+        assert!(rec.len() <= all.len());
     }
 }

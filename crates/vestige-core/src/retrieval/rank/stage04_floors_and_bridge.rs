@@ -697,16 +697,17 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     }
                 }
             }
-            let mut lifts = vec![0u64; ns];
             if max_raw > 0 {
                 let cap_rm3 = ((smax_q16 as u128).saturating_mul(Q16_ONE as u128 / 4) >> 16) as u64;
-                for si in 0..ns {
-                    if raw[si] > 0 {
-                        lifts[si] = ((raw[si] as u128).saturating_mul(cap_rm3 as u128) / (max_raw as u128)) as u64;
-                    }
-                }
+                crate::retrieval::fusion::pit_commensuration_q16::fuse_channels_pit_nqc_q16(
+                    ns,
+                    &[(&raw, Q16_ONE)],
+                    10,
+                    cap_rm3,
+                )
+            } else {
+                vec![0u64; ns]
             }
-            lifts
         };
 
         // Co-Witness Cross-Lexical & Bounded Downward Hyponym Voter (`Q16.16`):
@@ -958,6 +959,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         //     so Single-Hop & Adversarial stay locked >= 85%.
         let mut od_translation_fired = false;
         let mut is_strict_inferential_od = false;
+        let mut od_turn_score_q16 = vec![0u64; nt];
         if has_named_speakers_eff {
             use crate::retrieval::fusion::aspect_coverage_q16::{aspect_ic_q16, Q16_ONE};
             use crate::retrieval::lexical::speaker_translation_q16::{
@@ -1028,9 +1030,17 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         if is_queried_sp && self_desc {
                             turn_w = turn_w.saturating_add(turn_w / 3);
                         }
+                        if is_queried_sp && tr.is_habitual {
+                            turn_w = turn_w.saturating_add(turn_w / 2);
+                        }
                         // Index BOTH exact (`tr.content`) AND stemmed (`tr.feats`) IDs so plural/inflected
                         // matches ("conservative" <-> "conservatives", "camp" <-> "camping") hit!
+                        // Skip 2nd-person `other_speaker_terms` on `is_queried_sp` so compliments about
+                        // the interlocutor do not pollute the queried speaker's trait profile.
                         for &cid in &tr.content {
+                            if is_queried_sp && tr.other_speaker_terms.contains(&cid) {
+                                continue;
+                            }
                             let df = ix.s_stats.df.get(&cid).copied().unwrap_or(0);
                             if (1..=df_cap).contains(&df) {
                                 *tf_map.entry(cid).or_insert(0) += turn_w;
@@ -1044,6 +1054,18 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                                     *tf_map.entry(f.id).or_insert(0) += (turn_w * 3) >> 2;
                                     corpus_sp_vocab.insert(f.id);
                                 }
+                            }
+                        }
+                        // Include `[caption]` (`blip_feats`) photo descriptors owned by the speaker
+                        // so Open-Domain persona entailment sees visual evidence shared by the speaker.
+                        for f in &tr.blip_feats {
+                            if is_queried_sp && tr.other_speaker_terms.contains(&f.id) {
+                                continue;
+                            }
+                            let df = ix.s_stats.df.get(&f.id).copied().unwrap_or(0);
+                            if (1..=df_cap).contains(&df) {
+                                *tf_map.entry(f.id).or_insert(0) += (turn_w * 3) >> 2;
+                                corpus_sp_vocab.insert(f.id);
                             }
                         }
                     }
@@ -1068,7 +1090,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                                     && tr.content.contains(&wid)
                             })
                         });
-                    if in_top0_sp {
+                    if top0_full_cov && in_top0_sp {
                         continue;
                     }
                     let synth_qid = 0x7000_0000u32 + (q_idx as u32);
@@ -1089,24 +1111,63 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                             if corpus_sp_vocab.contains(&wid) && seen_n.insert(wid) {
                                 let w_df = ix.s_stats.df.get(&wid).copied().unwrap_or(1);
                                 let w_ic = aspect_ic_q16(w_df, ns_u32);
-                                let t_qw = ((u64::from(rel_w).saturating_mul(Q16_ONE) / 100)
+                                let fan_q16 = crate::retrieval::graph::actr::actr_fan_strength_q16(w_df, ns_u32);
+                                let raw_qw = ((u64::from(rel_w).saturating_mul(Q16_ONE) / 100)
                                     .saturating_mul(w_ic.min(Q16_ONE * 6))
                                     / (Q16_ONE * 6).max(1))
                                 .max(Q16_ONE >> 4);
+                                let t_qw = (((raw_qw as u128).saturating_mul(fan_q16 as u128)) >> 16)
+                                    .max((Q16_ONE >> 4) as u128) as u64;
                                 nbrs.push((wid, t_qw));
                             }
                         }
                     };
                     for (lemma, rel_w) in crate::wordnet::full_lexicon_neighbors(w) {
-                        push_nbr(lemma, rel_w);
+                        // #3 Finite Heyting Algebra Asymmetric Subsumption (`lemma => w`):
+                        // boost specific hyponym/instance entailments (`heyting >= 76`), damp generic superordinates (`38`).
+                        let heyt = crate::wordnet::heyting_implication_ic_q16(lemma, w);
+                        let eff_w = if heyt >= 76 {
+                            rel_w.max(heyt)
+                        } else if heyt == 38 {
+                            (rel_w * 3) / 4
+                        } else {
+                            rel_w
+                        };
+                        push_nbr(lemma, eff_w);
                     }
                     if (1..=4).contains(&crate::wordnet::senses(w).len()) {
                         for inst in crate::wordnet::class_to_instances(w, 1) {
-                            push_nbr(inst, 78);
+                            push_nbr(inst, 82);
                         }
                     }
                     for glem in crate::wordnet::gloss_and_compound_concepts(w).into_iter().take(16) {
                         push_nbr(glem, 68);
+                    }
+                    // #2 Mutual-Hypernym / Co-Instance LCS Sibling Resonance (`Vivaldi <-> Bach/Mozart/classical`):
+                    for (lcs_sib, lcs_w) in crate::wordnet::lcs_sibling_resonance(w, 10) {
+                        push_nbr(lcs_sib, lcs_w);
+                    }
+                    // #8 Bipartite Gloss-Hypernym Dual-Bridge (`identity -> gender/transgender`, `personality -> thoughtful`):
+                    for (dg_lem, dg_w) in crate::wordnet::dual_gloss_hypernym_bridge(w, 10) {
+                        push_nbr(dg_lem, dg_w);
+                    }
+                    // Orthographic 1-edit / prefix stem fallback for OOV/typo query words (e.g. `educaton` -> `education`):
+                    if w.len() >= 5 && ix.vocab.get(w).is_none() {
+                        let wb = w.as_bytes();
+                        let pref = &w[..4];
+                        for (vword, &wid) in ix.vocab.map.iter() {
+                            if !corpus_sp_vocab.contains(&wid) || vword.len() < 4 {
+                                continue;
+                            }
+                            if vword.starts_with(pref) && vword.len().abs_diff(w.len()) <= 4 {
+                                push_nbr(vword.as_str(), 84);
+                            } else if wb.len() >= 6 && vword.len() == wb.len() {
+                                let diffs = wb.iter().zip(vword.as_bytes()).filter(|(a, b)| a != b).count();
+                                if diffs == 1 {
+                                    push_nbr(vword.as_str(), 86);
+                                }
+                            }
+                        }
                     }
                     for (lemma, rel_w) in crate::roget::conceptual_neighbors(w, 64) {
                         push_nbr(lemma, rel_w);
@@ -1124,8 +1185,19 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                             }
                         }
                     }
-                    for (cn_lemma, cn_w) in crate::conceptnet::two_hop_neighbors(w, 12) {
+                    // Reciprocal-link filter FIRST at full weight, then residual ConceptNet 2-hop at 0.65x
+                    // so Open-Domain keeps both high precision (Turn R@1) and Session R@1 recall.
+                    let mut cn_seen: BTreeSet<&'static str> = BTreeSet::new();
+                    for (cn_lemma, cn_w) in crate::conceptnet::reciprocal_two_hop_neighbors(w, 10) {
+                        cn_seen.insert(cn_lemma);
                         let scaled_w = ((u32::from(cn_w.min(200)) * 85) / 200).clamp(40, 85) as u16;
+                        push_nbr(cn_lemma, scaled_w);
+                    }
+                    for (cn_lemma, cn_w) in crate::conceptnet::two_hop_neighbors(w, 12) {
+                        if cn_seen.contains(cn_lemma) {
+                            continue;
+                        }
+                        let scaled_w = (((u32::from(cn_w.min(200)) * 55) / 200).clamp(28, 55)) as u16;
                         push_nbr(cn_lemma, scaled_w);
                     }
                     // T53: 1-hop corpus PPMI associative translation for in-corpus predicates.
@@ -1167,6 +1239,299 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         bridge_boost[si] += lift_f32;
                     }
                 }
+                // Speaker-Scoped Standing Trait Bag + Turn-Level Open-Domain Evidence Projection:
+                // Propagate `trans_map` + standing speaker trait predicates down to the exact
+                // trait-bearing turns (`od_turn_score_q16[ti]`) so Turn Exact R@1 & R@5 capture
+                // the Open-Domain evidence turn, not just its session!
+                if !trans_map.is_empty() {
+                    let mut trait_bonus_map: BTreeMap<u32, u64> = BTreeMap::new();
+                    for sp_key in &queried_sp {
+                        if let Some(tbag) = ix.speaker_trait_bags.get(sp_key) {
+                            for &(tid, tw) in tbag {
+                                trait_bonus_map
+                                    .entry(tid)
+                                    .and_modify(|v| {
+                                        if tw > *v {
+                                            *v = tw;
+                                        }
+                                    })
+                                    .or_insert(tw);
+                            }
+                        }
+                    }
+                    let mut max_od_turn: u64 = 0;
+                    for si in 0..ns {
+                        for &ti in &ix.session_turns[si] {
+                            let tr = &ix.turns[ti];
+                            if tr.is_question || tr.is_backchannel || turn_is_superseded(ix, ti) {
+                                continue;
+                            }
+                            let is_qsp = queried_sp.is_empty()
+                                || queried_sp.contains(&tr.speaker.to_ascii_lowercase());
+                            if !is_qsp {
+                                continue;
+                            }
+                            let mut t_sc: u64 = 0;
+                            for (&sqid, nbrs) in &trans_map {
+                                let qic = query_pred_ic_q16.get(&sqid).copied().unwrap_or(Q16_ONE);
+                                let mut best_m: u64 = 0;
+                                for &(wid, t_qw) in nbrs {
+                                    if tr.other_speaker_terms.contains(&wid) {
+                                        continue;
+                                    }
+                                    let hit = tr.content.contains(&wid)
+                                        || tr.feats.iter().any(|f| f.id == wid);
+                                    if hit {
+                                        let mut m_w = t_qw;
+                                        if trait_bonus_map.contains_key(&wid) {
+                                            m_w = m_w.saturating_add(m_w >> 1);
+                                        }
+                                        if m_w > best_m {
+                                            best_m = m_w;
+                                        }
+                                    }
+                                }
+                                if best_m > 0 {
+                                    let contrib = ((qic as u128).saturating_mul(best_m as u128) >> 16) as u64;
+                                    t_sc = t_sc.saturating_add(contrib);
+                                }
+                            }
+                            if t_sc > 0 {
+                                if tr.is_habitual {
+                                    t_sc = t_sc.saturating_add(t_sc / 3);
+                                }
+                                od_turn_score_q16[ti] = t_sc;
+                                if t_sc > max_od_turn {
+                                    max_od_turn = t_sc;
+                                }
+                            }
+                        }
+                    }
+                    if max_od_turn > 0 && lexical_tmax > 0.0 {
+                        let turn_cap = if is_strict_inferential_od {
+                            0.30 * lexical_tmax
+                        } else {
+                            0.18 * lexical_tmax
+                        };
+                        for ti in 0..nt {
+                            let osc = od_turn_score_q16[ti];
+                            if osc == 0 {
+                                continue;
+                            }
+                            let si = ix.turns[ti].session;
+                            if bridge_boost[si] <= 0.0 && s_score[si] < 0.50 * smax {
+                                continue;
+                            }
+                            let ratio = (((osc as u128) << 16) / (max_od_turn as u128))
+                                .min(Q16_ONE as u128) as u64;
+                            let add_f = turn_cap * ((ratio as f32) / 65_536.0);
+                            t_scene[ti] += add_f;
+                            t_scene_sess[ti] += add_f;
+                        }
+                    }
+                }
+                // Pillar 3 (KITE `2610.41521` Upward-Cone Typed Facet Meet + FCA Closed-Intent Specificity):
+                // Abstract Open-Domain/Multi-Hop query facets intersect concrete declarative turn words
+                // indexed upward through WordNet 3.1 synsets & Wikidata CC0 containers in O(1).
+                if is_strict_inferential_od || top0_misses_group || ctx.persona_infer_on {
+                    let kite_sess_cap_q16 = if is_strict_inferential_od {
+                        ((smax_q16 as u128).saturating_mul(36_045) >> 16).max(1) as u64 // 0.55 * smax
+                    } else {
+                        ((smax_q16 as u128).saturating_mul(18_350) >> 16).max(1) as u64 // 0.28 * smax
+                    };
+                    let kite_turn_cap_f = if is_strict_inferential_od {
+                        0.34 * lexical_tmax
+                    } else {
+                        0.18 * lexical_tmax
+                    };
+                    let kite_turn_cap_q16 = (kite_turn_cap_f.max(0.0) * 65_536.0) as u64;
+                    let (kite_s, kite_t) =
+                        crate::retrieval::index::kite_typed::score_kite_typed_facet_meet_q16(
+                            ix,
+                            plan,
+                            &q.text,
+                            &queried_sp,
+                            kite_sess_cap_q16,
+                            kite_turn_cap_q16,
+                        );
+                    for (si, &sl_q16) in kite_s.iter().enumerate() {
+                        if sl_q16 > 0 {
+                            od_translation_fired = true;
+                            bridge_boost[si] += (sl_q16 as f32) / 65_536.0;
+                        }
+                    }
+                    if lexical_tmax > 0.0 {
+                        for (ti, &tl_q16) in kite_t.iter().enumerate() {
+                            if tl_q16 > 0 {
+                                let add_f = (tl_q16 as f32) / 65_536.0;
+                                t_scene[ti] += add_f;
+                                t_scene_sess[ti] += add_f;
+                            }
+                        }
+                    }
+                }
+                // Pillar 4 (Discrete Sinkhorn-Knopp Optimal Transport over WordNet/ConceptNet Ground Metric):
+                // Holistically aligns ALL query content terms onto the top-16 candidate turns so turns
+                // transporting every predicate beat single-word lexical decoys.
+                if (is_strict_inferential_od || top0_misses_group) && lexical_tmax > 0.0 {
+                    let ot_q = crate::retrieval::lexical::sinkhorn_ot_q16::SinkhornQuery::build(
+                        ix,
+                        &q.text,
+                        &queried_sp,
+                    );
+                    if !ot_q.words.is_empty() {
+                        let mut cand_turns: Vec<(usize, f32)> = (0..nt)
+                            .filter(|&ti| {
+                                let tr = &ix.turns[ti];
+                                !tr.is_question
+                                    && !tr.is_backchannel
+                                    && t_scene[ti] > 0.0
+                                    && (queried_sp.is_empty()
+                                        || queried_sp.contains(&tr.speaker.to_ascii_lowercase()))
+                            })
+                            .map(|ti| (ti, t_scene[ti]))
+                            .collect();
+                        cand_turns.sort_unstable_by(|a, b| {
+                            b.1.partial_cmp(&a.1)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                                .then_with(|| a.0.cmp(&b.0))
+                        });
+                        let ot_cap = if is_strict_inferential_od {
+                            0.18 * lexical_tmax
+                        } else {
+                            0.12 * lexical_tmax
+                        };
+                        let mut ot_scores: Vec<(usize, u64)> = Vec::new();
+                        let mut max_ot: u64 = 0;
+                        for &(ti, _) in cand_turns.iter().take(16) {
+                            let osc = ot_q.score_turn_q16(ix, ti);
+                            if osc > 0 {
+                                ot_scores.push((ti, osc));
+                                if osc > max_ot {
+                                    max_ot = osc;
+                                }
+                            }
+                        }
+                        if max_ot > 0 {
+                            for (ti, osc) in ot_scores {
+                                let ratio = ((osc as f32) / (max_ot as f32)).min(1.0);
+                                let add_f = ot_cap * ratio;
+                                t_scene[ti] += add_f;
+                                t_scene_sess[ti] += add_f;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Active 2-Round Multi-Hop Residual Postings Lookup (Step 2):
+        // When non-speaker query groups are strictly split across sessions (Pigeonhole:
+        // `union_cov >= 2 && max_sess_cov < union_cov`), take top-6 partial-coverage Pass-1
+        // sessions `s1`, extract top-IC non-query pivot entities `e` (`2 <= s_df <= ns/3`),
+        // and run an active Pass-2 lookup for sessions `s2 != s1` carrying BOTH `e` AND
+        // an uncovered query group `union_mask & !M(s1)` so hidden-pivot Hop-2 sessions
+        // and their Pass-1 partners rise into Top-2 together!
+        if has_named_speakers_eff && !eff_it.temporal && !top0_full_cov && ns >= 4 && smax > 0.0 {
+            let mut non_sp_mask_r2 = 0u64;
+            let mut sp_lowers_r2: Vec<String> = Vec::new();
+            for tr in ix.turns.iter().take(128) {
+                let sl = tr.speaker.to_ascii_lowercase();
+                if !sl.is_empty() && sl != "user" && sl != "assistant" && !sp_lowers_r2.contains(&sl) {
+                    sp_lowers_r2.push(sl);
+                }
+            }
+            for (gi, g) in plan.groups.iter().take(64).enumerate() {
+                if !sp_lowers_r2.iter().any(|sp| sp.eq_ignore_ascii_case(g)) {
+                    non_sp_mask_r2 |= 1u64 << gi;
+                }
+            }
+            let union_m = ctx
+                .s_exact_mask
+                .iter()
+                .fold(0u64, |acc, &m| acc | (m & non_sp_mask_r2));
+            let union_cnt = union_m.count_ones();
+            let max_s_cnt = ctx
+                .s_exact_mask
+                .iter()
+                .map(|&m| (m & non_sp_mask_r2).count_ones())
+                .max()
+                .unwrap_or(0);
+            if union_cnt >= 2 && max_s_cnt < union_cnt {
+                let ns_u32_r2 = (ns as u32).max(1);
+                let df_hi = (ns_u32_r2 / 3).clamp(3, 12);
+                let mut pass1: Vec<(usize, f32)> = (0..ns)
+                    .filter(|&si| {
+                        let m = ctx.s_exact_mask[si] & union_m;
+                        m != 0 && m != union_m && (s_score[si] + bridge_boost[si]) > 0.0
+                    })
+                    .map(|si| (si, s_score[si] + bridge_boost[si]))
+                    .collect();
+                pass1.sort_unstable_by(|a, b| {
+                    b.1.partial_cmp(&a.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.0.cmp(&b.0))
+                });
+                let mut r2_raw = vec![0u64; ns];
+                for &(s1, _) in pass1.iter().take(6) {
+                    let m1 = ctx.s_exact_mask[s1] & union_m;
+                    let need = union_m & !m1;
+                    if need == 0 {
+                        continue;
+                    }
+                    let mut pivots: Vec<(u32, u64)> = Vec::new();
+                    for &eid in ix
+                        .session_entities[s1]
+                        .iter()
+                        .chain(ix.session_rare_nt[s1].iter().take(12))
+                    {
+                        if plan.group_of.contains_key(&eid) {
+                            continue;
+                        }
+                        let df = ix.s_stats.df.get(&eid).copied().unwrap_or(0);
+                        if (2..=df_hi).contains(&df) && !pivots.iter().any(|&(p, _)| p == eid) {
+                            pivots.push((eid, crate::retrieval::fusion::aspect_coverage_q16::aspect_ic_q16(df, ns_u32_r2)));
+                        }
+                    }
+                    pivots.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                    pivots.truncate(10);
+                    if pivots.is_empty() {
+                        continue;
+                    }
+                    for s2 in 0..ns {
+                        if s2 == s1 {
+                            continue;
+                        }
+                        let m2_new = ctx.s_exact_mask[s2] & need;
+                        if m2_new == 0 {
+                            continue;
+                        }
+                        let mut pivot_ic = 0u64;
+                        for &(pid, pic) in &pivots {
+                            if ix.session_entities[s2].contains(&pid)
+                                || ix.session_content[s2].contains(&pid)
+                            {
+                                pivot_ic = pivot_ic.saturating_add(pic);
+                            }
+                        }
+                        if pivot_ic > 0 {
+                            let cov_bonus = (m1 | m2_new).count_ones() as u64;
+                            let pair_proof = pivot_ic.saturating_mul(cov_bonus);
+                            r2_raw[s1] = r2_raw[s1].max(pair_proof);
+                            r2_raw[s2] = r2_raw[s2].max(pair_proof);
+                        }
+                    }
+                }
+                let max_r2 = r2_raw.iter().copied().max().unwrap_or(0);
+                if max_r2 > 0 {
+                    let r2_cap = 0.36 * smax;
+                    for si in 0..ns {
+                        if r2_raw[si] > 0 {
+                            let frac = (r2_raw[si] as f32) / (max_r2 as f32);
+                            bridge_boost[si] += r2_cap * frac;
+                        }
+                    }
+                }
             }
         }
 
@@ -1189,26 +1554,33 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                             continue;
                         }
                         let mut best_ov = interval_overlap_q16(q_iv, (sts, sts + 86_400));
-                        if best_ov == 0 {
-                            for &ti in &ix.session_turns[si] {
-                                if ix.turns[ti].has_temporal && t_scene[ti] > 0.0 {
-                                    let t_toks: Vec<&str> = ix.turns[ti]
-                                        .body_for_headers
-                                        .split(|c: char| !c.is_ascii_alphanumeric())
-                                        .filter(|s| !s.is_empty())
-                                        .collect();
-                                    if let Some(t_iv) = resolve_relative_interval(&t_toks, sts) {
-                                        let ov = interval_overlap_q16(q_iv, t_iv);
-                                        if ov > best_ov {
-                                            best_ov = ov;
-                                        }
+                        let mut best_timex_turn: Option<(usize, u64)> = None;
+                        for &ti in &ix.session_turns[si] {
+                            let tr = &ix.turns[ti];
+                            if !tr.resolved_timex.is_empty() && !tr.is_question && !tr.is_backchannel {
+                                let mut t_ov: u64 = 0;
+                                for &t_iv in &tr.resolved_timex {
+                                    let ov = interval_overlap_q16(q_iv, t_iv);
+                                    if ov > t_ov {
+                                        t_ov = ov;
                                     }
+                                }
+                                if t_ov > best_ov {
+                                    best_ov = t_ov;
+                                }
+                                if t_ov > 0 && best_timex_turn.is_none_or(|(_, bo)| t_ov > bo) {
+                                    best_timex_turn = Some((ti, t_ov));
                                 }
                             }
                         }
                         if best_ov > 0 {
                             let lift = ht_cap * ((best_ov as f32) / 65_536.0);
                             bridge_boost[si] += lift;
+                        }
+                        if let Some((ti, t_ov)) = best_timex_turn && lexical_tmax > 0.0 {
+                            let t_lift = 0.16 * lexical_tmax * ((t_ov as f32) / 65_536.0);
+                            t_scene[ti] += t_lift;
+                            t_scene_sess[ti] += t_lift;
                         }
                     }
                 }

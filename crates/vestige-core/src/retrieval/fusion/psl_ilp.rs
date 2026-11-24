@@ -108,8 +108,9 @@ pub(in crate::retrieval) fn apply_psl_ilp_tail_closure(
     for &ti in head {
         covered_mask |= t_exact_mask[ti] & mask_limit;
     }
+    let eff_mh = plan.intent.multi_hop;
     // Check if head leaves at least 1 query group uncovered (`Deficit B`)
-    if (covered_mask & mask_limit) == mask_limit && !plan.intent.multi_hop {
+    if (covered_mask & mask_limit) == mask_limit && !eff_mh {
         return;
     }
 
@@ -135,7 +136,7 @@ pub(in crate::retrieval) fn apply_psl_ilp_tail_closure(
         }
         let has_uncovered_group = ((t_exact_mask[ti] & !covered_mask) & mask_limit) != 0;
         let has_bridge_entities = !ix.turns[ti].entities.is_empty() || !ix.turns[ti].role_objs.is_empty();
-        if !has_uncovered_group && !(plan.intent.multi_hop && has_bridge_entities) {
+        if !has_uncovered_group && !(eff_mh && has_bridge_entities) {
             continue;
         }
         let util = ilp_psl_chain_utility_q16(

@@ -86,7 +86,12 @@ pub(in crate::retrieval) fn run(ctx: RankCtx<'_>) -> RankResult {
         grounded_covered,
     };
 
-    let sessions = final_session_indices
+    let wf_g1_s10 = ctx.wf_g1_s10;
+    let wf_g3_t10 = ctx.wf_g3_t10;
+    let wf_g4_s5 = ctx.wf_g4_s5;
+    let wf_g4_flags = ctx.wf_g4_flags;
+
+    let sessions: Vec<RankedItem> = final_session_indices
         .iter()
         .copied()
         .map(|i| RankedItem {
@@ -97,7 +102,7 @@ pub(in crate::retrieval) fn run(ctx: RankCtx<'_>) -> RankResult {
         })
         .collect();
 
-    let turns = final_turn_indices
+    let turns: Vec<RankedItem> = final_turn_indices
         .into_iter()
         .map(|i| RankedItem {
             id: ix.turns[i].id.clone(),
@@ -106,6 +111,28 @@ pub(in crate::retrieval) fn run(ctx: RankCtx<'_>) -> RankResult {
             matched: matched_words(&plan, t_mask[i]),
         })
         .collect();
+
+    if let Some(wf_path) = crate::retrieval::rank::waterfall_log_path()
+        && let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(wf_path)
+    {
+        use std::io::Write;
+        let g5_s5: Vec<&str> = sessions.iter().take(5).map(|s| s.id.as_str()).collect();
+        let g5_t5: Vec<&str> = turns.iter().take(5).map(|t| t.id.as_str()).collect();
+        let rec = serde_json::json!({
+            "q": q.text,
+            "g1_s10": wf_g1_s10,
+            "g3_t10": wf_g3_t10,
+            "g4_s5": wf_g4_s5,
+            "g4_flags": wf_g4_flags,
+            "g5_s5": g5_s5,
+            "g5_t5": g5_t5,
+        });
+        let _ = writeln!(f, "{rec}");
+    }
+
     RankResult {
         intent: plan.intent,
         premise_coverage,

@@ -27,7 +27,7 @@ pub(in crate::retrieval) fn run<'a>(
     // weights assistant turns (`field 1`) without mutating public `QueryIntent::assistant_attribution`.
     // hardcode-scan: closed-class (2nd-person past attribution & retrospective recall cues)
     let eff_asst_attr = !has_named_s1
-        && ix.turns.len() >= 24
+        && ix.turns.len() >= 4
         && (q_low_s1.contains("did you ")
             || q_low_s1.contains("have you ")
             || q_low_s1.contains("you recommend")
@@ -314,5 +314,10 @@ pub(in crate::retrieval) fn run<'a>(
         deficit_a: false,
         deficit_b: false,
         torrens_locked_head: false,
+        implicit_disclosure_locked: false,
+        wf_g1_s10: Vec::new(),
+        wf_g3_t10: Vec::new(),
+        wf_g4_s5: Vec::new(),
+        wf_g4_flags: Vec::new(),
     }
 }

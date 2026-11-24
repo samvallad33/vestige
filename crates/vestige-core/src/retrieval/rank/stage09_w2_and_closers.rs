@@ -185,7 +185,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     // Cap any single session to at most 2 turns inside `final_turn_indices[0..5]` (leaving Slots 0..2 untouched),
     // swapping any 3rd+ duplicate-session turn in Slots 2..5 with the highest-scoring declarative turn
     // from the next uncovered top session (`final_session_indices[..4]`).
-    if it.multi_hop && has_named_speakers_eff && final_turn_indices.len() >= 5 {
+    if eff_it.multi_hop && has_named_speakers_eff && final_turn_indices.len() >= 5 {
         for slot in (2..5usize).rev() {
             let s_cur = ix.turns[final_turn_indices[slot]].session;
             let s_cnt = final_turn_indices[..5]

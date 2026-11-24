@@ -184,6 +184,16 @@ pub(in crate::retrieval) fn rank_standing_rules(
             q_lex_words.insert(lem.to_string());
             q_lex_words.insert(stem(lem));
         }
+        if ix.turns.len() >= 24 {
+            for cont in crate::wikidata::upward_containers(qw, 1).into_iter().take(4) {
+                for part in cont.split_ascii_whitespace() {
+                    if part.len() >= 3 && is_content(part) {
+                        q_lex_words.insert(part.to_string());
+                        q_lex_words.insert(stem(part));
+                    }
+                }
+            }
+        }
     }
     let morph_word_hit = |rw: &str| -> bool {
         let rst = stem(rw);
@@ -192,6 +202,10 @@ pub(in crate::retrieval) fn rank_standing_rules(
                 || (rst.len() >= 4 && stem(qw) == rst)
                 || damerau_levenshtein_le_1(rw, qw)
                 || (rw.len() >= 4 && qw.len() >= 4 && (rw.starts_with(qw) || qw.starts_with(rw)) && rw.len().abs_diff(qw.len()) <= 2)
+                || (rw.len() >= 5
+                    && qw.len() >= 5
+                    && rw.as_bytes()[..5] == qw.as_bytes()[..5]
+                    && rw.len().abs_diff(qw.len()) <= 6)
         })
     };
     let lex_word_hit = |rw: &str| -> bool {
@@ -200,10 +214,12 @@ pub(in crate::retrieval) fn rank_standing_rules(
             rst.len() >= 4 && q_lex_words.contains(&rst)
         }
     };
-    // Closed-class temporal WH-interrogative trigger ("When is/was/will..."):
-    // a temporal WH question asks for a calendar date/time, so standing rules carrying
-    // >= 2 closed-class calendar-unit tokens ("month", "day", "year") govern its formatting.
-    let q_is_temporal_when = it.sniper_when || it.temporal;
+    // Closed-class temporal WH / calendar-date query trigger ("When is/was...", "date of..."):
+    // asks for a calendar date/time, so standing rules carrying >= 2 closed-class
+    // calendar-unit tokens ("month", "day", "year") govern its formatting.
+    let q_is_temporal_when = it.sniper_when
+        || it.temporal
+        || (!multi_evidence && q_words.iter().any(|&w| w == "date" || w == "dates"));
 
     let mut latest_by_key: DetHashMap<&str, (usize, i32, i32, i64, bool, i32)> = DetHashMap::default();
     for (ri, r) in ix.standing_rules.iter().enumerate() {
@@ -220,7 +236,15 @@ pub(in crate::retrieval) fn rank_standing_rules(
         let cond_lex_hits = r
             .condition_words
             .iter()
-            .filter(|cw| !morph_word_hit(cw) && lex_word_hit(cw))
+            .filter(|cw| {
+                !morph_word_hit(cw)
+                    && (lex_word_hit(cw)
+                        || (ix.turns.len() >= 24
+                            && q_words.iter().any(|&qw| {
+                                crate::wordnet::heyting_implication_ic_q16(qw, cw) > 0
+                                    || crate::wordnet::heyting_implication_ic_q16(cw, qw) > 0
+                            })))
+            })
             .count() as i32;
         let cond_total = r.condition_words.len() as i32;
         let cond_matched = (cond_morph_hits + cond_lex_hits).max(cond_exact_hits).min(cond_total);
@@ -258,10 +282,42 @@ pub(in crate::retrieval) fn rank_standing_rules(
                     .min(3) as i32
             })
             .unwrap_or(0);
+        let action_morph_hits = ix
+            .turns
+            .get(r.turn)
+            .map(|tr| {
+                tr.content
+                    .iter()
+                    .filter_map(|&id| ix.vocab.names.get(id as usize).map(String::as_str))
+                    .filter(|w| {
+                        !w.starts_with('\u{1}')
+                            && is_content(w)
+                            && !r.condition_words.iter().any(|cw| cw == w)
+                            && morph_word_hit(w)
+                    })
+                    .count() as i32
+            })
+            .unwrap_or(0);
         let asst_hits = r.assistant_nouns.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
         let cond_best = cond_exact_hits.max(cond_morph_hits);
-        // Condition-clause specificity strictly outranks broad session scope hits.
-        let spec = 10 * cond_best + 10 * cal_unit_hits + 7 * cond_lex_hits + 4 * scope_hits + 2 * own_lex_hits + asst_hits;
+        let eff_scope = if !r.condition_words.is_empty()
+            && cond_best == 0
+            && cond_lex_hits == 0
+            && action_morph_hits == 0
+        {
+            scope_hits.min(1)
+        } else {
+            scope_hits.min(3)
+        };
+        // Condition-clause specificity strictly outranks broad session scope hits and weak lexical bridges.
+        let spec = 16 * cond_best
+            + 10 * action_morph_hits.min(2)
+            + 14 * cal_unit_hits
+            + 7 * cond_lex_hits
+            + if all_cond_matched && cond_total >= 2 { 10 } else { 0 }
+            + 2 * own_lex_hits
+            + 2 * eff_scope
+            + asst_hits.min(2);
         let fires = if r.has_explicit_scope {
             spec > 0 || it.task_under_rules || multi_evidence
         } else {
@@ -286,6 +342,8 @@ pub(in crate::retrieval) fn rank_standing_rules(
         .filter(|c| if max_spec > 0 { c.1 > 0 } else { true })
         .map(|(ri, mut spec, scope_neg_len, ts, all_cond, unmatched)| {
             if any_full_cond && !all_cond && unmatched > 0 {
+                spec = (spec - 5 * unmatched).max(1);
+            } else if unmatched >= 2 {
                 spec = (spec - 2 * unmatched).max(1);
             }
             (ri, spec, scope_neg_len, ts)
@@ -293,9 +351,9 @@ pub(in crate::retrieval) fn rank_standing_rules(
         .collect();
     cands.sort_by(|a, b| {
         b.1.cmp(&a.1)
-            .then(b.2.cmp(&a.2))
             .then(b.3.cmp(&a.3))
-            .then(a.0.cmp(&b.0))
+            .then(b.0.cmp(&a.0))
+            .then(b.2.cmp(&a.2))
     });
     cands
         .into_iter()
@@ -474,9 +532,21 @@ pub(in crate::retrieval) fn rule_condition_matches(
         return true;
     }
     let q_content: Vec<&str> = q_toks.iter().map(String::as_str).filter(|w| is_content(w)).collect();
-    r.condition_words
-        .iter()
-        .any(|cw| q_content.iter().any(|&qw| rule_condition_word_matches(cw, qw)))
+    let allow_onto_cond = ix.turns.len() >= 24;
+    r.condition_words.iter().any(|cw| {
+        q_content.iter().any(|&qw| {
+            rule_condition_word_matches(cw, qw)
+                || (cw.len() >= 5
+                    && qw.len() >= 5
+                    && cw.as_bytes()[..5] == qw.as_bytes()[..5]
+                    && cw.len().abs_diff(qw.len()) <= 6)
+                || (allow_onto_cond
+                    && (crate::wordnet::heyting_implication_ic_q16(qw, cw) >= 72
+                        || crate::wikidata::upward_containers(qw, 1)
+                            .into_iter()
+                            .any(|cont| cont.split_ascii_whitespace().any(|p| p == cw))))
+        })
+    })
 }
 
 pub(in crate::retrieval) fn policy_spec_winner_floor(lexical_max: f32) -> f32 {

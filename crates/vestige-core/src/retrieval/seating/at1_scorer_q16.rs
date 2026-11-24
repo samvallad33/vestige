@@ -23,7 +23,7 @@ use std::io::Write;
 use std::sync::OnceLock;
 
 /// Number of deterministic `i32` features per candidate turn.
-pub const N_AT1_FEATS: usize = 36;
+pub const N_AT1_FEATS: usize = 48;
 
 /// Maximum candidate turns evaluated per query in the deep gatekeeper pool.
 const MAX_AT1_POOL: usize = 56;
@@ -45,1977 +45,1925 @@ pub struct GbdtNode {
     pub thresh_or_leaf: i32,
 }
 
-// === BEGIN FROZEN GBDT WEIGHTS (fitted on disjoint split, verified by SHA-256 test) ===
+// === BEGIN FROZEN GBDT WEIGHTS (fitted strictly on Convs 1-5 disjoint split, verified by SHA-256 test) ===
 /// SHA-256 hex digest of the canonical byte encoding of `AT1_TREE_ROOTS` + `AT1_TREE_NODES`.
 #[cfg(test)]
 pub const AT1_GBDT_SHA256: &str =
-    "cd682d54ddd5a47dbb424dc7e678c160c1495e1caf81a2149de778de8b16869a";
+    "305ac81695d9d94aaf85c6ab57417d30eaa6937f0df6898e10be3e0324d8ad3f";
 
 /// Start index of each tree inside `AT1_TREE_NODES`.
-pub const AT1_TREE_ROOTS: &[u16] = &[0, 29, 60, 91, 122, 153, 184, 215, 246, 277, 308, 339, 370, 401, 432, 461, 492, 523, 554, 583, 614, 645, 676, 707, 738, 769, 800, 829, 860, 891, 922, 953, 984, 1015, 1046, 1077, 1108, 1139, 1170, 1201, 1232, 1263, 1294, 1325, 1356, 1387, 1418, 1449, 1480, 1511, 1542, 1573, 1604, 1635, 1666, 1697, 1728, 1759, 1788, 1819, 1848, 1877, 1908, 1939];
+pub const AT1_TREE_ROOTS: &[u16] = &[0, 31, 60, 91, 122, 151, 180, 211, 242, 271, 302, 333, 364, 395, 426, 457, 488, 519, 550, 581, 612, 643, 674, 705, 736, 767, 798, 827, 858, 887, 918, 949, 978, 1009, 1040, 1069, 1100, 1129, 1160, 1191, 1220, 1251, 1282, 1313, 1344, 1373, 1404, 1435, 1466, 1497, 1526, 1557, 1588, 1619, 1646, 1673, 1696, 1723, 1754, 1779, 1810, 1835, 1858, 1885];
 
 /// Frozen GBDT node table.
 pub const AT1_TREE_NODES: &[GbdtNode] = &[
     GbdtNode { feat: 0, left: 1, right: 16, thresh_or_leaf: 46080 },
-    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 27624 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 60074 },
-    GbdtNode { feat: 35, left: 4, right: 5, thresh_or_leaf: 6 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -8564 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 9 },
-    GbdtNode { feat: 8, left: 7, right: 8, thresh_or_leaf: 52428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1151 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 858 },
-    GbdtNode { feat: 35, left: 10, right: 13, thresh_or_leaf: 2 },
-    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 41912 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4624 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1269 },
-    GbdtNode { feat: 0, left: 14, right: 15, thresh_or_leaf: 39936 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1929 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2616 },
-    GbdtNode { feat: 2, left: 17, right: 24, thresh_or_leaf: 42252 },
-    GbdtNode { feat: 16, left: 18, right: 21, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 6, left: 19, right: 20, thresh_or_leaf: 63488 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4217 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 800 },
-    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 39520 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -184 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4708 },
-    GbdtNode { feat: 0, left: 25, right: 28, thresh_or_leaf: 48128 },
-    GbdtNode { feat: 4, left: 26, right: 27, thresh_or_leaf: 3738 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -775 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 5422 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 8729 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 41796 },
-    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 27098 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 60074 },
-    GbdtNode { feat: 35, left: 4, right: 5, thresh_or_leaf: 6 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -7562 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 599 },
-    GbdtNode { feat: 4, left: 7, right: 8, thresh_or_leaf: 27982 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -954 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2626 },
-    GbdtNode { feat: 35, left: 10, right: 13, thresh_or_leaf: 2 },
-    GbdtNode { feat: 34, left: 11, right: 12, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4232 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -75 },
-    GbdtNode { feat: 0, left: 14, right: 15, thresh_or_leaf: 39936 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -826 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3467 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 47104 },
-    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 2 },
-    GbdtNode { feat: 26, left: 19, right: 20, thresh_or_leaf: 10392 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2581 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1852 },
-    GbdtNode { feat: 0, left: 22, right: 23, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -585 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4870 },
-    GbdtNode { feat: 4, left: 25, right: 28, thresh_or_leaf: 3943 },
-    GbdtNode { feat: 19, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 423 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1081 },
-    GbdtNode { feat: 5, left: 29, right: 30, thresh_or_leaf: 48465 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2871 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 7669 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34431 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 3 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 68812 },
-    GbdtNode { feat: 2, left: 4, right: 5, thresh_or_leaf: 20480 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -7019 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4488 },
-    GbdtNode { feat: 3, left: 7, right: 8, thresh_or_leaf: 44533 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1175 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -88 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 40030 },
-    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 8612 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4843 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -273 },
-    GbdtNode { feat: 4, left: 14, right: 15, thresh_or_leaf: 13838 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -840 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2930 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 47104 },
-    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 2 },
-    GbdtNode { feat: 26, left: 19, right: 20, thresh_or_leaf: 13186 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2426 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1539 },
-    GbdtNode { feat: 0, left: 22, right: 23, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -664 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4448 },
-    GbdtNode { feat: 4, left: 25, right: 28, thresh_or_leaf: 3221 },
-    GbdtNode { feat: 31, left: 26, right: 27, thresh_or_leaf: 37449 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -936 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 468 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 61440 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -58 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 6916 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34431 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 3 },
-    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 20617 },
-    GbdtNode { feat: 16, left: 4, right: 5, thresh_or_leaf: 68812 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -6501 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 779 },
-    GbdtNode { feat: 31, left: 7, right: 8, thresh_or_leaf: 49152 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4375 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -395 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 40030 },
-    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 8612 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4325 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 107 },
-    GbdtNode { feat: 27, left: 14, right: 15, thresh_or_leaf: 109 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2983 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1406 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 47104 },
-    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 2 },
-    GbdtNode { feat: 26, left: 19, right: 20, thresh_or_leaf: 13186 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2243 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1424 },
-    GbdtNode { feat: 0, left: 22, right: 23, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -782 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4020 },
-    GbdtNode { feat: 4, left: 25, right: 28, thresh_or_leaf: 3221 },
-    GbdtNode { feat: 31, left: 26, right: 27, thresh_or_leaf: 37449 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -913 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 436 },
-    GbdtNode { feat: 2, left: 29, right: 30, thresh_or_leaf: 42996 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 201 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 6391 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34431 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 3 },
-    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 16493 },
-    GbdtNode { feat: 16, left: 4, right: 5, thresh_or_leaf: 68812 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -6150 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 821 },
-    GbdtNode { feat: 31, left: 7, right: 8, thresh_or_leaf: 49152 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4373 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -695 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 40030 },
-    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 8612 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4006 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 274 },
-    GbdtNode { feat: 27, left: 14, right: 15, thresh_or_leaf: 109 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2913 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1356 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 47104 },
-    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 2 },
-    GbdtNode { feat: 26, left: 19, right: 20, thresh_or_leaf: 13186 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2080 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1360 },
-    GbdtNode { feat: 0, left: 22, right: 23, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -687 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3687 },
-    GbdtNode { feat: 4, left: 25, right: 28, thresh_or_leaf: 3221 },
-    GbdtNode { feat: 31, left: 26, right: 27, thresh_or_leaf: 37449 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -833 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 408 },
-    GbdtNode { feat: 5, left: 29, right: 30, thresh_or_leaf: 47959 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 831 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 5986 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34431 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 3 },
-    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 14934 },
-    GbdtNode { feat: 8, left: 4, right: 5, thresh_or_leaf: 52428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -5846 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 486 },
-    GbdtNode { feat: 31, left: 7, right: 8, thresh_or_leaf: 49152 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4191 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -468 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 40030 },
-    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 8612 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3573 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 341 },
-    GbdtNode { feat: 27, left: 14, right: 15, thresh_or_leaf: 109 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2811 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1287 },
-    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 2 },
-    GbdtNode { feat: 26, left: 18, right: 21, thresh_or_leaf: 12690 },
-    GbdtNode { feat: 0, left: 19, right: 20, thresh_or_leaf: 45056 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2486 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -59 },
-    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 63198 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1469 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4119 },
-    GbdtNode { feat: 0, left: 25, right: 28, thresh_or_leaf: 47104 },
-    GbdtNode { feat: 0, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -624 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3349 },
-    GbdtNode { feat: 5, left: 29, right: 30, thresh_or_leaf: 48588 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1450 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 5743 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34431 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 3 },
-    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 14934 },
-    GbdtNode { feat: 8, left: 4, right: 5, thresh_or_leaf: 52428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -5580 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 526 },
-    GbdtNode { feat: 31, left: 7, right: 8, thresh_or_leaf: 49152 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3926 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -366 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 45068 },
-    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 8633 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3203 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 551 },
-    GbdtNode { feat: 27, left: 14, right: 15, thresh_or_leaf: 125 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2872 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1151 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 47104 },
-    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 2 },
-    GbdtNode { feat: 26, left: 19, right: 20, thresh_or_leaf: 13186 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1804 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1234 },
-    GbdtNode { feat: 0, left: 22, right: 23, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -634 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2996 },
-    GbdtNode { feat: 18, left: 25, right: 28, thresh_or_leaf: -1 },
-    GbdtNode { feat: 35, left: 26, right: 27, thresh_or_leaf: 5 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1537 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2601 },
-    GbdtNode { feat: 4, left: 29, right: 30, thresh_or_leaf: 2031 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 5410 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 41796 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 2 },
-    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 19816 },
-    GbdtNode { feat: 16, left: 4, right: 5, thresh_or_leaf: 68812 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -5305 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 706 },
-    GbdtNode { feat: 34, left: 7, right: 8, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3126 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -78 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 43993 },
-    GbdtNode { feat: 16, left: 11, right: 12, thresh_or_leaf: 68812 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3286 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 712 },
-    GbdtNode { feat: 31, left: 14, right: 15, thresh_or_leaf: 29127 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -375 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2722 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 48128 },
-    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 19, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 525 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1923 },
-    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1147 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3518 },
-    GbdtNode { feat: 5, left: 25, right: 28, thresh_or_leaf: 52983 },
-    GbdtNode { feat: 29, left: 26, right: 27, thresh_or_leaf: 99 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -307 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2521 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 63488 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1815 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 5356 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34431 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 3 },
-    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 14934 },
-    GbdtNode { feat: 8, left: 4, right: 5, thresh_or_leaf: 52428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -5163 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 476 },
-    GbdtNode { feat: 31, left: 7, right: 8, thresh_or_leaf: 49152 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3385 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -171 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 45068 },
-    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 8633 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2824 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 484 },
-    GbdtNode { feat: 27, left: 14, right: 15, thresh_or_leaf: 125 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2613 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1069 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 48128 },
-    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 2 },
-    GbdtNode { feat: 26, left: 19, right: 20, thresh_or_leaf: 14949 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1346 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1489 },
-    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -735 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3247 },
-    GbdtNode { feat: 5, left: 25, right: 28, thresh_or_leaf: 53009 },
-    GbdtNode { feat: 14, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2292 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -574 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 63488 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1580 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 5155 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 41796 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 2 },
-    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 19816 },
-    GbdtNode { feat: 16, left: 4, right: 5, thresh_or_leaf: 68812 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4936 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 675 },
-    GbdtNode { feat: 34, left: 7, right: 8, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2689 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 138 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 43993 },
-    GbdtNode { feat: 16, left: 11, right: 12, thresh_or_leaf: 68812 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2883 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 674 },
-    GbdtNode { feat: 31, left: 14, right: 15, thresh_or_leaf: 29127 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -160 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2484 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 48128 },
-    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 19, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 496 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1608 },
-    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1096 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3087 },
-    GbdtNode { feat: 5, left: 25, right: 28, thresh_or_leaf: 52983 },
-    GbdtNode { feat: 14, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1927 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -933 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 63488 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1346 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4975 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34431 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 2 },
-    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 14739 },
-    GbdtNode { feat: 8, left: 4, right: 5, thresh_or_leaf: 52428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4874 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 350 },
-    GbdtNode { feat: 31, left: 7, right: 8, thresh_or_leaf: 58982 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3022 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -23 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 43520 },
-    GbdtNode { feat: 16, left: 11, right: 12, thresh_or_leaf: 68812 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2626 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 615 },
-    GbdtNode { feat: 27, left: 14, right: 15, thresh_or_leaf: 111 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1989 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -983 },
-    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 3 },
-    GbdtNode { feat: 2, left: 18, right: 21, thresh_or_leaf: 63615 },
-    GbdtNode { feat: 0, left: 19, right: 20, thresh_or_leaf: 43008 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1852 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 249 },
-    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 60476 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -979 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3511 },
-    GbdtNode { feat: 5, left: 25, right: 28, thresh_or_leaf: 62518 },
-    GbdtNode { feat: 4, left: 26, right: 27, thresh_or_leaf: 16948 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1323 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2452 },
-    GbdtNode { feat: 0, left: 29, right: 30, thresh_or_leaf: 44032 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1154 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4761 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 41796 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 2 },
-    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 15876 },
-    GbdtNode { feat: 8, left: 4, right: 5, thresh_or_leaf: 52428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4715 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 559 },
-    GbdtNode { feat: 5, left: 7, right: 8, thresh_or_leaf: 64127 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3070 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1001 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 43993 },
-    GbdtNode { feat: 16, left: 11, right: 12, thresh_or_leaf: 68812 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2514 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 614 },
-    GbdtNode { feat: 31, left: 14, right: 15, thresh_or_leaf: 29127 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -246 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2344 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 48128 },
-    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: -1 },
-    GbdtNode { feat: 17, left: 19, right: 20, thresh_or_leaf: 483309 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1715 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 123 },
-    GbdtNode { feat: 35, left: 22, right: 23, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -204 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2743 },
-    GbdtNode { feat: 5, left: 25, right: 28, thresh_or_leaf: 52983 },
-    GbdtNode { feat: 29, left: 26, right: 27, thresh_or_leaf: 71 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -798 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1787 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 63488 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1072 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4680 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34431 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 2 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 42313 },
-    GbdtNode { feat: 16, left: 4, right: 5, thresh_or_leaf: 68812 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4766 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 579 },
-    GbdtNode { feat: 31, left: 7, right: 8, thresh_or_leaf: 39321 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3179 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -440 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 38859 },
-    GbdtNode { feat: 29, left: 11, right: 12, thresh_or_leaf: 173 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2510 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -24 },
-    GbdtNode { feat: 27, left: 14, right: 15, thresh_or_leaf: 28 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1775 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -723 },
-    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 5 },
-    GbdtNode { feat: 2, left: 18, right: 21, thresh_or_leaf: 63152 },
-    GbdtNode { feat: 12, left: 19, right: 20, thresh_or_leaf: 36700 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1803 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -693 },
-    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 63202 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -382 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3589 },
-    GbdtNode { feat: 18, left: 25, right: 28, thresh_or_leaf: -1 },
-    GbdtNode { feat: 9, left: 26, right: 27, thresh_or_leaf: 736848 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -780 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1613 },
-    GbdtNode { feat: 5, left: 29, right: 30, thresh_or_leaf: 59992 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2152 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4670 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 29098 },
-    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 2 },
-    GbdtNode { feat: 6, left: 3, right: 6, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 16, left: 4, right: 5, thresh_or_leaf: 45511 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4582 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1031 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 44032 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2143 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 432 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 35681 },
-    GbdtNode { feat: 17, left: 11, right: 12, thresh_or_leaf: -432525 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2629 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -279 },
-    GbdtNode { feat: 34, left: 14, right: 15, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -116 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1773 },
-    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 3 },
-    GbdtNode { feat: 2, left: 18, right: 21, thresh_or_leaf: 58982 },
-    GbdtNode { feat: 0, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2162 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -173 },
-    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 60483 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1316 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2894 },
-    GbdtNode { feat: 5, left: 25, right: 28, thresh_or_leaf: 62662 },
-    GbdtNode { feat: 9, left: 26, right: 27, thresh_or_leaf: 760978 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -392 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2438 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 964 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4350 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 41796 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 41395 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 3, left: 4, right: 5, thresh_or_leaf: 19190 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4707 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1668 },
-    GbdtNode { feat: 9, left: 7, right: 8, thresh_or_leaf: 449462 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 573 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1802 },
-    GbdtNode { feat: 35, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 31, left: 11, right: 12, thresh_or_leaf: 40960 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2779 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -294 },
-    GbdtNode { feat: 31, left: 14, right: 15, thresh_or_leaf: 25206 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -840 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1675 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 48128 },
-    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 4 },
-    GbdtNode { feat: 27, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 895 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1992 },
-    GbdtNode { feat: 31, left: 22, right: 23, thresh_or_leaf: 18724 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -769 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2677 },
-    GbdtNode { feat: 18, left: 25, right: 26, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 766 },
-    GbdtNode { feat: 5, left: 27, right: 28, thresh_or_leaf: 57445 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1777 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4333 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 29098 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 40974 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 18428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4624 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1547 },
-    GbdtNode { feat: 17, left: 7, right: 8, thresh_or_leaf: -430398 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1787 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 347 },
-    GbdtNode { feat: 35, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 0, left: 11, right: 12, thresh_or_leaf: 44032 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2645 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -204 },
-    GbdtNode { feat: 31, left: 14, right: 15, thresh_or_leaf: 25206 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -614 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1352 },
-    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 5 },
-    GbdtNode { feat: 2, left: 18, right: 21, thresh_or_leaf: 64015 },
-    GbdtNode { feat: 27, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 420 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1971 },
-    GbdtNode { feat: 31, left: 22, right: 23, thresh_or_leaf: 28086 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -292 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3232 },
-    GbdtNode { feat: 5, left: 25, right: 28, thresh_or_leaf: 61750 },
-    GbdtNode { feat: 34, left: 26, right: 27, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -78 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2508 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1205 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4330 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 29098 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 40974 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 18428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4540 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1417 },
-    GbdtNode { feat: 17, left: 7, right: 8, thresh_or_leaf: -430398 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1659 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 398 },
-    GbdtNode { feat: 35, left: 10, right: 13, thresh_or_leaf: -3 },
-    GbdtNode { feat: 31, left: 11, right: 12, thresh_or_leaf: 39321 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2846 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -504 },
-    GbdtNode { feat: 35, left: 14, right: 15, thresh_or_leaf: 3 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -648 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1390 },
-    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 5 },
-    GbdtNode { feat: 2, left: 18, right: 21, thresh_or_leaf: 64015 },
-    GbdtNode { feat: 27, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 364 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1820 },
-    GbdtNode { feat: 31, left: 22, right: 23, thresh_or_leaf: 28086 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -222 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3071 },
-    GbdtNode { feat: 5, left: 25, right: 28, thresh_or_leaf: 61750 },
-    GbdtNode { feat: 34, left: 26, right: 27, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -219 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2356 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1153 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4209 },
-    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 2 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 59235 },
-    GbdtNode { feat: 4, left: 3, right: 6, thresh_or_leaf: 18521 },
-    GbdtNode { feat: 6, left: 4, right: 5, thresh_or_leaf: 63488 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4226 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -125 },
-    GbdtNode { feat: 12, left: 7, right: 8, thresh_or_leaf: 30427 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 733 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1390 },
-    GbdtNode { feat: 26, left: 10, right: 13, thresh_or_leaf: 9367 },
-    GbdtNode { feat: 0, left: 11, right: 12, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1945 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -290 },
-    GbdtNode { feat: 27, left: 14, right: 15, thresh_or_leaf: 69 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2236 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -942 },
-    GbdtNode { feat: 5, left: 17, right: 24, thresh_or_leaf: 62568 },
-    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 26214 },
-    GbdtNode { feat: 22, left: 19, right: 20, thresh_or_leaf: 2 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2293 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 276 },
-    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 43572 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -642 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1601 },
-    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 5 },
-    GbdtNode { feat: 18, left: 26, right: 27, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1108 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2134 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1042 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4098 },
-    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 2 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 40455 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 18196 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4442 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1290 },
-    GbdtNode { feat: 9, left: 7, right: 8, thresh_or_leaf: 545686 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 301 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1291 },
-    GbdtNode { feat: 0, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 29, left: 11, right: 12, thresh_or_leaf: 18139 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2385 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 290 },
-    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 68 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -658 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1424 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 48128 },
-    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 5, left: 19, right: 20, thresh_or_leaf: 61660 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1691 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 534 },
-    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 44821 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -92 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2349 },
-    GbdtNode { feat: 18, left: 25, right: 26, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 330 },
-    GbdtNode { feat: 6, left: 27, right: 28, thresh_or_leaf: 63488 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1046 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3907 },
-    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 2 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 40455 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 18196 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4359 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1204 },
-    GbdtNode { feat: 9, left: 7, right: 8, thresh_or_leaf: 545686 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 357 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1231 },
-    GbdtNode { feat: 0, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 29, left: 11, right: 12, thresh_or_leaf: 18139 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2244 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 354 },
-    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 68 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -592 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1354 },
-    GbdtNode { feat: 5, left: 17, right: 24, thresh_or_leaf: 62568 },
-    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 26214 },
-    GbdtNode { feat: 22, left: 19, right: 20, thresh_or_leaf: 2 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2101 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 260 },
-    GbdtNode { feat: 34, left: 22, right: 23, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 125 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2313 },
-    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 5 },
-    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 28 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 31206 },
+    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 76458 },
+    GbdtNode { feat: 2, left: 4, right: 5, thresh_or_leaf: 12851 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -5800 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -5024 },
+    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 15528 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2901 },
     GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 113 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2312 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 934 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3867 },
+    GbdtNode { feat: 35, left: 10, right: 13, thresh_or_leaf: 2 },
+    GbdtNode { feat: 0, left: 11, right: 12, thresh_or_leaf: 44032 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4237 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -926 },
+    GbdtNode { feat: 0, left: 14, right: 15, thresh_or_leaf: 44032 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -678 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2915 },
+    GbdtNode { feat: 4, left: 17, right: 24, thresh_or_leaf: 11838 },
+    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 20164 },
+    GbdtNode { feat: 37, left: 19, right: 20, thresh_or_leaf: 43690 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4764 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -944 },
+    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 43564 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3760 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 936 },
+    GbdtNode { feat: 1, left: 25, right: 28, thresh_or_leaf: 0 },
+    GbdtNode { feat: 35, left: 26, right: 27, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 238 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3731 },
+    GbdtNode { feat: 5, left: 29, right: 30, thresh_or_leaf: 40930 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3154 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 5712 },
+    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34661 },
+    GbdtNode { feat: 8, left: 2, right: 9, thresh_or_leaf: 43690 },
+    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 23652 },
+    GbdtNode { feat: 0, left: 4, right: 5, thresh_or_leaf: 46080 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -5088 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2621 },
+    GbdtNode { feat: 35, left: 7, right: 8, thresh_or_leaf: 3 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3724 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 352 },
+    GbdtNode { feat: 35, left: 10, right: 13, thresh_or_leaf: 1 },
+    GbdtNode { feat: 16, left: 11, right: 12, thresh_or_leaf: 68812 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4390 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1306 },
+    GbdtNode { feat: 5, left: 14, right: 15, thresh_or_leaf: 40930 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 169 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4540 },
+    GbdtNode { feat: 1, left: 17, right: 24, thresh_or_leaf: 0 },
+    GbdtNode { feat: 4, left: 18, right: 21, thresh_or_leaf: 13932 },
+    GbdtNode { feat: 18, left: 19, right: 20, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3399 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 632 },
+    GbdtNode { feat: 45, left: 22, right: 23, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3252 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3126 },
+    GbdtNode { feat: 4, left: 25, right: 26, thresh_or_leaf: 11838 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2696 },
+    GbdtNode { feat: 6, left: 27, right: 28, thresh_or_leaf: 63488 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4225 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 5069 },
     GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 2 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 40455 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 18196 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4270 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1117 },
-    GbdtNode { feat: 9, left: 7, right: 8, thresh_or_leaf: 545686 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 380 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1176 },
-    GbdtNode { feat: 31, left: 10, right: 13, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 0, left: 11, right: 12, thresh_or_leaf: 40960 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2203 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -357 },
-    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 151 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -326 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2056 },
-    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 47104 },
-    GbdtNode { feat: 5, left: 18, right: 21, thresh_or_leaf: 58982 },
-    GbdtNode { feat: 31, left: 19, right: 20, thresh_or_leaf: 36408 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1479 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 331 },
-    GbdtNode { feat: 9, left: 22, right: 23, thresh_or_leaf: 467212 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -118 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1964 },
-    GbdtNode { feat: 9, left: 25, right: 28, thresh_or_leaf: 934424 },
-    GbdtNode { feat: 18, left: 26, right: 27, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1379 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2382 },
-    GbdtNode { feat: 4, left: 29, right: 30, thresh_or_leaf: 36082 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 29 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4125 },
-    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 2 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 40455 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 18196 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4185 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1006 },
-    GbdtNode { feat: 9, left: 7, right: 8, thresh_or_leaf: 545686 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 459 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1119 },
-    GbdtNode { feat: 31, left: 10, right: 13, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 16, left: 11, right: 12, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2140 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -395 },
-    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 151 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -276 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1962 },
-    GbdtNode { feat: 5, left: 17, right: 24, thresh_or_leaf: 62568 },
-    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 26214 },
-    GbdtNode { feat: 29, left: 19, right: 20, thresh_or_leaf: 6932 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2034 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 258 },
-    GbdtNode { feat: 34, left: 22, right: 23, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 21 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2202 },
-    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 5 },
-    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 28 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 57 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2081 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 569 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3639 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 59237 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 31507 },
-    GbdtNode { feat: 6, left: 3, right: 6, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 21, left: 4, right: 5, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3822 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 49 },
-    GbdtNode { feat: 20, left: 7, right: 8, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1093 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1112 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 29077 },
-    GbdtNode { feat: 8, left: 11, right: 12, thresh_or_leaf: 52428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2601 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 441 },
-    GbdtNode { feat: 18, left: 14, right: 15, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1404 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1157 },
-    GbdtNode { feat: 4, left: 17, right: 24, thresh_or_leaf: 28916 },
-    GbdtNode { feat: 26, left: 18, right: 21, thresh_or_leaf: 161 },
-    GbdtNode { feat: 0, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1638 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -172 },
-    GbdtNode { feat: 26, left: 22, right: 23, thresh_or_leaf: 40293 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 119 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2225 },
-    GbdtNode { feat: 9, left: 25, right: 28, thresh_or_leaf: 918332 },
-    GbdtNode { feat: 34, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 272 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2800 },
-    GbdtNode { feat: 35, left: 29, right: 30, thresh_or_leaf: 3 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -116 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3821 },
-    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 0 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 34741 },
-    GbdtNode { feat: 31, left: 3, right: 6, thresh_or_leaf: 54613 },
-    GbdtNode { feat: 0, left: 4, right: 5, thresh_or_leaf: 45056 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4047 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -468 },
-    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 10358 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -63 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 494 },
-    GbdtNode { feat: 15, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 0, left: 11, right: 12, thresh_or_leaf: 40960 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2450 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -883 },
-    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1148 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1133 },
-    GbdtNode { feat: 5, left: 17, right: 24, thresh_or_leaf: 62871 },
-    GbdtNode { feat: 34, left: 18, right: 21, thresh_or_leaf: 1 },
-    GbdtNode { feat: 29, left: 19, right: 20, thresh_or_leaf: 7651 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1674 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1484 },
-    GbdtNode { feat: 35, left: 22, right: 23, thresh_or_leaf: 5 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -408 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2392 },
-    GbdtNode { feat: 4, left: 25, right: 28, thresh_or_leaf: 58406 },
-    GbdtNode { feat: 34, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 261 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2230 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 121 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3536 },
-    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 0 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 34741 },
-    GbdtNode { feat: 31, left: 3, right: 6, thresh_or_leaf: 54613 },
-    GbdtNode { feat: 0, left: 4, right: 5, thresh_or_leaf: 45056 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3964 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -436 },
-    GbdtNode { feat: 15, left: 7, right: 8, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -62 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 521 },
-    GbdtNode { feat: 15, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 0, left: 11, right: 12, thresh_or_leaf: 40960 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2376 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -831 },
-    GbdtNode { feat: 31, left: 14, right: 15, thresh_or_leaf: 39321 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -823 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1637 },
-    GbdtNode { feat: 31, left: 17, right: 24, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 34, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 29, left: 19, right: 20, thresh_or_leaf: 3966 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1829 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 518 },
-    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 51228 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -886 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1724 },
-    GbdtNode { feat: 4, left: 25, right: 28, thresh_or_leaf: 57531 },
-    GbdtNode { feat: 2, left: 26, right: 27, thresh_or_leaf: 59303 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 588 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2159 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 63488 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -46 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3521 },
-    GbdtNode { feat: 6, left: 1, right: 16, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 4, left: 2, right: 9, thresh_or_leaf: 11476 },
-    GbdtNode { feat: 31, left: 3, right: 6, thresh_or_leaf: 39321 },
-    GbdtNode { feat: 8, left: 4, right: 5, thresh_or_leaf: 28086 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3681 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -610 },
-    GbdtNode { feat: 34, left: 7, right: 8, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1150 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1368 },
-    GbdtNode { feat: 16, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 9, left: 11, right: 12, thresh_or_leaf: 211919 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -20 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2287 },
-    GbdtNode { feat: 17, left: 14, right: 15, thresh_or_leaf: -426265 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -907 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1321 },
-    GbdtNode { feat: 9, left: 17, right: 24, thresh_or_leaf: 726276 },
-    GbdtNode { feat: 34, left: 18, right: 21, thresh_or_leaf: 1 },
-    GbdtNode { feat: 26, left: 19, right: 20, thresh_or_leaf: 31524 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -576 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1329 },
-    GbdtNode { feat: 2, left: 22, right: 23, thresh_or_leaf: 15997 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -348 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2766 },
-    GbdtNode { feat: 4, left: 25, right: 28, thresh_or_leaf: 35429 },
-    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 14324 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -814 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1104 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 184 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3483 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 59237 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 31507 },
-    GbdtNode { feat: 6, left: 3, right: 6, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 21, left: 4, right: 5, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3469 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 97 },
-    GbdtNode { feat: 15, left: 7, right: 8, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1210 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 909 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 29077 },
-    GbdtNode { feat: 8, left: 11, right: 12, thresh_or_leaf: 52428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2169 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 425 },
-    GbdtNode { feat: 18, left: 14, right: 15, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1188 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1216 },
-    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 5 },
-    GbdtNode { feat: 0, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 4, left: 19, right: 20, thresh_or_leaf: 31500 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1354 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1055 },
-    GbdtNode { feat: 27, left: 22, right: 23, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1552 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1031 },
-    GbdtNode { feat: 9, left: 25, right: 28, thresh_or_leaf: 918487 },
-    GbdtNode { feat: 34, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -444 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2551 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3523 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 59237 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 31507 },
-    GbdtNode { feat: 6, left: 3, right: 6, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 21, left: 4, right: 5, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3348 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 101 },
-    GbdtNode { feat: 15, left: 7, right: 8, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1114 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 879 },
-    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 29077 },
-    GbdtNode { feat: 8, left: 11, right: 12, thresh_or_leaf: 52428 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2047 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 418 },
-    GbdtNode { feat: 18, left: 14, right: 15, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1174 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1160 },
-    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 5 },
-    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 9, left: 19, right: 20, thresh_or_leaf: 347262 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1220 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 699 },
-    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -952 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1646 },
-    GbdtNode { feat: 9, left: 25, right: 28, thresh_or_leaf: 918487 },
-    GbdtNode { feat: 34, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -503 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2418 },
-    GbdtNode { feat: 8, left: 29, right: 30, thresh_or_leaf: 29127 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 520 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3483 },
-    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 33247 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 21, left: 4, right: 5, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -559 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3705 },
-    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 5498 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -697 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 390 },
-    GbdtNode { feat: 34, left: 10, right: 13, thresh_or_leaf: 1 },
-    GbdtNode { feat: 16, left: 11, right: 12, thresh_or_leaf: 27306 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1621 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 54 },
-    GbdtNode { feat: 2, left: 14, right: 15, thresh_or_leaf: 10795 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -669 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2086 },
-    GbdtNode { feat: 4, left: 17, right: 24, thresh_or_leaf: 57167 },
-    GbdtNode { feat: 15, left: 18, right: 21, thresh_or_leaf: -1 },
-    GbdtNode { feat: 5, left: 19, right: 20, thresh_or_leaf: 63490 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1680 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 249 },
-    GbdtNode { feat: 34, left: 22, right: 23, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 464 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2117 },
-    GbdtNode { feat: 6, left: 25, right: 28, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 947 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -999 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 793 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 71 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3196 },
-    GbdtNode { feat: 6, left: 1, right: 16, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 4, left: 2, right: 9, thresh_or_leaf: 11476 },
-    GbdtNode { feat: 31, left: 3, right: 6, thresh_or_leaf: 39321 },
-    GbdtNode { feat: 8, left: 4, right: 5, thresh_or_leaf: 28086 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3328 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -407 },
-    GbdtNode { feat: 34, left: 7, right: 8, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -938 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1321 },
-    GbdtNode { feat: 16, left: 10, right: 13, thresh_or_leaf: 24576 },
-    GbdtNode { feat: 9, left: 11, right: 12, thresh_or_leaf: 220287 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -91 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2015 },
-    GbdtNode { feat: 18, left: 14, right: 15, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -534 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1442 },
-    GbdtNode { feat: 9, left: 17, right: 24, thresh_or_leaf: 726276 },
-    GbdtNode { feat: 34, left: 18, right: 21, thresh_or_leaf: 1 },
-    GbdtNode { feat: 3, left: 19, right: 20, thresh_or_leaf: 13959 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 363 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1251 },
-    GbdtNode { feat: 3, left: 22, right: 23, thresh_or_leaf: 57 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -278 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2545 },
-    GbdtNode { feat: 4, left: 25, right: 28, thresh_or_leaf: 35429 },
-    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 14324 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -740 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 987 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 22 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3057 },
-    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 0 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 34741 },
-    GbdtNode { feat: 31, left: 3, right: 6, thresh_or_leaf: 54613 },
-    GbdtNode { feat: 0, left: 4, right: 5, thresh_or_leaf: 45056 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3484 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -154 },
-    GbdtNode { feat: 35, left: 7, right: 8, thresh_or_leaf: -7 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -56 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 440 },
-    GbdtNode { feat: 15, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 6, left: 11, right: 12, thresh_or_leaf: 47104 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 321 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1682 },
-    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -661 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1204 },
-    GbdtNode { feat: 5, left: 17, right: 24, thresh_or_leaf: 62871 },
-    GbdtNode { feat: 34, left: 18, right: 21, thresh_or_leaf: 1 },
-    GbdtNode { feat: 29, left: 19, right: 20, thresh_or_leaf: 7651 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1561 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1375 },
-    GbdtNode { feat: 17, left: 22, right: 23, thresh_or_leaf: -462211 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -358 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1793 },
-    GbdtNode { feat: 34, left: 25, right: 28, thresh_or_leaf: 0 },
-    GbdtNode { feat: 9, left: 26, right: 27, thresh_or_leaf: 1036934 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 5 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2010 },
-    GbdtNode { feat: 4, left: 29, right: 30, thresh_or_leaf: 12036 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 170 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2962 },
-    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 33247 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 21, left: 4, right: 5, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -374 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3451 },
-    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 5498 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -650 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 417 },
-    GbdtNode { feat: 34, left: 10, right: 13, thresh_or_leaf: 1 },
-    GbdtNode { feat: 18, left: 11, right: 12, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1649 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -88 },
-    GbdtNode { feat: 2, left: 14, right: 15, thresh_or_leaf: 10795 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -613 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1955 },
-    GbdtNode { feat: 4, left: 17, right: 24, thresh_or_leaf: 57167 },
-    GbdtNode { feat: 15, left: 18, right: 21, thresh_or_leaf: -1 },
-    GbdtNode { feat: 5, left: 19, right: 20, thresh_or_leaf: 63490 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1552 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 226 },
-    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 41441 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -492 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1533 },
-    GbdtNode { feat: 6, left: 25, right: 28, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 947 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1083 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 783 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -5 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2905 },
-    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 33247 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 21, left: 4, right: 5, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -354 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3360 },
-    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 5498 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -626 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 416 },
-    GbdtNode { feat: 34, left: 10, right: 13, thresh_or_leaf: 1 },
-    GbdtNode { feat: 18, left: 11, right: 12, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1567 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -94 },
-    GbdtNode { feat: 15, left: 14, right: 15, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -237 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2070 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 9, left: 18, right: 21, thresh_or_leaf: 972720 },
-    GbdtNode { feat: 5, left: 19, right: 20, thresh_or_leaf: 65483 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -931 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 879 },
-    GbdtNode { feat: 4, left: 22, right: 23, thresh_or_leaf: 58192 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -279 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2641 },
-    GbdtNode { feat: 2, left: 25, right: 28, thresh_or_leaf: 17151 },
-    GbdtNode { feat: 5, left: 26, right: 27, thresh_or_leaf: 16756 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 209 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -454 },
-    GbdtNode { feat: 3, left: 29, right: 30, thresh_or_leaf: 31 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -140 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3403 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 11138 },
-    GbdtNode { feat: 6, left: 2, right: 9, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 35, left: 3, right: 6, thresh_or_leaf: 2 },
-    GbdtNode { feat: 3, left: 4, right: 5, thresh_or_leaf: 11628 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3145 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -794 },
-    GbdtNode { feat: 17, left: 7, right: 8, thresh_or_leaf: -449974 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -748 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 649 },
-    GbdtNode { feat: 2, left: 10, right: 13, thresh_or_leaf: 8078 },
-    GbdtNode { feat: 33, left: 11, right: 12, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -840 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 180 },
-    GbdtNode { feat: 17, left: 14, right: 15, thresh_or_leaf: -505548 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -315 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 945 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 9, left: 18, right: 21, thresh_or_leaf: 936529 },
-    GbdtNode { feat: 15, left: 19, right: 20, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1163 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 341 },
-    GbdtNode { feat: 2, left: 22, right: 23, thresh_or_leaf: 61481 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 384 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2786 },
-    GbdtNode { feat: 6, left: 25, right: 28, thresh_or_leaf: 61440 },
-    GbdtNode { feat: 17, left: 26, right: 27, thresh_or_leaf: -419763 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -809 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 904 },
-    GbdtNode { feat: 2, left: 29, right: 30, thresh_or_leaf: 15910 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -329 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3182 },
-    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 33247 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 21, left: 4, right: 5, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -287 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3198 },
-    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 5498 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -604 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 456 },
-    GbdtNode { feat: 16, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 35, left: 11, right: 12, thresh_or_leaf: 5 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1558 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 630 },
-    GbdtNode { feat: 34, left: 14, right: 15, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -76 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2012 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 9, left: 18, right: 21, thresh_or_leaf: 972720 },
-    GbdtNode { feat: 26, left: 19, right: 20, thresh_or_leaf: 49955 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -231 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1598 },
-    GbdtNode { feat: 4, left: 22, right: 23, thresh_or_leaf: 58192 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -297 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2441 },
-    GbdtNode { feat: 2, left: 25, right: 28, thresh_or_leaf: 17151 },
-    GbdtNode { feat: 5, left: 26, right: 27, thresh_or_leaf: 16756 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 209 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -437 },
-    GbdtNode { feat: 3, left: 29, right: 30, thresh_or_leaf: 31 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -142 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3214 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 37545 },
-    GbdtNode { feat: 4, left: 2, right: 9, thresh_or_leaf: 9971 },
-    GbdtNode { feat: 31, left: 3, right: 6, thresh_or_leaf: 54613 },
-    GbdtNode { feat: 0, left: 4, right: 5, thresh_or_leaf: 47104 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3125 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3 },
-    GbdtNode { feat: 34, left: 7, right: 8, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -121 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 171 },
-    GbdtNode { feat: 9, left: 10, right: 13, thresh_or_leaf: 359887 },
-    GbdtNode { feat: 2, left: 11, right: 12, thresh_or_leaf: 6993 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -372 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1073 },
-    GbdtNode { feat: 21, left: 14, right: 15, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 670 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1469 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 39321 },
-    GbdtNode { feat: 29, left: 19, right: 20, thresh_or_leaf: 16727 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -949 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1241 },
-    GbdtNode { feat: 20, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -514 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1535 },
-    GbdtNode { feat: 2, left: 25, right: 28, thresh_or_leaf: 15324 },
-    GbdtNode { feat: 6, left: 26, right: 27, thresh_or_leaf: 53248 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 378 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -741 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 61440 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 15 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3031 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 11138 },
-    GbdtNode { feat: 6, left: 2, right: 9, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 35, left: 3, right: 6, thresh_or_leaf: 2 },
-    GbdtNode { feat: 28, left: 4, right: 5, thresh_or_leaf: 100 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2831 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -286 },
-    GbdtNode { feat: 17, left: 7, right: 8, thresh_or_leaf: -449974 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -634 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 675 },
-    GbdtNode { feat: 2, left: 10, right: 13, thresh_or_leaf: 8078 },
-    GbdtNode { feat: 17, left: 11, right: 12, thresh_or_leaf: -505548 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 134 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -787 },
-    GbdtNode { feat: 17, left: 14, right: 15, thresh_or_leaf: -505548 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -280 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 970 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 9, left: 18, right: 21, thresh_or_leaf: 936529 },
-    GbdtNode { feat: 29, left: 19, right: 20, thresh_or_leaf: 13154 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -547 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1646 },
-    GbdtNode { feat: 0, left: 22, right: 23, thresh_or_leaf: 48128 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -94 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2315 },
-    GbdtNode { feat: 6, left: 25, right: 28, thresh_or_leaf: 61440 },
-    GbdtNode { feat: 17, left: 26, right: 27, thresh_or_leaf: -419763 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -976 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 922 },
-    GbdtNode { feat: 3, left: 29, right: 30, thresh_or_leaf: 48 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -273 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2905 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 37545 },
-    GbdtNode { feat: 4, left: 2, right: 9, thresh_or_leaf: 9971 },
-    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 36044 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 998250 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -255 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3157 },
-    GbdtNode { feat: 12, left: 7, right: 8, thresh_or_leaf: 39789 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 412 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -940 },
-    GbdtNode { feat: 9, left: 10, right: 13, thresh_or_leaf: 551235 },
-    GbdtNode { feat: 2, left: 11, right: 12, thresh_or_leaf: 6888 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -867 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1062 },
-    GbdtNode { feat: 35, left: 14, right: 15, thresh_or_leaf: 4 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1510 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -87 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 12, left: 19, right: 20, thresh_or_leaf: 49152 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 486 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1333 },
-    GbdtNode { feat: 9, left: 22, right: 23, thresh_or_leaf: 444259 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -70 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1631 },
-    GbdtNode { feat: 2, left: 25, right: 28, thresh_or_leaf: 15324 },
-    GbdtNode { feat: 6, left: 26, right: 27, thresh_or_leaf: 53248 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 343 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -710 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 61440 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 17 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2818 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 37545 },
-    GbdtNode { feat: 4, left: 2, right: 9, thresh_or_leaf: 11599 },
-    GbdtNode { feat: 35, left: 3, right: 6, thresh_or_leaf: 2 },
-    GbdtNode { feat: 31, left: 4, right: 5, thresh_or_leaf: 54613 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2926 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 62 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 40960 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -667 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 371 },
-    GbdtNode { feat: 9, left: 10, right: 13, thresh_or_leaf: 548845 },
-    GbdtNode { feat: 16, left: 11, right: 12, thresh_or_leaf: 27306 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -651 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1426 },
-    GbdtNode { feat: 34, left: 14, right: 15, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1437 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 16 },
-    GbdtNode { feat: 31, left: 17, right: 24, thresh_or_leaf: 39321 },
-    GbdtNode { feat: 16, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 17, left: 19, right: 20, thresh_or_leaf: 387101 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1383 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 451 },
-    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1281 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 701 },
-    GbdtNode { feat: 34, left: 25, right: 28, thresh_or_leaf: 0 },
-    GbdtNode { feat: 18, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -797 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1200 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -441 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2328 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 30197 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 21, left: 3, right: 6, thresh_or_leaf: -1 },
-    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 21833 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -563 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 527 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 45056 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2933 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -55 },
-    GbdtNode { feat: 9, left: 10, right: 13, thresh_or_leaf: 561684 },
-    GbdtNode { feat: 2, left: 11, right: 12, thresh_or_leaf: 3347 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -450 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 969 },
-    GbdtNode { feat: 9, left: 14, right: 15, thresh_or_leaf: 1012215 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -784 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 88 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 39321 },
-    GbdtNode { feat: 29, left: 19, right: 20, thresh_or_leaf: 14727 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -852 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1031 },
-    GbdtNode { feat: 20, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -525 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1237 },
-    GbdtNode { feat: 2, left: 25, right: 28, thresh_or_leaf: 16217 },
-    GbdtNode { feat: 6, left: 26, right: 27, thresh_or_leaf: 55296 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 542 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -882 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 61440 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 101 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2691 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 30197 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 21, left: 3, right: 6, thresh_or_leaf: -1 },
-    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 21833 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -548 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 526 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 45056 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2859 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -57 },
-    GbdtNode { feat: 9, left: 10, right: 13, thresh_or_leaf: 561684 },
-    GbdtNode { feat: 2, left: 11, right: 12, thresh_or_leaf: 3347 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -443 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 958 },
-    GbdtNode { feat: 9, left: 14, right: 15, thresh_or_leaf: 1012215 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -768 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 88 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 12, left: 19, right: 20, thresh_or_leaf: 43690 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 583 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 34661 },
+    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 76458 },
+    GbdtNode { feat: 0, left: 4, right: 5, thresh_or_leaf: 46080 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4611 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2846 },
+    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 15528 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2975 },
     GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1259 },
-    GbdtNode { feat: 20, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -575 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1135 },
-    GbdtNode { feat: 2, left: 25, right: 28, thresh_or_leaf: 14827 },
-    GbdtNode { feat: 6, left: 26, right: 27, thresh_or_leaf: 55296 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 315 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -741 },
-    GbdtNode { feat: 15, left: 29, right: 30, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 794 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2856 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 3092 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 853822 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 730 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -698 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 47104 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3064 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 99 },
-    GbdtNode { feat: 2, left: 10, right: 13, thresh_or_leaf: 5389 },
-    GbdtNode { feat: 27, left: 11, right: 12, thresh_or_leaf: 90 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -594 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 37 },
-    GbdtNode { feat: 9, left: 14, right: 15, thresh_or_leaf: 505548 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 910 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -321 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 12, left: 19, right: 20, thresh_or_leaf: 43690 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 550 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1191 },
-    GbdtNode { feat: 9, left: 22, right: 23, thresh_or_leaf: 907196 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 151 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1797 },
-    GbdtNode { feat: 31, left: 25, right: 28, thresh_or_leaf: 26214 },
-    GbdtNode { feat: 19, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1326 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 935 },
-    GbdtNode { feat: 27, left: 29, right: 30, thresh_or_leaf: 69 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2765 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 230 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 64967 },
-    GbdtNode { feat: 15, left: 2, right: 9, thresh_or_leaf: 0 },
-    GbdtNode { feat: 12, left: 3, right: 6, thresh_or_leaf: 62914 },
-    GbdtNode { feat: 10, left: 4, right: 5, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2911 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 11 },
-    GbdtNode { feat: 26, left: 7, right: 8, thresh_or_leaf: 4592 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -826 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 524 },
-    GbdtNode { feat: 29, left: 10, right: 13, thresh_or_leaf: 7394 },
-    GbdtNode { feat: 20, left: 11, right: 12, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1111 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 493 },
-    GbdtNode { feat: 2, left: 14, right: 15, thresh_or_leaf: 5440 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -198 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2074 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 19, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 288 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -957 },
-    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -844 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1266 },
-    GbdtNode { feat: 3, left: 25, right: 28, thresh_or_leaf: 135 },
-    GbdtNode { feat: 4, left: 26, right: 27, thresh_or_leaf: 147 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 401 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -883 },
-    GbdtNode { feat: 2, left: 29, right: 30, thresh_or_leaf: 16142 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -292 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2721 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 3092 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 853822 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 735 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -646 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 47104 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2945 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 96 },
-    GbdtNode { feat: 2, left: 10, right: 13, thresh_or_leaf: 5389 },
-    GbdtNode { feat: 15, left: 11, right: 12, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 41 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -596 },
-    GbdtNode { feat: 9, left: 14, right: 15, thresh_or_leaf: 505548 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 874 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -313 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 12, left: 19, right: 20, thresh_or_leaf: 43690 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 516 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1140 },
-    GbdtNode { feat: 9, left: 22, right: 23, thresh_or_leaf: 907196 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 127 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1649 },
-    GbdtNode { feat: 31, left: 25, right: 28, thresh_or_leaf: 26214 },
-    GbdtNode { feat: 19, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1158 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 938 },
-    GbdtNode { feat: 35, left: 29, right: 30, thresh_or_leaf: 3 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 576 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2733 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 3092 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 853822 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 733 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -631 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 47104 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2867 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 97 },
-    GbdtNode { feat: 2, left: 10, right: 13, thresh_or_leaf: 5389 },
-    GbdtNode { feat: 15, left: 11, right: 12, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 44 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -589 },
-    GbdtNode { feat: 17, left: 14, right: 15, thresh_or_leaf: -505534 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -355 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 843 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 12, left: 19, right: 20, thresh_or_leaf: 43690 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 520 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1095 },
-    GbdtNode { feat: 9, left: 22, right: 23, thresh_or_leaf: 907196 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 122 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1579 },
-    GbdtNode { feat: 31, left: 25, right: 28, thresh_or_leaf: 26214 },
-    GbdtNode { feat: 19, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1139 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 866 },
-    GbdtNode { feat: 35, left: 29, right: 30, thresh_or_leaf: 3 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 559 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2625 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 3092 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 853822 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 733 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -620 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 47104 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2787 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 97 },
-    GbdtNode { feat: 2, left: 10, right: 13, thresh_or_leaf: 5389 },
-    GbdtNode { feat: 15, left: 11, right: 12, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 44 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -579 },
-    GbdtNode { feat: 17, left: 14, right: 15, thresh_or_leaf: -505534 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -349 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 824 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 0 },
-    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 21845 },
-    GbdtNode { feat: 5, left: 19, right: 20, thresh_or_leaf: 26803 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 670 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1401 },
-    GbdtNode { feat: 27, left: 22, right: 23, thresh_or_leaf: 26 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 477 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -900 },
-    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: -3 },
-    GbdtNode { feat: 15, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1422 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 203 },
-    GbdtNode { feat: 15, left: 29, right: 30, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 394 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1927 },
-    GbdtNode { feat: 6, left: 1, right: 16, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 31507 },
-    GbdtNode { feat: 28, left: 3, right: 6, thresh_or_leaf: 975 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 992022 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 598 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2172 },
-    GbdtNode { feat: 15, left: 7, right: 8, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -359 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1095 },
-    GbdtNode { feat: 12, left: 10, right: 13, thresh_or_leaf: 38053 },
-    GbdtNode { feat: 14, left: 11, right: 12, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1878 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -311 },
-    GbdtNode { feat: 17, left: 14, right: 15, thresh_or_leaf: -428031 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1331 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 342 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 0 },
-    GbdtNode { feat: 14, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 33, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1342 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 486 },
-    GbdtNode { feat: 24, left: 22, right: 23, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1047 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -364 },
-    GbdtNode { feat: 3, left: 25, right: 28, thresh_or_leaf: 5587 },
-    GbdtNode { feat: 18, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1090 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 914 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -513 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2007 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 3092 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 853822 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 729 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -579 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 47104 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2662 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 98 },
-    GbdtNode { feat: 4, left: 10, right: 13, thresh_or_leaf: 15217 },
-    GbdtNode { feat: 28, left: 11, right: 12, thresh_or_leaf: 25 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -589 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 126 },
-    GbdtNode { feat: 2, left: 14, right: 15, thresh_or_leaf: 8768 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -219 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 797 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 12, left: 19, right: 20, thresh_or_leaf: 49152 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 254 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1033 },
-    GbdtNode { feat: 20, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -617 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 823 },
-    GbdtNode { feat: 31, left: 25, right: 28, thresh_or_leaf: 26214 },
-    GbdtNode { feat: 19, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1145 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 915 },
-    GbdtNode { feat: 27, left: 29, right: 30, thresh_or_leaf: 69 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2390 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 160 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 64967 },
-    GbdtNode { feat: 15, left: 2, right: 9, thresh_or_leaf: 0 },
-    GbdtNode { feat: 10, left: 3, right: 6, thresh_or_leaf: 0 },
-    GbdtNode { feat: 12, left: 4, right: 5, thresh_or_leaf: 62914 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2502 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -175 },
-    GbdtNode { feat: 3, left: 7, right: 8, thresh_or_leaf: 20664 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -444 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 520 },
-    GbdtNode { feat: 29, left: 10, right: 13, thresh_or_leaf: 7394 },
-    GbdtNode { feat: 6, left: 11, right: 12, thresh_or_leaf: 57344 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 536 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -995 },
-    GbdtNode { feat: 3, left: 14, right: 15, thresh_or_leaf: 59 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -216 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1814 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 20, left: 18, right: 21, thresh_or_leaf: -1 },
-    GbdtNode { feat: 30, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 90 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1326 },
-    GbdtNode { feat: 31, left: 22, right: 23, thresh_or_leaf: 37449 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -187 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1164 },
-    GbdtNode { feat: 3, left: 25, right: 28, thresh_or_leaf: 135 },
-    GbdtNode { feat: 4, left: 26, right: 27, thresh_or_leaf: 147 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 379 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -917 },
-    GbdtNode { feat: 2, left: 29, right: 30, thresh_or_leaf: 16142 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -369 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2394 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 3092 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 853822 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 730 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -559 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 47104 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2554 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 99 },
-    GbdtNode { feat: 4, left: 10, right: 13, thresh_or_leaf: 15217 },
-    GbdtNode { feat: 28, left: 11, right: 12, thresh_or_leaf: 25 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -581 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 119 },
-    GbdtNode { feat: 2, left: 14, right: 15, thresh_or_leaf: 8768 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -219 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 801 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 15, left: 18, right: 21, thresh_or_leaf: 1 },
-    GbdtNode { feat: 19, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 78 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1170 },
-    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1657 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 692 },
-    GbdtNode { feat: 31, left: 25, right: 28, thresh_or_leaf: 26214 },
-    GbdtNode { feat: 19, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1129 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 773 },
-    GbdtNode { feat: 27, left: 29, right: 30, thresh_or_leaf: 69 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2265 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 133 },
-    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 32768 },
-    GbdtNode { feat: 15, left: 2, right: 9, thresh_or_leaf: 0 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 62642 },
-    GbdtNode { feat: 8, left: 4, right: 5, thresh_or_leaf: 26214 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2410 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -31 },
-    GbdtNode { feat: 19, left: 7, right: 8, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 375 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1196 },
-    GbdtNode { feat: 29, left: 10, right: 13, thresh_or_leaf: 8756 },
-    GbdtNode { feat: 6, left: 11, right: 12, thresh_or_leaf: 57344 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 608 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -708 },
-    GbdtNode { feat: 29, left: 14, right: 15, thresh_or_leaf: 16299 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -149 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1717 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 0 },
-    GbdtNode { feat: 26, left: 18, right: 21, thresh_or_leaf: 1584 },
-    GbdtNode { feat: 28, left: 19, right: 20, thresh_or_leaf: 32768 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -950 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 918 },
-    GbdtNode { feat: 8, left: 22, right: 23, thresh_or_leaf: 58982 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 986 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -657 },
-    GbdtNode { feat: 6, left: 25, right: 28, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 15, left: 26, right: 27, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -989 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 760 },
-    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -316 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1928 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 3092 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 853822 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 727 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -544 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 47104 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2455 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 65 },
-    GbdtNode { feat: 2, left: 10, right: 13, thresh_or_leaf: 5389 },
-    GbdtNode { feat: 15, left: 11, right: 12, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 48 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -553 },
-    GbdtNode { feat: 9, left: 14, right: 15, thresh_or_leaf: 505548 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 842 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -295 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 12, left: 19, right: 20, thresh_or_leaf: 43690 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 315 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -909 },
-    GbdtNode { feat: 20, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -581 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 765 },
-    GbdtNode { feat: 31, left: 25, right: 28, thresh_or_leaf: 26214 },
-    GbdtNode { feat: 19, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1081 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 795 },
-    GbdtNode { feat: 27, left: 29, right: 30, thresh_or_leaf: 69 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2114 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 106 },
-    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 21845 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 23879 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 2663 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 840679 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 743 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -434 },
-    GbdtNode { feat: 20, left: 7, right: 8, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2396 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -209 },
-    GbdtNode { feat: 18, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 6, left: 11, right: 12, thresh_or_leaf: 57344 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 362 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1412 },
-    GbdtNode { feat: 34, left: 14, right: 15, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1021 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1147 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 9, left: 18, right: 21, thresh_or_leaf: 1024879 },
-    GbdtNode { feat: 29, left: 19, right: 20, thresh_or_leaf: 6983 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -463 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1155 },
-    GbdtNode { feat: 27, left: 22, right: 23, thresh_or_leaf: 22 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1658 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -425 },
-    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 3 },
-    GbdtNode { feat: 30, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -775 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1008 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 61440 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -211 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2308 },
-    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 21845 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 23879 },
-    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 2663 },
-    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 840679 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 740 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -433 },
-    GbdtNode { feat: 20, left: 7, right: 8, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2339 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -201 },
-    GbdtNode { feat: 18, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 6, left: 11, right: 12, thresh_or_leaf: 57344 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 358 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1352 },
-    GbdtNode { feat: 34, left: 14, right: 15, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -986 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1074 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 9, left: 18, right: 21, thresh_or_leaf: 1024879 },
-    GbdtNode { feat: 35, left: 19, right: 20, thresh_or_leaf: 6 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 162 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1448 },
-    GbdtNode { feat: 27, left: 22, right: 23, thresh_or_leaf: 22 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1586 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -435 },
-    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 3 },
-    GbdtNode { feat: 30, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -748 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 944 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 61440 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -201 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2228 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
-    GbdtNode { feat: 13, left: 3, right: 6, thresh_or_leaf: 984576 },
-    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 1139 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 773 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -542 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 47104 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2290 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 67 },
-    GbdtNode { feat: 2, left: 10, right: 13, thresh_or_leaf: 5389 },
-    GbdtNode { feat: 15, left: 11, right: 12, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 53 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -539 },
-    GbdtNode { feat: 9, left: 14, right: 15, thresh_or_leaf: 505548 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 851 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -287 },
-    GbdtNode { feat: 15, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 17, left: 18, right: 21, thresh_or_leaf: 483309 },
-    GbdtNode { feat: 14, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1084 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 40 },
-    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 57624 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -447 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1106 },
-    GbdtNode { feat: 18, left: 25, right: 28, thresh_or_leaf: -1 },
-    GbdtNode { feat: 34, left: 26, right: 27, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1470 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 397 },
-    GbdtNode { feat: 22, left: 29, right: 30, thresh_or_leaf: -2 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1319 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1042 },
-    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 21845 },
-    GbdtNode { feat: 6, left: 2, right: 9, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 6, left: 3, right: 6, thresh_or_leaf: 57344 },
-    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 10950 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -809 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1121 },
-    GbdtNode { feat: 35, left: 7, right: 8, thresh_or_leaf: 5 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2001 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 250 },
-    GbdtNode { feat: 18, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 17, left: 11, right: 12, thresh_or_leaf: -471951 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 276 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1523 },
-    GbdtNode { feat: 27, left: 14, right: 15, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1345 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -647 },
-    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
-    GbdtNode { feat: 9, left: 18, right: 21, thresh_or_leaf: 1024879 },
-    GbdtNode { feat: 29, left: 19, right: 20, thresh_or_leaf: 6983 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -436 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1084 },
-    GbdtNode { feat: 27, left: 22, right: 23, thresh_or_leaf: 22 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1544 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -447 },
-    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 3 },
-    GbdtNode { feat: 30, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -661 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 944 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 61440 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -201 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2146 },
-    GbdtNode { feat: 15, left: 1, right: 16, thresh_or_leaf: -1 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 57503 },
-    GbdtNode { feat: 29, left: 3, right: 6, thresh_or_leaf: 1617 },
-    GbdtNode { feat: 10, left: 4, right: 5, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2277 },
+    GbdtNode { feat: 38, left: 10, right: 13, thresh_or_leaf: 326164 },
+    GbdtNode { feat: 12, left: 11, right: 12, thresh_or_leaf: 42674 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 155 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2919 },
+    GbdtNode { feat: 0, left: 14, right: 15, thresh_or_leaf: 48128 },
     GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 108 },
-    GbdtNode { feat: 19, left: 7, right: 8, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 498 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -768 },
-    GbdtNode { feat: 14, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 17, left: 11, right: 12, thresh_or_leaf: 457236 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1143 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 772 },
-    GbdtNode { feat: 19, left: 14, right: 15, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1494 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -271 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4131 },
+    GbdtNode { feat: 2, left: 17, right: 24, thresh_or_leaf: 28324 },
+    GbdtNode { feat: 8, left: 18, right: 21, thresh_or_leaf: 43690 },
+    GbdtNode { feat: 5, left: 19, right: 20, thresh_or_leaf: 42196 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4164 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1884 },
+    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 40930 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2257 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4443 },
+    GbdtNode { feat: 0, left: 25, right: 28, thresh_or_leaf: 47104 },
+    GbdtNode { feat: 45, left: 26, right: 27, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3028 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2111 },
+    GbdtNode { feat: 35, left: 29, right: 30, thresh_or_leaf: 5 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3872 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4621 },
+    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34661 },
+    GbdtNode { feat: 8, left: 2, right: 9, thresh_or_leaf: 43690 },
+    GbdtNode { feat: 35, left: 3, right: 6, thresh_or_leaf: 3 },
+    GbdtNode { feat: 0, left: 4, right: 5, thresh_or_leaf: 46080 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4253 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2480 },
+    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 17576 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3402 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 274 },
+    GbdtNode { feat: 35, left: 10, right: 13, thresh_or_leaf: 1 },
+    GbdtNode { feat: 29, left: 11, right: 12, thresh_or_leaf: 5207 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2909 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1870 },
+    GbdtNode { feat: 4, left: 14, right: 15, thresh_or_leaf: 20331 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2356 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3613 },
+    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 1 },
+    GbdtNode { feat: 26, left: 18, right: 21, thresh_or_leaf: 36 },
+    GbdtNode { feat: 18, left: 19, right: 20, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3551 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -547 },
+    GbdtNode { feat: 6, left: 22, right: 23, thresh_or_leaf: 61440 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2806 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1558 },
+    GbdtNode { feat: 0, left: 25, right: 28, thresh_or_leaf: 47104 },
+    GbdtNode { feat: 35, left: 26, right: 27, thresh_or_leaf: 4 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1370 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3276 },
+    GbdtNode { feat: 35, left: 29, right: 30, thresh_or_leaf: 5 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3537 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 4274 },
+    GbdtNode { feat: 2, left: 1, right: 14, thresh_or_leaf: 34661 },
+    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 60074 },
+    GbdtNode { feat: 35, left: 3, right: 6, thresh_or_leaf: 3 },
+    GbdtNode { feat: 2, left: 4, right: 5, thresh_or_leaf: 15528 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4050 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3363 },
+    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 17576 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3005 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 419 },
+    GbdtNode { feat: 4, left: 10, right: 11, thresh_or_leaf: 15260 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2980 },
+    GbdtNode { feat: 44, left: 12, right: 13, thresh_or_leaf: 9 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3190 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2406 },
+    GbdtNode { feat: 35, left: 15, right: 22, thresh_or_leaf: 1 },
+    GbdtNode { feat: 26, left: 16, right: 19, thresh_or_leaf: 36 },
+    GbdtNode { feat: 18, left: 17, right: 18, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3350 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -637 },
+    GbdtNode { feat: 31, left: 20, right: 21, thresh_or_leaf: 37449 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -830 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2137 },
+    GbdtNode { feat: 0, left: 23, right: 26, thresh_or_leaf: 48128 },
+    GbdtNode { feat: 18, left: 24, right: 25, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1409 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2989 },
+    GbdtNode { feat: 6, left: 27, right: 28, thresh_or_leaf: 63488 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3180 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3992 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 2 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 34661 },
+    GbdtNode { feat: 8, left: 3, right: 6, thresh_or_leaf: 52428 },
+    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 42196 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3885 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3422 },
+    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 15528 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2464 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1807 },
+    GbdtNode { feat: 24, left: 10, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: 5, left: 11, right: 12, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1664 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1723 },
+    GbdtNode { feat: 47, left: 14, right: 15, thresh_or_leaf: 64035 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2730 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 181 },
+    GbdtNode { feat: 5, left: 17, right: 22, thresh_or_leaf: 35331 },
+    GbdtNode { feat: 44, left: 18, right: 21, thresh_or_leaf: 12 },
+    GbdtNode { feat: 21, left: 19, right: 20, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -199 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3505 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2238 },
+    GbdtNode { feat: 2, left: 23, right: 26, thresh_or_leaf: 43673 },
+    GbdtNode { feat: 16, left: 24, right: 25, thresh_or_leaf: 45875 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -355 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2558 },
+    GbdtNode { feat: 35, left: 27, right: 28, thresh_or_leaf: 5 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2884 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3779 },
+    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34661 },
+    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 60074 },
+    GbdtNode { feat: 35, left: 3, right: 6, thresh_or_leaf: 3 },
+    GbdtNode { feat: 2, left: 4, right: 5, thresh_or_leaf: 15528 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3677 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2891 },
+    GbdtNode { feat: 5, left: 7, right: 8, thresh_or_leaf: 36504 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3047 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 704 },
+    GbdtNode { feat: 4, left: 10, right: 13, thresh_or_leaf: 15260 },
+    GbdtNode { feat: 44, left: 11, right: 12, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -254 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2778 },
+    GbdtNode { feat: 40, left: 14, right: 15, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2827 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2047 },
+    GbdtNode { feat: 4, left: 17, right: 24, thresh_or_leaf: 13932 },
+    GbdtNode { feat: 16, left: 18, right: 21, thresh_or_leaf: 38229 },
+    GbdtNode { feat: 18, left: 19, right: 20, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2735 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -157 },
+    GbdtNode { feat: 35, left: 22, right: 23, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2498 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2991 },
+    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 1 },
+    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 8901 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1234 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1807 },
+    GbdtNode { feat: 35, left: 29, right: 30, thresh_or_leaf: 5 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2574 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3597 },
+    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 38236 },
+    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 2 },
+    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 76458 },
+    GbdtNode { feat: 2, left: 4, right: 5, thresh_or_leaf: 20260 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3522 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2331 },
+    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 15528 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2596 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1067 },
+    GbdtNode { feat: 4, left: 10, right: 13, thresh_or_leaf: 27039 },
+    GbdtNode { feat: 5, left: 11, right: 12, thresh_or_leaf: 36504 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3208 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 19 },
+    GbdtNode { feat: 31, left: 14, right: 15, thresh_or_leaf: 28086 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2059 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2286 },
+    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 1 },
+    GbdtNode { feat: 4, left: 18, right: 21, thresh_or_leaf: 13932 },
+    GbdtNode { feat: 26, left: 19, right: 20, thresh_or_leaf: 23 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3083 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -441 },
+    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1470 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1466 },
+    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 5 },
+    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 155 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 805 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2938 },
+    GbdtNode { feat: 0, left: 29, right: 30, thresh_or_leaf: 46080 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2466 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3479 },
+    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 34661 },
+    GbdtNode { feat: 4, left: 2, right: 9, thresh_or_leaf: 27039 },
+    GbdtNode { feat: 35, left: 3, right: 6, thresh_or_leaf: 1 },
+    GbdtNode { feat: 37, left: 4, right: 5, thresh_or_leaf: 46811 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3389 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1094 },
+    GbdtNode { feat: 17, left: 7, right: 8, thresh_or_leaf: -406637 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2741 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1141 },
+    GbdtNode { feat: 35, left: 10, right: 13, thresh_or_leaf: -1 },
+    GbdtNode { feat: 46, left: 11, right: 12, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 667 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3058 },
+    GbdtNode { feat: 44, left: 14, right: 15, thresh_or_leaf: 9 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1581 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2929 },
+    GbdtNode { feat: 1, left: 17, right: 24, thresh_or_leaf: 0 },
+    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 2 },
+    GbdtNode { feat: 26, left: 19, right: 20, thresh_or_leaf: 36 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1882 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 487 },
+    GbdtNode { feat: 45, left: 22, right: 23, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2357 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3315 },
+    GbdtNode { feat: 4, left: 25, right: 26, thresh_or_leaf: 11838 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2407 },
+    GbdtNode { feat: 5, left: 27, right: 28, thresh_or_leaf: 62177 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2718 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3369 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 2 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 28324 },
+    GbdtNode { feat: 8, left: 3, right: 6, thresh_or_leaf: 52428 },
+    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 30321 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3434 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2953 },
+    GbdtNode { feat: 15, left: 7, right: 8, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1603 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1830 },
+    GbdtNode { feat: 26, left: 10, right: 13, thresh_or_leaf: 17770 },
+    GbdtNode { feat: 18, left: 11, right: 12, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2075 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -229 },
+    GbdtNode { feat: 5, left: 14, right: 15, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2275 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2460 },
+    GbdtNode { feat: 2, left: 17, right: 24, thresh_or_leaf: 43673 },
+    GbdtNode { feat: 3, left: 18, right: 21, thresh_or_leaf: 30186 },
+    GbdtNode { feat: 5, left: 19, right: 20, thresh_or_leaf: 36504 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2951 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 303 },
+    GbdtNode { feat: 31, left: 22, right: 23, thresh_or_leaf: 29127 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2146 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2185 },
+    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 5 },
+    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 155 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 622 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2682 },
+    GbdtNode { feat: 45, left: 29, right: 30, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3248 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1474 },
+    GbdtNode { feat: 4, left: 1, right: 16, thresh_or_leaf: 20331 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 34661 },
+    GbdtNode { feat: 37, left: 3, right: 6, thresh_or_leaf: 46811 },
+    GbdtNode { feat: 35, left: 4, right: 5, thresh_or_leaf: 3 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3186 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1216 },
+    GbdtNode { feat: 11, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1871 },
+    GbdtNode { feat: 42, left: 10, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: 29, left: 11, right: 12, thresh_or_leaf: 9 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2564 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 64 },
+    GbdtNode { feat: 16, left: 14, right: 15, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -684 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1862 },
+    GbdtNode { feat: 2, left: 17, right: 24, thresh_or_leaf: 43673 },
+    GbdtNode { feat: 16, left: 18, right: 21, thresh_or_leaf: 42598 },
+    GbdtNode { feat: 5, left: 19, right: 20, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2140 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 137 },
+    GbdtNode { feat: 43, left: 22, right: 23, thresh_or_leaf: 12276 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2516 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 309 },
+    GbdtNode { feat: 0, left: 25, right: 28, thresh_or_leaf: 47104 },
+    GbdtNode { feat: 31, left: 26, right: 27, thresh_or_leaf: 16384 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1707 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1809 },
+    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1341 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3104 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 2 },
+    GbdtNode { feat: 0, left: 2, right: 9, thresh_or_leaf: 40960 },
+    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 58982 },
+    GbdtNode { feat: 2, left: 4, right: 5, thresh_or_leaf: 18868 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3188 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2056 },
+    GbdtNode { feat: 17, left: 7, right: 8, thresh_or_leaf: -354927 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1975 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1039 },
+    GbdtNode { feat: 2, left: 10, right: 13, thresh_or_leaf: 28324 },
+    GbdtNode { feat: 37, left: 11, right: 12, thresh_or_leaf: 46811 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2512 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 870 },
+    GbdtNode { feat: 4, left: 14, right: 15, thresh_or_leaf: 13932 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1114 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 955 },
+    GbdtNode { feat: 5, left: 17, right: 24, thresh_or_leaf: 44845 },
+    GbdtNode { feat: 4, left: 18, right: 21, thresh_or_leaf: 27039 },
+    GbdtNode { feat: 44, left: 19, right: 20, thresh_or_leaf: 12 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2294 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1713 },
+    GbdtNode { feat: 20, left: 22, right: 23, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2354 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -454 },
+    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 5 },
+    GbdtNode { feat: 2, left: 26, right: 27, thresh_or_leaf: 58982 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 918 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2522 },
+    GbdtNode { feat: 43, left: 29, right: 30, thresh_or_leaf: 32466 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3079 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2083 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 2 },
+    GbdtNode { feat: 4, left: 2, right: 9, thresh_or_leaf: 13932 },
+    GbdtNode { feat: 2, left: 3, right: 6, thresh_or_leaf: 20260 },
+    GbdtNode { feat: 37, left: 4, right: 5, thresh_or_leaf: 46811 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3130 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -445 },
+    GbdtNode { feat: 34, left: 7, right: 8, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1931 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 801 },
+    GbdtNode { feat: 2, left: 10, right: 13, thresh_or_leaf: 43673 },
+    GbdtNode { feat: 15, left: 11, right: 12, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2660 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -648 },
+    GbdtNode { feat: 18, left: 14, right: 15, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -644 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1885 },
+    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 47104 },
+    GbdtNode { feat: 4, left: 18, right: 21, thresh_or_leaf: 27039 },
+    GbdtNode { feat: 6, left: 19, right: 20, thresh_or_leaf: 61440 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2315 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 474 },
+    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2146 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1924 },
+    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 5 },
+    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 81 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -42 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2490 },
+    GbdtNode { feat: 43, left: 29, right: 30, thresh_or_leaf: 32466 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3041 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1903 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 1 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 20260 },
+    GbdtNode { feat: 37, left: 3, right: 6, thresh_or_leaf: 46811 },
+    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 30321 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3200 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2737 },
+    GbdtNode { feat: 11, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2432 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2400 },
+    GbdtNode { feat: 36, left: 10, right: 13, thresh_or_leaf: 19660 },
+    GbdtNode { feat: 15, left: 11, right: 12, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2038 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -394 },
+    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 28 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 224 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3319 },
+    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 47104 },
+    GbdtNode { feat: 5, left: 18, right: 21, thresh_or_leaf: 30321 },
+    GbdtNode { feat: 4, left: 19, right: 20, thresh_or_leaf: 20331 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2427 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 431 },
+    GbdtNode { feat: 35, left: 22, right: 23, thresh_or_leaf: 4 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 137 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1804 },
+    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 5 },
+    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 81 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -280 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2390 },
+    GbdtNode { feat: 5, left: 29, right: 30, thresh_or_leaf: 59919 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2062 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2970 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 1 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 20260 },
+    GbdtNode { feat: 16, left: 3, right: 6, thresh_or_leaf: 45511 },
+    GbdtNode { feat: 0, left: 4, right: 5, thresh_or_leaf: 47104 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2990 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -256 },
+    GbdtNode { feat: 37, left: 7, right: 8, thresh_or_leaf: 49152 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1678 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2918 },
+    GbdtNode { feat: 34, left: 10, right: 13, thresh_or_leaf: 1 },
+    GbdtNode { feat: 36, left: 11, right: 12, thresh_or_leaf: 28086 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1417 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2535 },
+    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 46 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1378 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2002 },
+    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 47104 },
+    GbdtNode { feat: 4, left: 18, right: 21, thresh_or_leaf: 8751 },
+    GbdtNode { feat: 6, left: 19, right: 20, thresh_or_leaf: 61440 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2875 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -241 },
+    GbdtNode { feat: 31, left: 22, right: 23, thresh_or_leaf: 21845 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -515 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1379 },
+    GbdtNode { feat: 6, left: 25, right: 28, thresh_or_leaf: 63488 },
+    GbdtNode { feat: 35, left: 26, right: 27, thresh_or_leaf: 5 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -732 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1998 },
+    GbdtNode { feat: 35, left: 29, right: 30, thresh_or_leaf: 5 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1977 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2871 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 1 },
+    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 48476 },
+    GbdtNode { feat: 37, left: 3, right: 6, thresh_or_leaf: 54613 },
+    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 10959 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3054 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2160 },
+    GbdtNode { feat: 16, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1473 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2751 },
+    GbdtNode { feat: 26, left: 10, right: 13, thresh_or_leaf: 1434 },
+    GbdtNode { feat: 0, left: 11, right: 12, thresh_or_leaf: 45056 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2170 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -75 },
+    GbdtNode { feat: 31, left: 14, right: 15, thresh_or_leaf: 40960 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -689 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2143 },
+    GbdtNode { feat: 0, left: 17, right: 24, thresh_or_leaf: 48128 },
+    GbdtNode { feat: 35, left: 18, right: 21, thresh_or_leaf: 5 },
+    GbdtNode { feat: 4, left: 19, right: 20, thresh_or_leaf: 7055 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1862 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 488 },
+    GbdtNode { feat: 9, left: 22, right: 23, thresh_or_leaf: 143688 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3230 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2195 },
+    GbdtNode { feat: 43, left: 25, right: 28, thresh_or_leaf: 32466 },
+    GbdtNode { feat: 18, left: 26, right: 27, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 564 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2801 },
+    GbdtNode { feat: 5, left: 29, right: 30, thresh_or_leaf: 56444 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3877 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1361 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 1 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 20260 },
+    GbdtNode { feat: 37, left: 3, right: 6, thresh_or_leaf: 46811 },
+    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 7055 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2981 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2235 },
+    GbdtNode { feat: 11, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2184 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2732 },
+    GbdtNode { feat: 15, left: 10, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 33237 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2025 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 338 },
+    GbdtNode { feat: 42, left: 14, right: 15, thresh_or_leaf: 2350 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -741 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1291 },
+    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 5 },
+    GbdtNode { feat: 26, left: 18, right: 21, thresh_or_leaf: 8901 },
+    GbdtNode { feat: 4, left: 19, right: 20, thresh_or_leaf: 38969 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -880 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 755 },
+    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 70 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2397 },
+    GbdtNode { feat: 5, left: 25, right: 28, thresh_or_leaf: 62177 },
+    GbdtNode { feat: 16, left: 26, right: 27, thresh_or_leaf: 29491 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3394 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1749 },
+    GbdtNode { feat: 43, left: 29, right: 30, thresh_or_leaf: 32466 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2775 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1419 },
+    GbdtNode { feat: 4, left: 1, right: 16, thresh_or_leaf: 20331 },
+    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 46504 },
+    GbdtNode { feat: 39, left: 3, right: 6, thresh_or_leaf: 43690 },
+    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 9442 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2951 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1981 },
+    GbdtNode { feat: 16, left: 7, right: 8, thresh_or_leaf: 38229 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2079 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2031 },
+    GbdtNode { feat: 16, left: 10, right: 13, thresh_or_leaf: 36548 },
+    GbdtNode { feat: 18, left: 11, right: 12, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2146 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -506 },
+    GbdtNode { feat: 18, left: 14, right: 15, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2664 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1432 },
+    GbdtNode { feat: 1, left: 17, right: 24, thresh_or_leaf: 0 },
+    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: -1 },
+    GbdtNode { feat: 3, left: 19, right: 20, thresh_or_leaf: 8773 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1224 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2929 },
+    GbdtNode { feat: 35, left: 22, right: 23, thresh_or_leaf: -2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1209 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1393 },
+    GbdtNode { feat: 9, left: 25, right: 28, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 34, left: 26, right: 27, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1722 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2923 },
+    GbdtNode { feat: 43, left: 29, right: 30, thresh_or_leaf: 42629 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2922 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1136 },
+    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 28324 },
+    GbdtNode { feat: 35, left: 2, right: 9, thresh_or_leaf: 1 },
+    GbdtNode { feat: 37, left: 3, right: 6, thresh_or_leaf: 46811 },
+    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 30321 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2995 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2109 },
+    GbdtNode { feat: 11, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1785 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2636 },
+    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 59919 },
+    GbdtNode { feat: 44, left: 11, right: 12, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1034 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1505 },
+    GbdtNode { feat: 18, left: 14, right: 15, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -82 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2186 },
+    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 5 },
+    GbdtNode { feat: 26, left: 18, right: 21, thresh_or_leaf: 81 },
+    GbdtNode { feat: 24, left: 19, right: 20, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -241 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2215 },
+    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -181 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1850 },
+    GbdtNode { feat: 9, left: 25, right: 28, thresh_or_leaf: 838221 },
+    GbdtNode { feat: 34, left: 26, right: 27, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1212 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2950 },
+    GbdtNode { feat: 43, left: 29, right: 30, thresh_or_leaf: 60662 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2741 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1935 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 1 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 20260 },
+    GbdtNode { feat: 37, left: 3, right: 6, thresh_or_leaf: 46811 },
+    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 30321 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2954 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2189 },
+    GbdtNode { feat: 11, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1947 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2595 },
+    GbdtNode { feat: 15, left: 10, right: 13, thresh_or_leaf: -1 },
+    GbdtNode { feat: 0, left: 11, right: 12, thresh_or_leaf: 43008 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2330 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -532 },
+    GbdtNode { feat: 34, left: 14, right: 15, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -140 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2484 },
+    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 5 },
+    GbdtNode { feat: 38, left: 18, right: 21, thresh_or_leaf: 440012 },
+    GbdtNode { feat: 18, left: 19, right: 20, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2955 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 29 },
+    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 44845 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2271 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1851 },
+    GbdtNode { feat: 5, left: 25, right: 28, thresh_or_leaf: 62177 },
+    GbdtNode { feat: 16, left: 26, right: 27, thresh_or_leaf: 29491 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3378 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1490 },
+    GbdtNode { feat: 45, left: 29, right: 30, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2539 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -80 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 1 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 20260 },
+    GbdtNode { feat: 37, left: 3, right: 6, thresh_or_leaf: 46811 },
+    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 7055 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2793 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1812 },
+    GbdtNode { feat: 12, left: 7, right: 8, thresh_or_leaf: 49152 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2378 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1854 },
+    GbdtNode { feat: 34, left: 10, right: 13, thresh_or_leaf: 1 },
+    GbdtNode { feat: 19, left: 11, right: 12, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 197 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1581 },
+    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 46 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -784 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2229 },
+    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 6 },
+    GbdtNode { feat: 7, left: 18, right: 21, thresh_or_leaf: 0 },
+    GbdtNode { feat: 15, left: 19, right: 20, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2160 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 280 },
+    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2143 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1460 },
+    GbdtNode { feat: 44, left: 25, right: 28, thresh_or_leaf: 1 },
+    GbdtNode { feat: 15, left: 26, right: 27, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3080 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1546 },
+    GbdtNode { feat: 5, left: 29, right: 30, thresh_or_leaf: 52282 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 432 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2580 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 1 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 20260 },
+    GbdtNode { feat: 37, left: 3, right: 6, thresh_or_leaf: 46811 },
+    GbdtNode { feat: 16, left: 4, right: 5, thresh_or_leaf: 36044 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2662 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1182 },
+    GbdtNode { feat: 20, left: 7, right: 8, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1656 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1578 },
+    GbdtNode { feat: 15, left: 10, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: 5, left: 11, right: 12, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2416 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -628 },
+    GbdtNode { feat: 5, left: 14, right: 15, thresh_or_leaf: 39492 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1821 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 853 },
+    GbdtNode { feat: 7, left: 17, right: 24, thresh_or_leaf: 0 },
+    GbdtNode { feat: 15, left: 18, right: 21, thresh_or_leaf: 1 },
+    GbdtNode { feat: 20, left: 19, right: 20, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -776 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4497 },
+    GbdtNode { feat: 3, left: 22, right: 23, thresh_or_leaf: 6580 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1427 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1073 },
+    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 6 },
+    GbdtNode { feat: 27, left: 26, right: 27, thresh_or_leaf: 18 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1461 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -495 },
+    GbdtNode { feat: 43, left: 29, right: 30, thresh_or_leaf: 31452 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2517 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 293 },
+    GbdtNode { feat: 4, left: 1, right: 16, thresh_or_leaf: 13932 },
+    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 12851 },
+    GbdtNode { feat: 37, left: 3, right: 6, thresh_or_leaf: 40960 },
+    GbdtNode { feat: 35, left: 4, right: 5, thresh_or_leaf: -2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2729 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1750 },
+    GbdtNode { feat: 12, left: 7, right: 8, thresh_or_leaf: 54613 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1841 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1785 },
+    GbdtNode { feat: 42, left: 10, right: 13, thresh_or_leaf: 1662 },
+    GbdtNode { feat: 6, left: 11, right: 12, thresh_or_leaf: 63488 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2212 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -761 },
+    GbdtNode { feat: 34, left: 14, right: 15, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -262 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2552 },
+    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 6 },
+    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: -1 },
+    GbdtNode { feat: 3, left: 19, right: 20, thresh_or_leaf: 13076 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 247 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2790 },
+    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -98 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1292 },
+    GbdtNode { feat: 9, left: 25, right: 28, thresh_or_leaf: 838221 },
+    GbdtNode { feat: 44, left: 26, right: 27, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1319 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1705 },
+    GbdtNode { feat: 43, left: 29, right: 30, thresh_or_leaf: 50939 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2610 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 44 },
+    GbdtNode { feat: 4, left: 1, right: 16, thresh_or_leaf: 13932 },
+    GbdtNode { feat: 7, left: 2, right: 9, thresh_or_leaf: 0 },
+    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 42196 },
+    GbdtNode { feat: 8, left: 4, right: 5, thresh_or_leaf: 28086 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2707 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1032 },
+    GbdtNode { feat: 15, left: 7, right: 8, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2644 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -247 },
+    GbdtNode { feat: 16, left: 10, right: 13, thresh_or_leaf: 24576 },
+    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 17 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1587 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 292 },
+    GbdtNode { feat: 34, left: 14, right: 15, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 207 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2565 },
+    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 6 },
+    GbdtNode { feat: 26, left: 18, right: 21, thresh_or_leaf: 8901 },
+    GbdtNode { feat: 24, left: 19, right: 20, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 233 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2285 },
+    GbdtNode { feat: 42, left: 22, right: 23, thresh_or_leaf: 1983 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -227 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1988 },
+    GbdtNode { feat: 9, left: 25, right: 28, thresh_or_leaf: 838221 },
+    GbdtNode { feat: 44, left: 26, right: 27, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1344 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1591 },
+    GbdtNode { feat: 43, left: 29, right: 30, thresh_or_leaf: 26797 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2616 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1246 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: 0 },
+    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 42196 },
+    GbdtNode { feat: 4, left: 3, right: 6, thresh_or_leaf: 9442 },
+    GbdtNode { feat: 28, left: 4, right: 5, thresh_or_leaf: 32768 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2772 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1356 },
+    GbdtNode { feat: 9, left: 7, right: 8, thresh_or_leaf: 362495 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -116 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2171 },
+    GbdtNode { feat: 35, left: 10, right: 13, thresh_or_leaf: -5 },
+    GbdtNode { feat: 34, left: 11, right: 12, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1858 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1937 },
+    GbdtNode { feat: 15, left: 14, right: 15, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1323 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 910 },
+    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 5 },
+    GbdtNode { feat: 31, left: 18, right: 21, thresh_or_leaf: 40960 },
+    GbdtNode { feat: 34, left: 19, right: 20, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1294 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 328 },
+    GbdtNode { feat: 26, left: 22, right: 23, thresh_or_leaf: 33237 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 524 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2124 },
+    GbdtNode { feat: 43, left: 25, right: 28, thresh_or_leaf: 31452 },
+    GbdtNode { feat: 45, left: 26, right: 27, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2137 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1977 },
+    GbdtNode { feat: 4, left: 29, right: 30, thresh_or_leaf: 38969 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3107 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 988 },
+    GbdtNode { feat: 4, left: 1, right: 16, thresh_or_leaf: 8751 },
+    GbdtNode { feat: 7, left: 2, right: 9, thresh_or_leaf: 0 },
+    GbdtNode { feat: 3, left: 3, right: 6, thresh_or_leaf: 48 },
+    GbdtNode { feat: 37, left: 4, right: 5, thresh_or_leaf: 39321 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2932 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -604 },
+    GbdtNode { feat: 47, left: 7, right: 8, thresh_or_leaf: 280 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -401 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2281 },
+    GbdtNode { feat: 15, left: 10, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: 37, left: 11, right: 12, thresh_or_leaf: 37449 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1999 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 314 },
+    GbdtNode { feat: 12, left: 14, right: 15, thresh_or_leaf: 37809 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1575 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -364 },
+    GbdtNode { feat: 5, left: 17, right: 24, thresh_or_leaf: 62177 },
+    GbdtNode { feat: 15, left: 18, right: 21, thresh_or_leaf: 0 },
+    GbdtNode { feat: 36, left: 19, right: 20, thresh_or_leaf: 10922 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2484 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1434 },
+    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2781 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 630 },
+    GbdtNode { feat: 31, left: 25, right: 28, thresh_or_leaf: 25206 },
+    GbdtNode { feat: 34, left: 26, right: 27, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3074 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 916 },
+    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -941 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1882 },
+    GbdtNode { feat: 4, left: 1, right: 14, thresh_or_leaf: 7055 },
+    GbdtNode { feat: 5, left: 2, right: 7, thresh_or_leaf: 42196 },
+    GbdtNode { feat: 28, left: 3, right: 6, thresh_or_leaf: 32768 },
+    GbdtNode { feat: 44, left: 4, right: 5, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1818 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2796 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1688 },
+    GbdtNode { feat: 26, left: 8, right: 11, thresh_or_leaf: 4885 },
+    GbdtNode { feat: 46, left: 9, right: 10, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2418 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -616 },
+    GbdtNode { feat: 44, left: 12, right: 13, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3259 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -260 },
+    GbdtNode { feat: 5, left: 15, right: 22, thresh_or_leaf: 62177 },
+    GbdtNode { feat: 15, left: 16, right: 19, thresh_or_leaf: 0 },
+    GbdtNode { feat: 36, left: 17, right: 18, thresh_or_leaf: 18724 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2362 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1928 },
+    GbdtNode { feat: 18, left: 20, right: 21, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2460 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 523 },
+    GbdtNode { feat: 9, left: 23, right: 26, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 34, left: 24, right: 25, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 554 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2417 },
+    GbdtNode { feat: 8, left: 27, right: 28, thresh_or_leaf: 24576 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2492 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2388 },
+    GbdtNode { feat: 4, left: 1, right: 16, thresh_or_leaf: 7055 },
+    GbdtNode { feat: 37, left: 2, right: 9, thresh_or_leaf: 37449 },
+    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 42196 },
+    GbdtNode { feat: 44, left: 4, right: 5, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1707 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2770 },
+    GbdtNode { feat: 29, left: 7, right: 8, thresh_or_leaf: 22 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1933 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -16 },
+    GbdtNode { feat: 18, left: 10, right: 13, thresh_or_leaf: -1 },
+    GbdtNode { feat: 6, left: 11, right: 12, thresh_or_leaf: 55296 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 847 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2433 },
+    GbdtNode { feat: 12, left: 14, right: 15, thresh_or_leaf: 56173 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2229 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -395 },
+    GbdtNode { feat: 35, left: 17, right: 24, thresh_or_leaf: 5 },
+    GbdtNode { feat: 27, left: 18, right: 21, thresh_or_leaf: 0 },
+    GbdtNode { feat: 5, left: 19, right: 20, thresh_or_leaf: 48476 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -823 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 914 },
+    GbdtNode { feat: 27, left: 22, right: 23, thresh_or_leaf: 30229 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -906 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3549 },
+    GbdtNode { feat: 34, left: 25, right: 28, thresh_or_leaf: 1 },
+    GbdtNode { feat: 9, left: 26, right: 27, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 291 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2143 },
+    GbdtNode { feat: 31, left: 29, right: 30, thresh_or_leaf: 21845 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 411 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2782 },
+    GbdtNode { feat: 2, left: 1, right: 14, thresh_or_leaf: 12851 },
+    GbdtNode { feat: 3, left: 2, right: 7, thresh_or_leaf: 48 },
+    GbdtNode { feat: 28, left: 3, right: 6, thresh_or_leaf: 32768 },
+    GbdtNode { feat: 44, left: 4, right: 5, thresh_or_leaf: 14 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2859 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 961 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 942 },
+    GbdtNode { feat: 7, left: 8, right: 11, thresh_or_leaf: 0 },
+    GbdtNode { feat: 15, left: 9, right: 10, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2760 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1233 },
+    GbdtNode { feat: 18, left: 12, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -821 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1613 },
+    GbdtNode { feat: 16, left: 15, right: 22, thresh_or_leaf: 40960 },
+    GbdtNode { feat: 34, left: 16, right: 19, thresh_or_leaf: 1 },
+    GbdtNode { feat: 24, left: 17, right: 18, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -174 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2241 },
+    GbdtNode { feat: 5, left: 20, right: 21, thresh_or_leaf: 39492 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1879 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1713 },
+    GbdtNode { feat: 18, left: 23, right: 26, thresh_or_leaf: -1 },
+    GbdtNode { feat: 17, left: 24, right: 25, thresh_or_leaf: -387101 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 364 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3158 },
+    GbdtNode { feat: 34, left: 27, right: 28, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1258 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2595 },
+    GbdtNode { feat: 4, left: 1, right: 16, thresh_or_leaf: 7055 },
+    GbdtNode { feat: 6, left: 2, right: 9, thresh_or_leaf: 63488 },
+    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 30321 },
+    GbdtNode { feat: 29, left: 4, right: 5, thresh_or_leaf: 53 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2749 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1702 },
+    GbdtNode { feat: 41, left: 7, right: 8, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2747 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1785 },
+    GbdtNode { feat: 15, left: 10, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: 37, left: 11, right: 12, thresh_or_leaf: 37449 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2093 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 274 },
+    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 36 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -295 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1980 },
+    GbdtNode { feat: 16, left: 17, right: 24, thresh_or_leaf: 40960 },
+    GbdtNode { feat: 5, left: 18, right: 21, thresh_or_leaf: 58534 },
+    GbdtNode { feat: 16, left: 19, right: 20, thresh_or_leaf: 31507 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1914 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 413 },
+    GbdtNode { feat: 27, left: 22, right: 23, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 838 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1298 },
+    GbdtNode { feat: 34, left: 25, right: 28, thresh_or_leaf: 1 },
+    GbdtNode { feat: 9, left: 26, right: 27, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 513 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1864 },
+    GbdtNode { feat: 27, left: 29, right: 30, thresh_or_leaf: 32 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2723 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1361 },
+    GbdtNode { feat: 4, left: 1, right: 16, thresh_or_leaf: 7055 },
+    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 42196 },
+    GbdtNode { feat: 44, left: 3, right: 6, thresh_or_leaf: 1 },
+    GbdtNode { feat: 29, left: 4, right: 5, thresh_or_leaf: 53 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1997 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1285 },
+    GbdtNode { feat: 37, left: 7, right: 8, thresh_or_leaf: 39321 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2672 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 111 },
+    GbdtNode { feat: 26, left: 10, right: 13, thresh_or_leaf: 28 },
+    GbdtNode { feat: 46, left: 11, right: 12, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2507 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -319 },
+    GbdtNode { feat: 16, left: 14, right: 15, thresh_or_leaf: -65536 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2948 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -157 },
+    GbdtNode { feat: 5, left: 17, right: 24, thresh_or_leaf: 64921 },
+    GbdtNode { feat: 15, left: 18, right: 21, thresh_or_leaf: -1 },
+    GbdtNode { feat: 33, left: 19, right: 20, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2383 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -238 },
+    GbdtNode { feat: 34, left: 22, right: 23, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -108 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1897 },
+    GbdtNode { feat: 34, left: 25, right: 28, thresh_or_leaf: 0 },
+    GbdtNode { feat: 9, left: 26, right: 27, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1615 },
+    GbdtNode { feat: 18, left: 29, right: 30, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1187 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1850 },
+    GbdtNode { feat: 4, left: 1, right: 14, thresh_or_leaf: 7055 },
+    GbdtNode { feat: 5, left: 2, right: 7, thresh_or_leaf: 42196 },
+    GbdtNode { feat: 28, left: 3, right: 6, thresh_or_leaf: 32768 },
+    GbdtNode { feat: 44, left: 4, right: 5, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1351 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2602 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1826 },
+    GbdtNode { feat: 15, left: 8, right: 11, thresh_or_leaf: -1 },
+    GbdtNode { feat: 0, left: 9, right: 10, thresh_or_leaf: 40960 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2344 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -401 },
+    GbdtNode { feat: 6, left: 12, right: 13, thresh_or_leaf: 57344 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2685 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -306 },
+    GbdtNode { feat: 16, left: 15, right: 22, thresh_or_leaf: 40960 },
+    GbdtNode { feat: 31, left: 16, right: 19, thresh_or_leaf: 40960 },
+    GbdtNode { feat: 34, left: 17, right: 18, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1300 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 89 },
+    GbdtNode { feat: 5, left: 20, right: 21, thresh_or_leaf: 54414 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1403 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1001 },
+    GbdtNode { feat: 34, left: 23, right: 26, thresh_or_leaf: 1 },
+    GbdtNode { feat: 5, left: 24, right: 25, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -180 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1322 },
+    GbdtNode { feat: 35, left: 27, right: 28, thresh_or_leaf: 5 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1469 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2612 },
+    GbdtNode { feat: 4, left: 1, right: 16, thresh_or_leaf: 7055 },
+    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 42196 },
+    GbdtNode { feat: 29, left: 3, right: 6, thresh_or_leaf: 53 },
+    GbdtNode { feat: 35, left: 4, right: 5, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2612 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -565 },
+    GbdtNode { feat: 44, left: 7, right: 8, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1392 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1832 },
+    GbdtNode { feat: 26, left: 10, right: 13, thresh_or_leaf: 28 },
+    GbdtNode { feat: 46, left: 11, right: 12, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2426 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -205 },
+    GbdtNode { feat: 16, left: 14, right: 15, thresh_or_leaf: -65536 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2756 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -38 },
+    GbdtNode { feat: 9, left: 17, right: 24, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 34, left: 18, right: 21, thresh_or_leaf: 1 },
+    GbdtNode { feat: 15, left: 19, right: 20, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -959 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 381 },
+    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 46504 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -136 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1982 },
+    GbdtNode { feat: 43, left: 25, right: 28, thresh_or_leaf: 26797 },
+    GbdtNode { feat: 45, left: 26, right: 27, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2167 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1418 },
+    GbdtNode { feat: 12, left: 29, right: 30, thresh_or_leaf: 58254 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3495 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1126 },
+    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 25206 },
+    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 30321 },
+    GbdtNode { feat: 4, left: 3, right: 6, thresh_or_leaf: 27039 },
+    GbdtNode { feat: 0, left: 4, right: 5, thresh_or_leaf: 40960 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2507 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -834 },
+    GbdtNode { feat: 31, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2312 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1071 },
+    GbdtNode { feat: 26, left: 10, right: 13, thresh_or_leaf: 33237 },
+    GbdtNode { feat: 15, left: 11, right: 12, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1764 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 52 },
+    GbdtNode { feat: 47, left: 14, right: 15, thresh_or_leaf: 75 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 592 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -7863 },
+    GbdtNode { feat: 18, left: 17, right: 24, thresh_or_leaf: -1 },
+    GbdtNode { feat: 17, left: 18, right: 21, thresh_or_leaf: -481648 },
+    GbdtNode { feat: 4, left: 19, right: 20, thresh_or_leaf: 18315 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1827 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 811 },
+    GbdtNode { feat: 27, left: 22, right: 23, thresh_or_leaf: 14749 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2787 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -649 },
+    GbdtNode { feat: 42, left: 25, right: 28, thresh_or_leaf: 1983 },
+    GbdtNode { feat: 5, left: 26, right: 27, thresh_or_leaf: 59919 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -855 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 639 },
+    GbdtNode { feat: 34, left: 29, right: 30, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 893 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2317 },
+    GbdtNode { feat: 2, left: 1, right: 14, thresh_or_leaf: 6947 },
+    GbdtNode { feat: 37, left: 2, right: 9, thresh_or_leaf: 56173 },
+    GbdtNode { feat: 0, left: 3, right: 6, thresh_or_leaf: 40960 },
+    GbdtNode { feat: 46, left: 4, right: 5, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2891 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1862 },
+    GbdtNode { feat: 17, left: 7, right: 8, thresh_or_leaf: 473735 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1024 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2205 },
+    GbdtNode { feat: 20, left: 10, right: 11, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -562 },
+    GbdtNode { feat: 26, left: 12, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2996 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -258 },
+    GbdtNode { feat: 9, left: 15, right: 22, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 34, left: 16, right: 19, thresh_or_leaf: 1 },
+    GbdtNode { feat: 18, left: 17, right: 18, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2102 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -26 },
+    GbdtNode { feat: 31, left: 20, right: 21, thresh_or_leaf: 28086 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 655 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2072 },
+    GbdtNode { feat: 43, left: 23, right: 26, thresh_or_leaf: 26797 },
+    GbdtNode { feat: 45, left: 24, right: 25, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2037 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1400 },
+    GbdtNode { feat: 12, left: 27, right: 28, thresh_or_leaf: 58254 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3745 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1034 },
+    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 25206 },
+    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 30321 },
+    GbdtNode { feat: 36, left: 3, right: 6, thresh_or_leaf: 26214 },
+    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 27039 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2367 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 942 },
+    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 7353 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -433 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1829 },
+    GbdtNode { feat: 16, left: 10, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: 37, left: 11, right: 12, thresh_or_leaf: 46811 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1625 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1252 },
+    GbdtNode { feat: 43, left: 14, right: 15, thresh_or_leaf: 47688 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 694 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1433 },
+    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
+    GbdtNode { feat: 9, left: 18, right: 21, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 33, left: 19, right: 20, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -360 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 941 },
+    GbdtNode { feat: 45, left: 22, right: 23, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1575 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2005 },
+    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 5 },
+    GbdtNode { feat: 26, left: 26, right: 27, thresh_or_leaf: 17 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -377 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1790 },
+    GbdtNode { feat: 27, left: 29, right: 30, thresh_or_leaf: 32 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2689 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 638 },
+    GbdtNode { feat: 2, left: 1, right: 14, thresh_or_leaf: 6210 },
+    GbdtNode { feat: 3, left: 2, right: 7, thresh_or_leaf: 48 },
+    GbdtNode { feat: 31, left: 3, right: 4, thresh_or_leaf: 52428 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2672 },
+    GbdtNode { feat: 29, left: 5, right: 6, thresh_or_leaf: 34 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -579 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 563 },
+    GbdtNode { feat: 0, left: 8, right: 11, thresh_or_leaf: 40960 },
+    GbdtNode { feat: 15, left: 9, right: 10, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2572 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1073 },
+    GbdtNode { feat: 47, left: 12, right: 13, thresh_or_leaf: 60650 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1856 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1289 },
+    GbdtNode { feat: 34, left: 15, right: 22, thresh_or_leaf: 1 },
+    GbdtNode { feat: 18, left: 16, right: 19, thresh_or_leaf: -1 },
+    GbdtNode { feat: 38, left: 17, right: 18, thresh_or_leaf: 677040 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2301 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 395 },
+    GbdtNode { feat: 43, left: 20, right: 21, thresh_or_leaf: 10156 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 781 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -315 },
+    GbdtNode { feat: 42, left: 23, right: 26, thresh_or_leaf: 1413 },
+    GbdtNode { feat: 14, left: 24, right: 25, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1628 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1778 },
+    GbdtNode { feat: 16, left: 27, right: 28, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 757 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2278 },
+    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 30321 },
+    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 45511 },
+    GbdtNode { feat: 15, left: 3, right: 6, thresh_or_leaf: 0 },
+    GbdtNode { feat: 39, left: 4, right: 5, thresh_or_leaf: 43690 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2729 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 125 },
+    GbdtNode { feat: 16, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -527 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2135 },
+    GbdtNode { feat: 9, left: 10, right: 13, thresh_or_leaf: 550468 },
+    GbdtNode { feat: 38, left: 11, right: 12, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2269 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1047 },
+    GbdtNode { feat: 9, left: 14, right: 15, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1880 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 115 },
     GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
     GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: -1 },
-    GbdtNode { feat: 15, left: 19, right: 20, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 478 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1772 },
-    GbdtNode { feat: 22, left: 22, right: 23, thresh_or_leaf: -2 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1522 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 463 },
+    GbdtNode { feat: 17, left: 19, right: 20, thresh_or_leaf: -505548 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -477 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2486 },
+    GbdtNode { feat: 15, left: 22, right: 23, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -476 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 674 },
+    GbdtNode { feat: 42, left: 25, right: 28, thresh_or_leaf: 1662 },
+    GbdtNode { feat: 14, left: 26, right: 27, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1588 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1802 },
+    GbdtNode { feat: 2, left: 29, right: 30, thresh_or_leaf: 14571 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1040 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2110 },
+    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 30321 },
+    GbdtNode { feat: 8, left: 2, right: 9, thresh_or_leaf: 29127 },
+    GbdtNode { feat: 15, left: 3, right: 6, thresh_or_leaf: 0 },
+    GbdtNode { feat: 28, left: 4, right: 5, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2852 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -781 },
+    GbdtNode { feat: 15, left: 7, right: 8, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 723 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1903 },
+    GbdtNode { feat: 9, left: 10, right: 13, thresh_or_leaf: 550468 },
+    GbdtNode { feat: 2, left: 11, right: 12, thresh_or_leaf: 3301 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1712 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1623 },
+    GbdtNode { feat: 5, left: 14, right: 15, thresh_or_leaf: 29338 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1973 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -48 },
+    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
+    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: -1 },
+    GbdtNode { feat: 38, left: 19, right: 20, thresh_or_leaf: 677040 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2186 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 522 },
+    GbdtNode { feat: 9, left: 22, right: 23, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -36 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1413 },
     GbdtNode { feat: 19, left: 25, right: 28, thresh_or_leaf: 0 },
-    GbdtNode { feat: 16, left: 26, right: 27, thresh_or_leaf: 44470 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -995 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 732 },
-    GbdtNode { feat: 2, left: 29, right: 30, thresh_or_leaf: 10461 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -115 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2215 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 36044 },
-    GbdtNode { feat: 13, left: 3, right: 6, thresh_or_leaf: 982470 },
-    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 1109 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 777 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -478 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 45056 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2279 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 36 },
-    GbdtNode { feat: 26, left: 10, right: 13, thresh_or_leaf: 13 },
-    GbdtNode { feat: 35, left: 11, right: 12, thresh_or_leaf: 4 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -856 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 225 },
-    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 141 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 945 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -259 },
-    GbdtNode { feat: 22, left: 17, right: 22, thresh_or_leaf: -2 },
-    GbdtNode { feat: 17, left: 18, right: 21, thresh_or_leaf: -481648 },
-    GbdtNode { feat: 35, left: 19, right: 20, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -513 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 365 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2235 },
-    GbdtNode { feat: 15, left: 23, right: 26, thresh_or_leaf: 1 },
-    GbdtNode { feat: 6, left: 24, right: 25, thresh_or_leaf: 57344 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 986 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -488 },
-    GbdtNode { feat: 18, left: 27, right: 28, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1172 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 956 },
-    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 21845 },
-    GbdtNode { feat: 6, left: 2, right: 9, thresh_or_leaf: 63488 },
-    GbdtNode { feat: 6, left: 3, right: 6, thresh_or_leaf: 57344 },
-    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 10950 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -700 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1119 },
-    GbdtNode { feat: 29, left: 7, right: 8, thresh_or_leaf: 9272 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1920 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 185 },
-    GbdtNode { feat: 18, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 17, left: 11, right: 12, thresh_or_leaf: -471951 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 288 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1481 },
-    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 14833 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1269 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -641 },
+    GbdtNode { feat: 8, left: 26, right: 27, thresh_or_leaf: 26214 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -846 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1486 },
+    GbdtNode { feat: 2, left: 29, right: 30, thresh_or_leaf: 16518 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -888 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2205 },
+    GbdtNode { feat: 2, left: 1, right: 14, thresh_or_leaf: 6210 },
+    GbdtNode { feat: 37, left: 2, right: 9, thresh_or_leaf: 56173 },
+    GbdtNode { feat: 3, left: 3, right: 6, thresh_or_leaf: 78 },
+    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 5199 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2533 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -185 },
+    GbdtNode { feat: 5, left: 7, right: 8, thresh_or_leaf: 30321 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1820 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 97 },
+    GbdtNode { feat: 20, left: 10, right: 11, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -456 },
+    GbdtNode { feat: 26, left: 12, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3111 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -210 },
+    GbdtNode { feat: 15, left: 15, right: 22, thresh_or_leaf: 1 },
+    GbdtNode { feat: 7, left: 16, right: 19, thresh_or_leaf: 0 },
+    GbdtNode { feat: 9, left: 17, right: 18, thresh_or_leaf: 230535 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 178 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2482 },
+    GbdtNode { feat: 34, left: 20, right: 21, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -175 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1495 },
+    GbdtNode { feat: 43, left: 23, right: 26, thresh_or_leaf: 60662 },
+    GbdtNode { feat: 34, left: 24, right: 25, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 566 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2047 },
+    GbdtNode { feat: 26, left: 27, right: 28, thresh_or_leaf: 1434 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1717 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 996 },
+    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 30321 },
+    GbdtNode { feat: 8, left: 2, right: 9, thresh_or_leaf: 29127 },
+    GbdtNode { feat: 31, left: 3, right: 6, thresh_or_leaf: 0 },
+    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 4483 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1816 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1963 },
+    GbdtNode { feat: 43, left: 7, right: 8, thresh_or_leaf: 60662 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2621 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -869 },
+    GbdtNode { feat: 9, left: 10, right: 13, thresh_or_leaf: 550468 },
+    GbdtNode { feat: 2, left: 11, right: 12, thresh_or_leaf: 3301 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1627 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1577 },
+    GbdtNode { feat: 44, left: 14, right: 15, thresh_or_leaf: 8 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2162 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -77 },
+    GbdtNode { feat: 42, left: 17, right: 24, thresh_or_leaf: 1662 },
+    GbdtNode { feat: 24, left: 18, right: 21, thresh_or_leaf: 1 },
+    GbdtNode { feat: 16, left: 19, right: 20, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1055 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 165 },
+    GbdtNode { feat: 26, left: 22, right: 23, thresh_or_leaf: 81 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2622 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1045 },
+    GbdtNode { feat: 34, left: 25, right: 28, thresh_or_leaf: 1 },
+    GbdtNode { feat: 43, left: 26, right: 27, thresh_or_leaf: 12276 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 878 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -134 },
+    GbdtNode { feat: 19, left: 29, right: 30, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 734 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2233 },
+    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 30321 },
+    GbdtNode { feat: 15, left: 2, right: 9, thresh_or_leaf: 0 },
+    GbdtNode { feat: 28, left: 3, right: 6, thresh_or_leaf: 103 },
+    GbdtNode { feat: 2, left: 4, right: 5, thresh_or_leaf: 30 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -54 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2747 },
+    GbdtNode { feat: 2, left: 7, right: 8, thresh_or_leaf: 6947 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1392 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 952 },
+    GbdtNode { feat: 3, left: 10, right: 13, thresh_or_leaf: 48 },
+    GbdtNode { feat: 27, left: 11, right: 12, thresh_or_leaf: 3575 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2630 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 180 },
+    GbdtNode { feat: 31, left: 14, right: 15, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1272 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1136 },
+    GbdtNode { feat: 42, left: 17, right: 24, thresh_or_leaf: 1662 },
+    GbdtNode { feat: 15, left: 18, right: 21, thresh_or_leaf: 0 },
+    GbdtNode { feat: 9, left: 19, right: 20, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1450 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1638 },
+    GbdtNode { feat: 29, left: 22, right: 23, thresh_or_leaf: 27993 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -273 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2330 },
+    GbdtNode { feat: 26, left: 25, right: 28, thresh_or_leaf: 529 },
+    GbdtNode { feat: 40, left: 26, right: 27, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 64 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2166 },
+    GbdtNode { feat: 34, left: 29, right: 30, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 775 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2231 },
+    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 6210 },
+    GbdtNode { feat: 3, left: 2, right: 9, thresh_or_leaf: 48 },
+    GbdtNode { feat: 37, left: 3, right: 6, thresh_or_leaf: 52428 },
+    GbdtNode { feat: 2, left: 4, right: 5, thresh_or_leaf: 30 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -853 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2544 },
+    GbdtNode { feat: 19, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 555 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -256 },
+    GbdtNode { feat: 12, left: 10, right: 13, thresh_or_leaf: 25486 },
+    GbdtNode { feat: 2, left: 11, right: 12, thresh_or_leaf: 3726 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2807 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -615 },
+    GbdtNode { feat: 37, left: 14, right: 15, thresh_or_leaf: 43690 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1436 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1923 },
+    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
+    GbdtNode { feat: 9, left: 18, right: 21, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 29, left: 19, right: 20, thresh_or_leaf: 8073 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -416 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1097 },
+    GbdtNode { feat: 2, left: 22, right: 23, thresh_or_leaf: 58982 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 98 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1683 },
+    GbdtNode { feat: 6, left: 25, right: 28, thresh_or_leaf: 63488 },
+    GbdtNode { feat: 17, left: 26, right: 27, thresh_or_leaf: -387101 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1607 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1178 },
+    GbdtNode { feat: 47, left: 29, right: 30, thresh_or_leaf: 92 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -984 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1928 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: -6 },
+    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 30321 },
+    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 2492 },
+    GbdtNode { feat: 4, left: 4, right: 5, thresh_or_leaf: 137 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1132 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1587 },
+    GbdtNode { feat: 43, left: 7, right: 8, thresh_or_leaf: 60662 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2610 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1117 },
+    GbdtNode { feat: 43, left: 10, right: 13, thresh_or_leaf: 14287 },
+    GbdtNode { feat: 5, left: 11, right: 12, thresh_or_leaf: 62177 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2717 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -705 },
+    GbdtNode { feat: 42, left: 14, right: 15, thresh_or_leaf: 1156 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1878 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 43 },
+    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
+    GbdtNode { feat: 5, left: 18, right: 21, thresh_or_leaf: 64921 },
+    GbdtNode { feat: 2, left: 19, right: 20, thresh_or_leaf: 51793 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -143 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2070 },
+    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -332 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 790 },
+    GbdtNode { feat: 3, left: 25, right: 28, thresh_or_leaf: 38 },
+    GbdtNode { feat: 2, left: 26, right: 27, thresh_or_leaf: 779 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 245 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2121 },
+    GbdtNode { feat: 19, left: 29, right: 30, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 371 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1820 },
+    GbdtNode { feat: 2, left: 1, right: 14, thresh_or_leaf: 6210 },
+    GbdtNode { feat: 37, left: 2, right: 9, thresh_or_leaf: 56173 },
+    GbdtNode { feat: 0, left: 3, right: 6, thresh_or_leaf: 40960 },
+    GbdtNode { feat: 46, left: 4, right: 5, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2732 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1383 },
+    GbdtNode { feat: 35, left: 7, right: 8, thresh_or_leaf: -3 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -840 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1652 },
+    GbdtNode { feat: 27, left: 10, right: 13, thresh_or_leaf: 158 },
+    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2987 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -324 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -533 },
+    GbdtNode { feat: 34, left: 15, right: 22, thresh_or_leaf: 1 },
+    GbdtNode { feat: 18, left: 16, right: 19, thresh_or_leaf: -1 },
+    GbdtNode { feat: 17, left: 17, right: 18, thresh_or_leaf: -505548 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -163 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2334 },
+    GbdtNode { feat: 15, left: 20, right: 21, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -509 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 505 },
+    GbdtNode { feat: 19, left: 23, right: 26, thresh_or_leaf: 0 },
+    GbdtNode { feat: 43, left: 24, right: 25, thresh_or_leaf: 47688 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 699 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1420 },
+    GbdtNode { feat: 15, left: 27, right: 28, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 87 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2059 },
+    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 25206 },
+    GbdtNode { feat: 26, left: 2, right: 9, thresh_or_leaf: 33237 },
+    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 24713 },
+    GbdtNode { feat: 43, left: 4, right: 5, thresh_or_leaf: 6970 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 746 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2163 },
+    GbdtNode { feat: 22, left: 7, right: 8, thresh_or_leaf: -2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2819 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -112 },
+    GbdtNode { feat: 47, left: 10, right: 13, thresh_or_leaf: 40 },
+    GbdtNode { feat: 43, left: 11, right: 12, thresh_or_leaf: 25571 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 852 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -498 },
+    GbdtNode { feat: 42, left: 14, right: 15, thresh_or_leaf: 8153 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -8879 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1651 },
     GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
     GbdtNode { feat: 20, left: 18, right: 21, thresh_or_leaf: -1 },
-    GbdtNode { feat: 12, left: 19, right: 20, thresh_or_leaf: 37809 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 721 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1292 },
-    GbdtNode { feat: 31, left: 22, right: 23, thresh_or_leaf: 49152 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -28 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1131 },
-    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 3 },
+    GbdtNode { feat: 12, left: 19, right: 20, thresh_or_leaf: 36623 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 895 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1371 },
+    GbdtNode { feat: 5, left: 22, right: 23, thresh_or_leaf: 48476 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -773 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 703 },
+    GbdtNode { feat: 35, left: 25, right: 28, thresh_or_leaf: 5 },
     GbdtNode { feat: 30, left: 26, right: 27, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -630 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 909 },
-    GbdtNode { feat: 6, left: 29, right: 30, thresh_or_leaf: 61440 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -199 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2097 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 36044 },
-    GbdtNode { feat: 13, left: 3, right: 6, thresh_or_leaf: 982470 },
-    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 1109 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 777 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -464 },
-    GbdtNode { feat: 12, left: 7, right: 8, thresh_or_leaf: 28493 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2204 },
-    GbdtNode { feat: 26, left: 10, right: 13, thresh_or_leaf: 13 },
-    GbdtNode { feat: 35, left: 11, right: 12, thresh_or_leaf: 4 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -835 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 227 },
-    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 141 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 972 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -251 },
-    GbdtNode { feat: 22, left: 17, right: 22, thresh_or_leaf: -2 },
-    GbdtNode { feat: 17, left: 18, right: 21, thresh_or_leaf: -481648 },
-    GbdtNode { feat: 35, left: 19, right: 20, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -502 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 352 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2171 },
-    GbdtNode { feat: 15, left: 23, right: 26, thresh_or_leaf: 1 },
-    GbdtNode { feat: 6, left: 24, right: 25, thresh_or_leaf: 57344 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1031 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -494 },
-    GbdtNode { feat: 18, left: 27, right: 28, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1113 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 906 },
-    GbdtNode { feat: 5, left: 1, right: 16, thresh_or_leaf: 23849 },
-    GbdtNode { feat: 16, left: 2, right: 9, thresh_or_leaf: 36044 },
-    GbdtNode { feat: 13, left: 3, right: 6, thresh_or_leaf: 982470 },
-    GbdtNode { feat: 5, left: 4, right: 5, thresh_or_leaf: 1109 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 775 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -459 },
-    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 45056 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2128 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 49 },
-    GbdtNode { feat: 26, left: 10, right: 13, thresh_or_leaf: 13 },
-    GbdtNode { feat: 35, left: 11, right: 12, thresh_or_leaf: 4 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -819 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 227 },
-    GbdtNode { feat: 26, left: 14, right: 15, thresh_or_leaf: 141 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 958 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -246 },
-    GbdtNode { feat: 22, left: 17, right: 22, thresh_or_leaf: -2 },
-    GbdtNode { feat: 17, left: 18, right: 21, thresh_or_leaf: -481648 },
-    GbdtNode { feat: 35, left: 19, right: 20, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -498 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 347 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2135 },
-    GbdtNode { feat: 34, left: 23, right: 26, thresh_or_leaf: 0 },
-    GbdtNode { feat: 2, left: 24, right: 25, thresh_or_leaf: 39424 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 559 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -944 },
-    GbdtNode { feat: 8, left: 27, right: 28, thresh_or_leaf: 13107 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -209 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1185 },
-    GbdtNode { feat: 15, left: 1, right: 16, thresh_or_leaf: -1 },
-    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 57503 },
-    GbdtNode { feat: 29, left: 3, right: 6, thresh_or_leaf: 1617 },
-    GbdtNode { feat: 10, left: 4, right: 5, thresh_or_leaf: 1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2076 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 110 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -444 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1803 },
+    GbdtNode { feat: 43, left: 29, right: 30, thresh_or_leaf: 41413 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2168 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1076 },
+    GbdtNode { feat: 42, left: 1, right: 16, thresh_or_leaf: 1662 },
+    GbdtNode { feat: 24, left: 2, right: 9, thresh_or_leaf: 1 },
+    GbdtNode { feat: 22, left: 3, right: 6, thresh_or_leaf: -2 },
+    GbdtNode { feat: 9, left: 4, right: 5, thresh_or_leaf: 679086 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2895 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 84 },
+    GbdtNode { feat: 15, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1178 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -8 },
+    GbdtNode { feat: 44, left: 10, right: 13, thresh_or_leaf: 2 },
+    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 81 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2121 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3174 },
+    GbdtNode { feat: 9, left: 14, right: 15, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2928 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 187 },
+    GbdtNode { feat: 5, left: 17, right: 24, thresh_or_leaf: 28418 },
+    GbdtNode { feat: 16, left: 18, right: 21, thresh_or_leaf: 44470 },
+    GbdtNode { feat: 31, left: 19, right: 20, thresh_or_leaf: 40960 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1978 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 833 },
+    GbdtNode { feat: 9, left: 22, right: 23, thresh_or_leaf: 550468 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1625 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1347 },
+    GbdtNode { feat: 34, left: 25, right: 28, thresh_or_leaf: 1 },
+    GbdtNode { feat: 12, left: 26, right: 27, thresh_or_leaf: 54613 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 991 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -132 },
+    GbdtNode { feat: 26, left: 29, right: 30, thresh_or_leaf: 4885 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 757 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2238 },
+    GbdtNode { feat: 31, left: 1, right: 16, thresh_or_leaf: 25206 },
+    GbdtNode { feat: 15, left: 2, right: 9, thresh_or_leaf: -1 },
+    GbdtNode { feat: 5, left: 3, right: 6, thresh_or_leaf: 62177 },
+    GbdtNode { feat: 2, left: 4, right: 5, thresh_or_leaf: 30 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 487 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2452 },
+    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 39936 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1601 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 718 },
+    GbdtNode { feat: 3, left: 10, right: 13, thresh_or_leaf: 49728 },
+    GbdtNode { feat: 26, left: 11, right: 12, thresh_or_leaf: 33237 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 43 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4327 },
+    GbdtNode { feat: 44, left: 14, right: 15, thresh_or_leaf: 5 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -5729 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -661 },
+    GbdtNode { feat: 45, left: 17, right: 24, thresh_or_leaf: 0 },
+    GbdtNode { feat: 33, left: 18, right: 21, thresh_or_leaf: 0 },
+    GbdtNode { feat: 34, left: 19, right: 20, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 47 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2078 },
+    GbdtNode { feat: 26, left: 22, right: 23, thresh_or_leaf: 17770 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 878 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2393 },
+    GbdtNode { feat: 26, left: 25, right: 28, thresh_or_leaf: 4885 },
+    GbdtNode { feat: 12, left: 26, right: 27, thresh_or_leaf: 56173 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 57 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3491 },
+    GbdtNode { feat: 31, left: 29, right: 30, thresh_or_leaf: 54613 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1196 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1596 },
+    GbdtNode { feat: 42, left: 1, right: 16, thresh_or_leaf: 1662 },
+    GbdtNode { feat: 24, left: 2, right: 9, thresh_or_leaf: 1 },
+    GbdtNode { feat: 15, left: 3, right: 6, thresh_or_leaf: 0 },
+    GbdtNode { feat: 27, left: 4, right: 5, thresh_or_leaf: 12 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -863 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2512 },
+    GbdtNode { feat: 38, left: 7, right: 8, thresh_or_leaf: 209863 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 333 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -920 },
+    GbdtNode { feat: 26, left: 10, right: 13, thresh_or_leaf: 81 },
+    GbdtNode { feat: 9, left: 11, right: 12, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2759 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 238 },
+    GbdtNode { feat: 44, left: 14, right: 15, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3004 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1777 },
+    GbdtNode { feat: 5, left: 17, right: 24, thresh_or_leaf: 28418 },
+    GbdtNode { feat: 44, left: 18, right: 21, thresh_or_leaf: 2 },
+    GbdtNode { feat: 2, left: 19, right: 20, thresh_or_leaf: 4706 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1242 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2274 },
+    GbdtNode { feat: 6, left: 22, right: 23, thresh_or_leaf: 61440 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2042 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -18 },
+    GbdtNode { feat: 22, left: 25, right: 28, thresh_or_leaf: 1 },
+    GbdtNode { feat: 3, left: 26, right: 27, thresh_or_leaf: 13076 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1180 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 80 },
+    GbdtNode { feat: 43, left: 29, right: 30, thresh_or_leaf: 23090 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1870 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1476 },
+    GbdtNode { feat: 31, left: 1, right: 14, thresh_or_leaf: 25206 },
+    GbdtNode { feat: 26, left: 2, right: 9, thresh_or_leaf: 33237 },
+    GbdtNode { feat: 15, left: 3, right: 6, thresh_or_leaf: -1 },
+    GbdtNode { feat: 0, left: 4, right: 5, thresh_or_leaf: 44032 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2094 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 779 },
+    GbdtNode { feat: 18, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -894 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 409 },
+    GbdtNode { feat: 38, left: 10, right: 13, thresh_or_leaf: 548845 },
+    GbdtNode { feat: 5, left: 11, right: 12, thresh_or_leaf: 48476 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -399 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -7670 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 544 },
+    GbdtNode { feat: 45, left: 15, right: 22, thresh_or_leaf: 0 },
+    GbdtNode { feat: 33, left: 16, right: 19, thresh_or_leaf: 0 },
+    GbdtNode { feat: 34, left: 17, right: 18, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 45 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1982 },
+    GbdtNode { feat: 31, left: 20, right: 21, thresh_or_leaf: 52428 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 483 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1689 },
+    GbdtNode { feat: 26, left: 23, right: 26, thresh_or_leaf: 4885 },
+    GbdtNode { feat: 12, left: 24, right: 25, thresh_or_leaf: 56173 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 80 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3112 },
+    GbdtNode { feat: 44, left: 27, right: 28, thresh_or_leaf: 3 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1554 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -780 },
+    GbdtNode { feat: 42, left: 1, right: 16, thresh_or_leaf: 1662 },
+    GbdtNode { feat: 15, left: 2, right: 9, thresh_or_leaf: 0 },
+    GbdtNode { feat: 9, left: 3, right: 6, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 38, left: 4, right: 5, thresh_or_leaf: 351359 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1850 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -328 },
     GbdtNode { feat: 19, left: 7, right: 8, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 513 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -666 },
-    GbdtNode { feat: 27, left: 10, right: 13, thresh_or_leaf: 0 },
-    GbdtNode { feat: 31, left: 11, right: 12, thresh_or_leaf: 37449 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -440 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1020 },
-    GbdtNode { feat: 17, left: 14, right: 15, thresh_or_leaf: 430398 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1525 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 537 },
-    GbdtNode { feat: 29, left: 17, right: 24, thresh_or_leaf: 10336 },
-    GbdtNode { feat: 34, left: 18, right: 21, thresh_or_leaf: 0 },
-    GbdtNode { feat: 35, left: 19, right: 20, thresh_or_leaf: 3 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 87 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -968 },
-    GbdtNode { feat: 19, left: 22, right: 23, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -456 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1151 },
-    GbdtNode { feat: 12, left: 25, right: 28, thresh_or_leaf: 58982 },
-    GbdtNode { feat: 31, left: 26, right: 27, thresh_or_leaf: 18724 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -96 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2285 },
-    GbdtNode { feat: 12, left: 29, right: 30, thresh_or_leaf: 61166 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -544 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 750 },
-    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 5429 },
-    GbdtNode { feat: 2, left: 2, right: 9, thresh_or_leaf: 932 },
-    GbdtNode { feat: 3, left: 3, right: 6, thresh_or_leaf: 55 },
-    GbdtNode { feat: 28, left: 4, right: 5, thresh_or_leaf: 15 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -982 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 34 },
-    GbdtNode { feat: 3, left: 7, right: 8, thresh_or_leaf: 588 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1836 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -269 },
-    GbdtNode { feat: 20, left: 10, right: 13, thresh_or_leaf: 1 },
-    GbdtNode { feat: 0, left: 11, right: 12, thresh_or_leaf: 47104 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1925 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -158 },
+    GbdtNode { feat: 29, left: 10, right: 13, thresh_or_leaf: 27993 },
+    GbdtNode { feat: 12, left: 11, right: 12, thresh_or_leaf: 59578 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -964 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 238 },
+    GbdtNode { feat: 4, left: 14, right: 15, thresh_or_leaf: 694 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -860 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2403 },
+    GbdtNode { feat: 43, left: 17, right: 24, thresh_or_leaf: 24362 },
+    GbdtNode { feat: 45, left: 18, right: 21, thresh_or_leaf: 0 },
+    GbdtNode { feat: 22, left: 19, right: 20, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 604 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1901 },
+    GbdtNode { feat: 42, left: 22, right: 23, thresh_or_leaf: 3724 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1004 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2472 },
+    GbdtNode { feat: 28, left: 25, right: 28, thresh_or_leaf: 32768 },
+    GbdtNode { feat: 47, left: 26, right: 27, thresh_or_leaf: 60650 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 417 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1255 },
+    GbdtNode { feat: 44, left: 29, right: 30, thresh_or_leaf: 6 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3753 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -198 },
+    GbdtNode { feat: 35, left: 1, right: 16, thresh_or_leaf: -6 },
+    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 23806 },
+    GbdtNode { feat: 43, left: 3, right: 6, thresh_or_leaf: 6970 },
+    GbdtNode { feat: 13, left: 4, right: 5, thresh_or_leaf: 882023 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2282 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1130 },
+    GbdtNode { feat: 12, left: 7, right: 8, thresh_or_leaf: 20480 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 369 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2545 },
+    GbdtNode { feat: 15, left: 10, right: 13, thresh_or_leaf: -1 },
+    GbdtNode { feat: 44, left: 11, right: 12, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -339 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2060 },
+    GbdtNode { feat: 44, left: 14, right: 15, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1633 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -887 },
+    GbdtNode { feat: 42, left: 17, right: 24, thresh_or_leaf: 1662 },
+    GbdtNode { feat: 9, left: 18, right: 21, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 3, left: 19, right: 20, thresh_or_leaf: 49728 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -232 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2866 },
+    GbdtNode { feat: 20, left: 22, right: 23, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2160 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2008 },
+    GbdtNode { feat: 34, left: 25, right: 28, thresh_or_leaf: 0 },
+    GbdtNode { feat: 47, left: 26, right: 27, thresh_or_leaf: 11919 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1279 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -442 },
+    GbdtNode { feat: 22, left: 29, right: 30, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 618 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2138 },
+    GbdtNode { feat: 2, left: 1, right: 16, thresh_or_leaf: 5283 },
+    GbdtNode { feat: 43, left: 2, right: 9, thresh_or_leaf: 6970 },
+    GbdtNode { feat: 47, left: 3, right: 6, thresh_or_leaf: 5944 },
+    GbdtNode { feat: 12, left: 4, right: 5, thresh_or_leaf: 32768 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1040 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1658 },
+    GbdtNode { feat: 14, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3004 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1144 },
+    GbdtNode { feat: 37, left: 10, right: 13, thresh_or_leaf: 52428 },
+    GbdtNode { feat: 12, left: 11, right: 12, thresh_or_leaf: 34192 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -192 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2028 },
+    GbdtNode { feat: 4, left: 14, right: 15, thresh_or_leaf: 188 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2790 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -600 },
+    GbdtNode { feat: 34, left: 17, right: 24, thresh_or_leaf: 1 },
+    GbdtNode { feat: 18, left: 18, right: 21, thresh_or_leaf: -1 },
+    GbdtNode { feat: 44, left: 19, right: 20, thresh_or_leaf: 3 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -523 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2307 },
+    GbdtNode { feat: 9, left: 22, right: 23, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -114 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 987 },
+    GbdtNode { feat: 27, left: 25, right: 28, thresh_or_leaf: 32 },
+    GbdtNode { feat: 22, left: 26, right: 27, thresh_or_leaf: -2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1731 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1462 },
+    GbdtNode { feat: 27, left: 29, right: 30, thresh_or_leaf: 613 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3155 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 919 },
+    GbdtNode { feat: 2, left: 1, right: 14, thresh_or_leaf: 5283 },
+    GbdtNode { feat: 37, left: 2, right: 9, thresh_or_leaf: 56173 },
+    GbdtNode { feat: 12, left: 3, right: 6, thresh_or_leaf: 25486 },
+    GbdtNode { feat: 43, left: 4, right: 5, thresh_or_leaf: 42629 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2450 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1182 },
+    GbdtNode { feat: 0, left: 7, right: 8, thresh_or_leaf: 41984 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1822 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1276 },
+    GbdtNode { feat: 44, left: 10, right: 11, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -226 },
+    GbdtNode { feat: 29, left: 12, right: 13, thresh_or_leaf: 13201 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3038 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -88 },
+    GbdtNode { feat: 22, left: 15, right: 20, thresh_or_leaf: -2 },
+    GbdtNode { feat: 9, left: 16, right: 19, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 26, left: 17, right: 18, thresh_or_leaf: 33237 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3198 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 7 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1231 },
+    GbdtNode { feat: 34, left: 21, right: 24, thresh_or_leaf: 0 },
+    GbdtNode { feat: 20, left: 22, right: 23, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1162 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 78 },
+    GbdtNode { feat: 15, left: 25, right: 26, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -46 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 962 },
+    GbdtNode { feat: 5, left: 1, right: 14, thresh_or_leaf: 30321 },
+    GbdtNode { feat: 44, left: 2, right: 7, thresh_or_leaf: 2 },
+    GbdtNode { feat: 46, left: 3, right: 4, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2463 },
+    GbdtNode { feat: 17, left: 5, right: 6, thresh_or_leaf: -505548 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1558 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2051 },
+    GbdtNode { feat: 4, left: 8, right: 11, thresh_or_leaf: 12816 },
+    GbdtNode { feat: 43, left: 9, right: 10, thresh_or_leaf: 6970 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 337 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2188 },
+    GbdtNode { feat: 9, left: 12, right: 13, thresh_or_leaf: 362495 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1317 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1256 },
+    GbdtNode { feat: 40, left: 15, right: 22, thresh_or_leaf: 0 },
+    GbdtNode { feat: 34, left: 16, right: 19, thresh_or_leaf: 1 },
+    GbdtNode { feat: 26, left: 17, right: 18, thresh_or_leaf: 81 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -489 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 316 },
+    GbdtNode { feat: 26, left: 20, right: 21, thresh_or_leaf: 1434 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 71 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1687 },
+    GbdtNode { feat: 15, left: 23, right: 24, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3389 },
+    GbdtNode { feat: 43, left: 25, right: 26, thresh_or_leaf: 41413 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2395 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -584 },
+    GbdtNode { feat: 22, left: 1, right: 8, thresh_or_leaf: -2 },
+    GbdtNode { feat: 6, left: 2, right: 3, thresh_or_leaf: 63488 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3096 },
+    GbdtNode { feat: 12, left: 4, right: 5, thresh_or_leaf: 58982 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2028 },
+    GbdtNode { feat: 5, left: 6, right: 7, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1007 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1450 },
+    GbdtNode { feat: 18, left: 9, right: 16, thresh_or_leaf: -1 },
+    GbdtNode { feat: 17, left: 10, right: 13, thresh_or_leaf: -481648 },
+    GbdtNode { feat: 29, left: 11, right: 12, thresh_or_leaf: 28 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -991 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2480 },
+    GbdtNode { feat: 28, left: 14, right: 15, thresh_or_leaf: 103 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2152 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 211 },
+    GbdtNode { feat: 40, left: 17, right: 20, thresh_or_leaf: -1 },
+    GbdtNode { feat: 5, left: 18, right: 19, thresh_or_leaf: 58534 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3134 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -200 },
+    GbdtNode { feat: 45, left: 21, right: 22, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 350 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2267 },
+    GbdtNode { feat: 22, left: 1, right: 12, thresh_or_leaf: -2 },
+    GbdtNode { feat: 9, left: 2, right: 9, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 26, left: 3, right: 6, thresh_or_leaf: 33237 },
+    GbdtNode { feat: 40, left: 4, right: 5, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3224 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -452 },
+    GbdtNode { feat: 34, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 957 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1001 },
+    GbdtNode { feat: 39, left: 10, right: 11, thresh_or_leaf: 32768 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -733 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1514 },
+    GbdtNode { feat: 18, left: 13, right: 20, thresh_or_leaf: -1 },
+    GbdtNode { feat: 17, left: 14, right: 17, thresh_or_leaf: -481648 },
+    GbdtNode { feat: 2, left: 15, right: 16, thresh_or_leaf: 17576 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1721 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1080 },
+    GbdtNode { feat: 28, left: 18, right: 19, thresh_or_leaf: 103 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2028 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 262 },
+    GbdtNode { feat: 34, left: 21, right: 24, thresh_or_leaf: 0 },
+    GbdtNode { feat: 3, left: 22, right: 23, thresh_or_leaf: 30186 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 144 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -814 },
+    GbdtNode { feat: 3, left: 25, right: 26, thresh_or_leaf: 24 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1500 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 665 },
+    GbdtNode { feat: 15, left: 1, right: 16, thresh_or_leaf: -1 },
+    GbdtNode { feat: 5, left: 2, right: 9, thresh_or_leaf: 59919 },
+    GbdtNode { feat: 26, left: 3, right: 6, thresh_or_leaf: 81 },
+    GbdtNode { feat: 2, left: 4, right: 5, thresh_or_leaf: 30 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 843 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2549 },
+    GbdtNode { feat: 4, left: 7, right: 8, thresh_or_leaf: 49886 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1495 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1413 },
+    GbdtNode { feat: 18, left: 10, right: 13, thresh_or_leaf: 0 },
+    GbdtNode { feat: 34, left: 11, right: 12, thresh_or_leaf: 2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1426 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2000 },
+    GbdtNode { feat: 38, left: 14, right: 15, thresh_or_leaf: 440012 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -156 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1606 },
+    GbdtNode { feat: 40, left: 17, right: 24, thresh_or_leaf: 0 },
+    GbdtNode { feat: 0, left: 18, right: 21, thresh_or_leaf: 45056 },
+    GbdtNode { feat: 3, left: 19, right: 20, thresh_or_leaf: 48 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1231 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 733 },
+    GbdtNode { feat: 43, left: 22, right: 23, thresh_or_leaf: 24362 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 89 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1709 },
+    GbdtNode { feat: 43, left: 25, right: 28, thresh_or_leaf: 0 },
+    GbdtNode { feat: 3, left: 26, right: 27, thresh_or_leaf: 135 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1122 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2480 },
+    GbdtNode { feat: 31, left: 29, right: 30, thresh_or_leaf: 26214 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 926 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1580 },
+    GbdtNode { feat: 22, left: 1, right: 10, thresh_or_leaf: -2 },
+    GbdtNode { feat: 9, left: 2, right: 7, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 26, left: 3, right: 4, thresh_or_leaf: 33237 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3002 },
+    GbdtNode { feat: 17, left: 5, right: 6, thresh_or_leaf: -38336 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -925 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 836 },
+    GbdtNode { feat: 39, left: 8, right: 9, thresh_or_leaf: 32768 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -732 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1441 },
+    GbdtNode { feat: 34, left: 11, right: 18, thresh_or_leaf: 1 },
+    GbdtNode { feat: 24, left: 12, right: 15, thresh_or_leaf: 1 },
+    GbdtNode { feat: 40, left: 13, right: 14, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1621 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 114 },
+    GbdtNode { feat: 26, left: 16, right: 17, thresh_or_leaf: 6603 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2021 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1803 },
+    GbdtNode { feat: 27, left: 19, right: 22, thresh_or_leaf: 32 },
+    GbdtNode { feat: 35, left: 20, right: 21, thresh_or_leaf: -6 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1284 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1351 },
+    GbdtNode { feat: 27, left: 23, right: 24, thresh_or_leaf: 613 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3718 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 715 },
+    GbdtNode { feat: 43, left: 1, right: 16, thresh_or_leaf: 23090 },
+    GbdtNode { feat: 34, left: 2, right: 9, thresh_or_leaf: 2 },
+    GbdtNode { feat: 24, left: 3, right: 6, thresh_or_leaf: 1 },
+    GbdtNode { feat: 38, left: 4, right: 5, thresh_or_leaf: 239013 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 747 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -126 },
+    GbdtNode { feat: 9, left: 7, right: 8, thresh_or_leaf: 762999 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2251 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -34 },
+    GbdtNode { feat: 31, left: 10, right: 13, thresh_or_leaf: 57344 },
+    GbdtNode { feat: 4, left: 11, right: 12, thresh_or_leaf: 11838 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -103 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2596 },
+    GbdtNode { feat: 47, left: 14, right: 15, thresh_or_leaf: 47002 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2756 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 848 },
+    GbdtNode { feat: 37, left: 17, right: 24, thresh_or_leaf: 37449 },
+    GbdtNode { feat: 1, left: 18, right: 21, thresh_or_leaf: 0 },
+    GbdtNode { feat: 15, left: 19, right: 20, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1390 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -73 },
+    GbdtNode { feat: 43, left: 22, right: 23, thresh_or_leaf: 32466 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -417 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3382 },
+    GbdtNode { feat: 20, left: 25, right: 28, thresh_or_leaf: -1 },
+    GbdtNode { feat: 16, left: 26, right: 27, thresh_or_leaf: 55705 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1545 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 952 },
+    GbdtNode { feat: 16, left: 29, right: 30, thresh_or_leaf: 55705 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 3097 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 80 },
+    GbdtNode { feat: 22, left: 1, right: 10, thresh_or_leaf: -2 },
+    GbdtNode { feat: 9, left: 2, right: 7, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 38, left: 3, right: 4, thresh_or_leaf: 677040 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2960 },
+    GbdtNode { feat: 34, left: 5, right: 6, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 827 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1057 },
+    GbdtNode { feat: 39, left: 8, right: 9, thresh_or_leaf: 32768 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -696 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1366 },
+    GbdtNode { feat: 18, left: 11, right: 18, thresh_or_leaf: -1 },
+    GbdtNode { feat: 34, left: 12, right: 15, thresh_or_leaf: 1 },
+    GbdtNode { feat: 38, left: 13, right: 14, thresh_or_leaf: 677040 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1789 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 522 },
+    GbdtNode { feat: 15, left: 16, right: 17, thresh_or_leaf: -1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1664 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2151 },
+    GbdtNode { feat: 45, left: 19, right: 22, thresh_or_leaf: 0 },
+    GbdtNode { feat: 34, left: 20, right: 21, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -143 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 523 },
+    GbdtNode { feat: 26, left: 23, right: 24, thresh_or_leaf: 12478 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3015 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 376 },
+    GbdtNode { feat: 22, left: 1, right: 8, thresh_or_leaf: -2 },
+    GbdtNode { feat: 5, left: 2, right: 3, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3035 },
+    GbdtNode { feat: 39, left: 4, right: 7, thresh_or_leaf: 32768 },
+    GbdtNode { feat: 35, left: 5, right: 6, thresh_or_leaf: -3 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 658 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1575 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1420 },
+    GbdtNode { feat: 15, left: 9, right: 16, thresh_or_leaf: -1 },
+    GbdtNode { feat: 5, left: 10, right: 13, thresh_or_leaf: 59919 },
+    GbdtNode { feat: 43, left: 11, right: 12, thresh_or_leaf: 10156 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -258 },
     GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2079 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 234 },
-    GbdtNode { feat: 6, left: 14, right: 15, thresh_or_leaf: 57344 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 549 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -542 },
-    GbdtNode { feat: 29, left: 17, right: 24, thresh_or_leaf: 11051 },
-    GbdtNode { feat: 15, left: 18, right: 21, thresh_or_leaf: 1 },
-    GbdtNode { feat: 5, left: 19, right: 20, thresh_or_leaf: 63434 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1450 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -40 },
-    GbdtNode { feat: 18, left: 22, right: 23, thresh_or_leaf: -1 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1288 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 563 },
-    GbdtNode { feat: 12, left: 25, right: 28, thresh_or_leaf: 54613 },
-    GbdtNode { feat: 8, left: 26, right: 27, thresh_or_leaf: 13107 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -52 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 2297 },
-    GbdtNode { feat: 14, left: 29, right: 30, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -503 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1224 },
-    GbdtNode { feat: 22, left: 1, right: 6, thresh_or_leaf: -2 },
-    GbdtNode { feat: 33, left: 2, right: 3, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2177 },
-    GbdtNode { feat: 16, left: 4, right: 5, thresh_or_leaf: 29491 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -333 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 176 },
-    GbdtNode { feat: 5, left: 7, right: 14, thresh_or_leaf: 23871 },
-    GbdtNode { feat: 20, left: 8, right: 11, thresh_or_leaf: 1 },
-    GbdtNode { feat: 13, left: 9, right: 10, thresh_or_leaf: 948027 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 300 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1814 },
-    GbdtNode { feat: 35, left: 12, right: 13, thresh_or_leaf: -4 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -598 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 874 },
-    GbdtNode { feat: 34, left: 15, right: 18, thresh_or_leaf: 1 },
-    GbdtNode { feat: 6, left: 16, right: 17, thresh_or_leaf: 57344 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1483 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -151 },
-    GbdtNode { feat: 19, left: 19, right: 20, thresh_or_leaf: 0 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -139 },
-    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1681 },
+    GbdtNode { feat: 27, left: 14, right: 15, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 478 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1517 },
+    GbdtNode { feat: 40, left: 17, right: 20, thresh_or_leaf: 0 },
+    GbdtNode { feat: 2, left: 18, right: 19, thresh_or_leaf: 34661 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 703 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -286 },
+    GbdtNode { feat: 5, left: 21, right: 22, thresh_or_leaf: 28418 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1896 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1877 },
+    GbdtNode { feat: 22, left: 1, right: 12, thresh_or_leaf: -2 },
+    GbdtNode { feat: 9, left: 2, right: 9, thresh_or_leaf: 1025798 },
+    GbdtNode { feat: 38, left: 3, right: 6, thresh_or_leaf: 677040 },
+    GbdtNode { feat: 40, left: 4, right: 5, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -3021 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -363 },
+    GbdtNode { feat: 34, left: 7, right: 8, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 811 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -1010 },
+    GbdtNode { feat: 17, left: 10, right: 11, thresh_or_leaf: -481648 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1233 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -564 },
+    GbdtNode { feat: 15, left: 13, right: 20, thresh_or_leaf: -1 },
+    GbdtNode { feat: 5, left: 14, right: 17, thresh_or_leaf: 59919 },
+    GbdtNode { feat: 43, left: 15, right: 16, thresh_or_leaf: 10156 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -146 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2003 },
+    GbdtNode { feat: 18, left: 18, right: 19, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -840 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 609 },
+    GbdtNode { feat: 29, left: 21, right: 24, thresh_or_leaf: 8073 },
+    GbdtNode { feat: 40, left: 22, right: 23, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -4 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1337 },
+    GbdtNode { feat: 12, left: 25, right: 26, thresh_or_leaf: 54613 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1914 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 203 },
+    GbdtNode { feat: 22, left: 1, right: 8, thresh_or_leaf: -2 },
+    GbdtNode { feat: 5, left: 2, right: 3, thresh_or_leaf: 64921 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2963 },
+    GbdtNode { feat: 2, left: 4, right: 7, thresh_or_leaf: 51793 },
+    GbdtNode { feat: 2, left: 5, right: 6, thresh_or_leaf: 1836 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -954 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1008 },
+    GbdtNode { feat: 34, left: 9, right: 16, thresh_or_leaf: 1 },
+    GbdtNode { feat: 18, left: 10, right: 13, thresh_or_leaf: -1 },
+    GbdtNode { feat: 15, left: 11, right: 12, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -534 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2250 },
+    GbdtNode { feat: 15, left: 14, right: 15, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -510 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 194 },
+    GbdtNode { feat: 3, left: 17, right: 20, thresh_or_leaf: 38 },
+    GbdtNode { feat: 24, left: 18, right: 19, thresh_or_leaf: 1 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: -2043 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 716 },
+    GbdtNode { feat: 19, left: 21, right: 22, thresh_or_leaf: 0 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 136 },
+    GbdtNode { feat: u8::MAX, left: 0, right: 0, thresh_or_leaf: 1283 },
 ];
 
 /// Minimum integer GBDT margin required for top-turn session concordance to promote `sessions[0]`.
@@ -2754,7 +2702,16 @@ fn eval_li_roth_turn(ix: &Index, spec: &QueryAt1Spec, ti: usize) -> (i32, i32) {
     (0, dur_exact)
 }
 
-/// Extracts all `N_AT1_FEATS` (`36`) deterministic `i32` features for every turn in `pool`.
+pub(in crate::retrieval) struct PoolScoreSlices<'a> {
+    pub t_scene: &'a [f32],
+    pub t_own: &'a [f32],
+    pub t_turn_raw: &'a [f32],
+    pub t_bridge: &'a [f32],
+    pub s_score: &'a [f32],
+    pub bridge_boost: &'a [f32],
+}
+
+/// Extracts all `N_AT1_FEATS` (`48`) deterministic `i32` features for every turn in `pool`.
 pub(in crate::retrieval) fn extract_pool_features_q16(
     ix: &Index,
     plan: &QueryPlan,
@@ -2762,12 +2719,14 @@ pub(in crate::retrieval) fn extract_pool_features_q16(
     pool: &[usize],
     final_turn_indices: &[usize],
     final_session_indices: &[usize],
-    t_scene: &[f32],
-    t_own: &[f32],
-    t_turn_raw: &[f32],
-    s_score: &[f32],
-    bridge_boost: &[f32],
+    sc: &PoolScoreSlices<'_>,
 ) -> Vec<[i32; N_AT1_FEATS]> {
+    let t_scene = sc.t_scene;
+    let t_own = sc.t_own;
+    let t_turn_raw = sc.t_turn_raw;
+    let t_bridge = sc.t_bridge;
+    let s_score = sc.s_score;
+    let bridge_boost = sc.bridge_boost;
     let n = pool.len();
     if n == 0 {
         return Vec::new();
@@ -2805,11 +2764,24 @@ pub(in crate::retrieval) fn extract_pool_features_q16(
             ieee754_bits_to_q16(s.to_bits())
         })
         .collect();
+    let t_bridge_q16: Vec<u64> = pool
+        .iter()
+        .map(|&ti| ieee754_bits_to_q16(t_bridge.get(ti).copied().unwrap_or(0.0).to_bits()))
+        .collect();
+    let s_bridge_q16: Vec<u64> = pool
+        .iter()
+        .map(|&ti| {
+            let si = ix.turns[ti].session;
+            ieee754_bits_to_q16(bridge_boost.get(si).copied().unwrap_or(0.0).to_bits())
+        })
+        .collect();
 
     let max_scene = scene_q16.iter().copied().max().unwrap_or(1).max(1);
     let max_own = own_q16.iter().copied().max().unwrap_or(1).max(1);
     let max_raw = raw_q16.iter().copied().max().unwrap_or(1).max(1);
     let max_sess = sess_q16.iter().copied().max().unwrap_or(1).max(1);
+    let max_t_bridge = t_bridge_q16.iter().copied().max().unwrap_or(1).max(1);
+    let max_s_bridge = s_bridge_q16.iter().copied().max().unwrap_or(1).max(1);
 
     let turn_prose_and_blip_masks = |ti: usize| -> (u64, u64) {
         let bag = &ix.turn_own_bags[ti];
@@ -2880,6 +2852,106 @@ pub(in crate::retrieval) fn extract_pool_features_q16(
     let max_pool_prose_ic = max_queried_sp_ic.max(max_other_sp_ic);
     let deficit_i32 = (max_other_sp_ic as i64 - max_queried_sp_ic as i64)
         .clamp(-524_288, 524_288) as i32;
+
+    let mut rare_q_mask = 0u64;
+    for qt in &plan.terms {
+        if !qt.exact_hit {
+            continue;
+        }
+        let Some(g) = qt.group else {
+            continue;
+        };
+        if g >= 64 || (spec.non_sp_mask & (1u64 << g)) == 0 {
+            continue;
+        }
+        let df = ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(nt_u32);
+        if df <= 8 {
+            rare_q_mask |= 1u64 << g;
+        }
+    }
+    let mut union_queried_sp_rare_mask = 0u64;
+    let mut union_other_sp_decl_rare_mask = 0u64;
+    for idx in 0..n {
+        let tr = &ix.turns[pool[idx]];
+        if sp_states[idx] > 0 {
+            union_queried_sp_rare_mask |= prose_masks[idx] & rare_q_mask;
+        } else if sp_states[idx] < 0 && !tr.is_question && !tr.is_backchannel {
+            union_other_sp_decl_rare_mask |= prose_masks[idx] & rare_q_mask;
+        }
+    }
+    // C13 Presupposition-Conflict Detector (corpus/pool-wide):
+    // When the queried speaker has ZERO asserted hits on the query's rare non-speaker predicates
+    // (`df <= 8`) across the entire corpus while a non-queried declarative turn attests them,
+    // neutralize `f[15] = 0` BEFORE GBDT evaluation so tree splits on `f[15]` never bury Cat 5 gold.
+    let mut corpus_queried_sp_rare_asserted = union_queried_sp_rare_mask != 0;
+    if !corpus_queried_sp_rare_asserted && rare_q_mask != 0 && !spec.queried_speakers.is_empty() {
+        'rare_scan: for (ti_c, tr_c) in ix.turns.iter().enumerate() {
+            if tr_c.is_question || tr_c.is_backchannel {
+                continue;
+            }
+            if !spec
+                .queried_speakers
+                .iter()
+                .any(|qs| qs.eq_ignore_ascii_case(&tr_c.speaker))
+            {
+                continue;
+            }
+            let (pmc, _) = turn_prose_and_blip_masks(ti_c);
+            if (pmc & rare_q_mask) != 0 {
+                corpus_queried_sp_rare_asserted = true;
+                break 'rare_scan;
+            }
+        }
+    }
+    let presup_conflict = spec.has_named_corpus
+        && !spec.queried_speakers.is_empty()
+        && rare_q_mask != 0
+        && !corpus_queried_sp_rare_asserted
+        && union_other_sp_decl_rare_mask != 0;
+
+    // Precompute query WordNet 41-supersense bitmask (`f[44]`) & non-speaker exact query ids (`f[45]`):
+    let mut q_ss_mask = 0u64;
+    for h in &spec.enty_head_nouns {
+        q_ss_mask |= crate::wordnet::supersense_mask(h);
+    }
+    for qt in &plan.terms {
+        if let Some(g) = qt.group
+            && g < 64
+            && (spec.non_sp_mask & (1u64 << g)) != 0
+        {
+            if let Some(nm) = ix.vocab.names.get(qt.id as usize) {
+                q_ss_mask |= crate::wordnet::supersense_mask(nm);
+            }
+        }
+    }
+    let q_nonsp_exact_ids: Vec<u32> = plan
+        .terms
+        .iter()
+        .filter(|qt| {
+            qt.exact_hit
+                && qt.group.is_some_and(|g| g < 64 && (spec.non_sp_mask & (1u64 << g)) != 0)
+        })
+        .map(|qt| qt.id)
+        .collect();
+    let q_inline_dates = inline_date_tokens(&q.text);
+    let mut sess_max_own: BTreeMap<usize, u64> = BTreeMap::new();
+    for &ti in pool {
+        let s = ix.turns[ti].session;
+        sess_max_own.entry(s).or_insert_with(|| {
+            ix.session_turns
+                .get(s)
+                .map(|ms| {
+                    ms.iter()
+                        .map(|&m| {
+                            ieee754_bits_to_q16(t_own.get(m).copied().unwrap_or(0.0).to_bits())
+                        })
+                        .max()
+                        .unwrap_or(1)
+                        .max(1)
+                })
+                .unwrap_or(1)
+        });
+    }
 
     let mut incoming_rsb: BTreeMap<usize, i32> = BTreeMap::new();
     for &src_ti in final_turn_indices.iter().take(5) {
@@ -2970,14 +3042,99 @@ pub(in crate::retrieval) fn extract_pool_features_q16(
         }
         f[14] = wn_hits;
 
+        let mut partner_q_pm1 = 0u64;
+        if let Some(members) = ix.session_turns.get(sess)
+            && let Some(pos) = members.iter().position(|&m| m == ti)
+        {
+            let mut triad_mask = p_non_sp;
+            if pos >= 1 {
+                let prv1 = members[pos - 1];
+                let (pm1, _) = turn_prose_and_blip_masks(prv1);
+                triad_mask |= pm1 & spec.non_sp_mask;
+                if ix.turns[prv1].is_question && ix.turns[prv1].speaker != t.speaker {
+                    if ix.turns[prv1].is_pure_info_question {
+                        partner_q_pm1 = pm1 & spec.non_sp_mask;
+                    }
+                    let ow1 = ieee754_bits_to_q16(t_own.get(prv1).copied().unwrap_or(0.0).to_bits());
+                    f[26] = ((ow1.saturating_mul(65_536)) / max_own).min(65_536) as i32;
+                }
+            }
+            if pos >= 2 {
+                let prv2 = members[pos - 2];
+                let (pm2, bm2) = turn_prose_and_blip_masks(prv2);
+                let ow2 = ieee754_bits_to_q16(t_own.get(prv2).copied().unwrap_or(0.0).to_bits());
+                let ow2_norm = ((ow2.saturating_mul(65_536)) / max_own).min(65_536) as i32;
+                if ix.turns[prv2].is_question {
+                    f[27] = ow2_norm;
+                    triad_mask |= pm2 & spec.non_sp_mask;
+                }
+                if !ix.turns[prv2].blip_feats.is_empty()
+                    && ix.turns[prv2].speaker == t.speaker
+                    && t.blip_feats.is_empty()
+                    && !t.is_question
+                {
+                    f[28] = ow2_norm.max(if (pm2 | bm2) & spec.non_sp_mask != 0 {
+                        32_768
+                    } else {
+                        0
+                    });
+                    triad_mask |= (pm2 | bm2) & spec.non_sp_mask;
+                }
+                if t.anaphoric
+                    && (t_own.get(prv2).copied().unwrap_or(0.0) > 0.0
+                        || t_own.get(members[pos - 1]).copied().unwrap_or(0.0) > 0.0)
+                {
+                    f[30] = 1;
+                }
+            }
+            if !t.is_question && pos + 1 < members.len() {
+                let nxt1 = members[pos + 1];
+                let (pm_n1, _) = turn_prose_and_blip_masks(nxt1);
+                triad_mask |= pm_n1 & spec.non_sp_mask;
+            }
+            if !t.is_question && pos + 2 < members.len() {
+                let nxt2 = members[pos + 2];
+                if ix.turns[nxt2].anaphoric {
+                    let own_n2 =
+                        ieee754_bits_to_q16(t_own.get(nxt2).copied().unwrap_or(0.0).to_bits());
+                    f[29] = ((own_n2.saturating_mul(65_536)) / max_own).min(65_536) as i32;
+                }
+            }
+            f[31] = if spec.non_sp_cnt > 0 {
+                ((triad_mask.count_ones() as u64 * 65_536) / (spec.non_sp_cnt as u64)) as i32
+            } else {
+                65_536
+            };
+        }
+
         let sp_st = sp_states[idx];
-        f[15] = sp_st;
-        let has_own_topic = p_non_sp != 0 || wn_hits > 0;
+        // C13 Pre-GBDT Neutralizer: on presupposition conflict (`presup_conflict`), neutralize
+        // `f[15] = 0` so the tree splits on `f[15]` never bury Cat 5 Adversarial refutation turns.
+        f[15] = if presup_conflict { 0 } else { sp_st };
+        let inherited_partner_topic =
+            !t.is_question && !t.is_backchannel && partner_q_pm1 != 0;
+        let eff_topic_mask = p_non_sp
+            | if inherited_partner_topic {
+                partner_q_pm1
+            } else {
+                0
+            };
+        let has_own_topic = eff_topic_mask != 0 || wn_hits > 0;
+        let adv_rare_witness = sp_st < 0
+            && ((p_non_sp & rare_q_mask) & !union_queried_sp_rare_mask) != 0
+            && prose_ics[idx] > max_queried_sp_ic.saturating_add(32_768);
         f[16] = if sp_st > 0 && has_own_topic {
-            f[8] + 16_384
+            let eff_cov = if spec.non_sp_cnt > 0 {
+                ((eff_topic_mask.count_ones() as u64 * 65_536) / (spec.non_sp_cnt as u64)) as i32
+            } else {
+                65_536
+            };
+            eff_cov + 16_384
         } else if sp_st > 0 && !has_own_topic && b_non_sp == 0 && max_pool_prose_ic > 0 {
             -65_536
-        } else if sp_st < 0 && max_queried_sp_ic == 0 && prose_ics[idx] > 0 {
+        } else if adv_rare_witness
+            || (sp_st < 0 && max_queried_sp_ic == 0 && prose_ics[idx] > 0)
+        {
             f[8] + 32_768
         } else {
             0
@@ -3062,67 +3219,6 @@ pub(in crate::retrieval) fn extract_pool_features_q16(
                     && t.entities.is_empty()),
         );
 
-        if let Some(members) = ix.session_turns.get(sess)
-            && let Some(pos) = members.iter().position(|&m| m == ti)
-        {
-            let mut triad_mask = p_non_sp;
-            if pos >= 1 {
-                let prv1 = members[pos - 1];
-                let (pm1, _) = turn_prose_and_blip_masks(prv1);
-                triad_mask |= pm1 & spec.non_sp_mask;
-                if ix.turns[prv1].is_question && ix.turns[prv1].speaker != t.speaker {
-                    let ow1 = ieee754_bits_to_q16(t_own.get(prv1).copied().unwrap_or(0.0).to_bits());
-                    f[26] = ((ow1.saturating_mul(65_536)) / max_own).min(65_536) as i32;
-                }
-            }
-            if pos >= 2 {
-                let prv2 = members[pos - 2];
-                let (pm2, bm2) = turn_prose_and_blip_masks(prv2);
-                let ow2 = ieee754_bits_to_q16(t_own.get(prv2).copied().unwrap_or(0.0).to_bits());
-                let ow2_norm = ((ow2.saturating_mul(65_536)) / max_own).min(65_536) as i32;
-                if ix.turns[prv2].is_question {
-                    f[27] = ow2_norm;
-                    triad_mask |= pm2 & spec.non_sp_mask;
-                }
-                if !ix.turns[prv2].blip_feats.is_empty()
-                    && ix.turns[prv2].speaker == t.speaker
-                    && t.blip_feats.is_empty()
-                    && !t.is_question
-                {
-                    f[28] = ow2_norm.max(if (pm2 | bm2) & spec.non_sp_mask != 0 {
-                        32_768
-                    } else {
-                        0
-                    });
-                    triad_mask |= (pm2 | bm2) & spec.non_sp_mask;
-                }
-                if t.anaphoric
-                    && (t_own.get(prv2).copied().unwrap_or(0.0) > 0.0
-                        || t_own.get(members[pos - 1]).copied().unwrap_or(0.0) > 0.0)
-                {
-                    f[30] = 1;
-                }
-            }
-            if !t.is_question && pos + 1 < members.len() {
-                let nxt1 = members[pos + 1];
-                let (pm_n1, _) = turn_prose_and_blip_masks(nxt1);
-                triad_mask |= pm_n1 & spec.non_sp_mask;
-            }
-            if !t.is_question && pos + 2 < members.len() {
-                let nxt2 = members[pos + 2];
-                if ix.turns[nxt2].anaphoric {
-                    let own_n2 =
-                        ieee754_bits_to_q16(t_own.get(nxt2).copied().unwrap_or(0.0).to_bits());
-                    f[29] = ((own_n2.saturating_mul(65_536)) / max_own).min(65_536) as i32;
-                }
-            }
-            f[31] = if spec.non_sp_cnt > 0 {
-                ((triad_mask.count_ones() as u64 * 65_536) / (spec.non_sp_cnt as u64)) as i32
-            } else {
-                65_536
-            };
-        }
-
         let is_sup = !spec.past_override
             && (turn_is_superseded(ix, ti)
                 || ix.torrens_superseded.get(ti).copied().unwrap_or(false));
@@ -3130,6 +3226,154 @@ pub(in crate::retrieval) fn extract_pool_features_q16(
         let rsb_deg = (t.exact_edges.len() as i32) + incoming_rsb.get(&ti).copied().unwrap_or(0);
         f[33] = rsb_deg.min(16);
         f[34] = (t.slot_entities_clean.min(16)) as i32;
+
+        // f[36]: `[caption]` (`blip_feats`) non-speaker query coverage ratio in Q16.
+        f[36] = if spec.non_sp_cnt > 0 {
+            ((b_non_sp.count_ones() as u64 * 65_536) / (spec.non_sp_cnt as u64)) as i32
+        } else {
+            0
+        };
+        // f[37]: max non-speaker query coverage (`prose | caption`) of any same-session `[caption]`
+        // neighbor within `+-2` turns of `ti` (captures photo-sharing + reply dyads).
+        // f[38]: `stimulus_ref_ic_q16` — partner question / `answers` stimulus IC projected onto
+        // declarative reply `t` without length damping.
+        let mut cap_nb_cov_q16 = 0i32;
+        let mut stim_ic_q16 = 0u64;
+        if let Some(members) = ix.session_turns.get(sess)
+            && let Some(pos) = members.iter().position(|&m| m == ti)
+        {
+            let lo = pos.saturating_sub(2);
+            let hi = (pos + 2).min(members.len().saturating_sub(1));
+            for (p_nb, &nb_ti) in members.iter().enumerate().take(hi + 1).skip(lo) {
+                if p_nb == pos {
+                    continue;
+                }
+                if !ix.turns[nb_ti].blip_feats.is_empty() {
+                    let (pm_nb, bm_nb) = turn_prose_and_blip_masks(nb_ti);
+                    let cov_nb = ((pm_nb | bm_nb) & spec.non_sp_mask).count_ones() as u64;
+                    if cov_nb > 0 && spec.non_sp_cnt > 0 {
+                        let qv = ((cov_nb * 65_536) / (spec.non_sp_cnt as u64)) as i32;
+                        if qv > cap_nb_cov_q16 {
+                            cap_nb_cov_q16 = qv;
+                        }
+                    }
+                }
+            }
+            if !t.is_question && !t.is_backchannel {
+                if pos >= 1 {
+                    let prv1 = members[pos - 1];
+                    if (ix.turns[prv1].is_question && ix.turns[prv1].speaker != t.speaker)
+                        || t.answers == Some(prv1)
+                    {
+                        let (pm1, bm1) = turn_prose_and_blip_masks(prv1);
+                        stim_ic_q16 = stim_ic_q16.max(mask_ic_sum((pm1 | bm1) & spec.non_sp_mask));
+                    }
+                }
+                if pos >= 2 {
+                    let prv2 = members[pos - 2];
+                    if t.answers == Some(prv2)
+                        || (ix.turns[prv2].is_question && ix.turns[prv2].speaker != t.speaker)
+                    {
+                        let (pm2, bm2) = turn_prose_and_blip_masks(prv2);
+                        let half = mask_ic_sum((pm2 | bm2) & spec.non_sp_mask) / 2;
+                        stim_ic_q16 = stim_ic_q16.max(half);
+                    }
+                }
+            }
+        }
+        f[37] = cap_nb_cov_q16;
+        f[38] = stim_ic_q16.min(1_048_576) as i32;
+        // f[39]: fraction (Q16) of rare non-speaker query groups (`df <= 8`) matched in prose.
+        let rare_cnt = rare_q_mask.count_ones() as u64;
+        f[39] = if rare_cnt > 0 {
+            ((((p_non_sp & rare_q_mask).count_ones() as u64) * 65_536) / rare_cnt) as i32
+        } else {
+            0
+        };
+        // f[40]: resolved_timex exact calendar alignment on temporal queries.
+        let mut timex_exact = false;
+        if !q_inline_dates.is_empty() && !t.resolved_timex.is_empty() {
+            'tx: for &(iv_s, iv_e) in &t.resolved_timex {
+                let span = iv_e.saturating_sub(iv_s);
+                if span > 3 * 86_400 {
+                    continue;
+                }
+                let mid = iv_s + span / 2;
+                let ctoks = calendar_tokens(mid);
+                if ctoks.iter().any(|ct| q_inline_dates.iter().any(|qd| qd == ct)) {
+                    timex_exact = true;
+                    break 'tx;
+                }
+            }
+        }
+        f[40] = if timex_exact {
+            2
+        } else if spec.time_when && (!t.resolved_timex.is_empty() || t.has_temporal || prose_date_hit) {
+            1
+        } else if spec.time_when {
+            -1
+        } else {
+            0
+        };
+        // f[41]: C13 presupposition-conflict refuter signal (`+2` for non-queried declarative
+        // holding unattested rare predicate, `-1` for queried speaker lacking it, `0` otherwise).
+        f[41] = if presup_conflict {
+            if sp_st < 0 && !t.is_question && !t.is_backchannel && (p_non_sp & rare_q_mask) != 0 {
+                2
+            } else if sp_st > 0 {
+                -1
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        // f[42]: normalized Stage-04/11 turn bridge lift `t_bridge[ti]` in Q16.
+        f[42] = ((t_bridge_q16[idx].saturating_mul(65_536)) / max_t_bridge).min(65_536) as i32;
+        // f[43]: normalized Stage-04 session bridge lift `bridge_boost[sess]` in Q16.
+        f[43] = ((s_bridge_q16[idx].saturating_mul(65_536)) / max_s_bridge).min(65_536) as i32;
+        // f[44]: WordNet 41-supersense bitwise intersection count (zero-overlap semantic typing).
+        let ss_hits = if q_ss_mask != 0 {
+            let mut turn_ss = 0u64;
+            for tw in &prose_words {
+                if tw.len() >= 3 && is_content(tw) {
+                    turn_ss |= crate::wordnet::supersense_mask(tw);
+                }
+            }
+            (turn_ss & q_ss_mask).count_ones().min(16) as i32
+        } else {
+            0
+        };
+        f[44] = ss_hits;
+        // f[45]: 1 if matched query terms appear ONLY inside `other_speaker_terms` (2nd-person praise).
+        let only_other = if !t.other_speaker_terms.is_empty() && !q_nonsp_exact_ids.is_empty() {
+            let mut hit_any = false;
+            let mut all_other = true;
+            for &qid in &q_nonsp_exact_ids {
+                if t.content.contains(&qid) {
+                    hit_any = true;
+                    if !t.other_speaker_terms.contains(&qid) {
+                        all_other = false;
+                        break;
+                    }
+                }
+            }
+            hit_any && all_other
+        } else {
+            false
+        };
+        f[45] = i32::from(only_other);
+        // f[46]: 4-bit modality state (`+1` pure ASSERTED, `-1` pure HYPOTHETICAL, `0` mixed/neutral).
+        f[46] = if (t.modality_mask & 0x01) != 0 && (t.modality_mask & 0x04) == 0 {
+            1
+        } else if (t.modality_mask & 0x04) != 0 && (t.modality_mask & 0x01) == 0 {
+            -1
+        } else {
+            0
+        };
+        // f[47]: within-session `t_own` dominance ratio in Q16 (`65_536` iff strongest turn in session).
+        let smax_own = sess_max_own.get(&sess).copied().unwrap_or(1).max(1);
+        f[47] = ((own_q16[idx].saturating_mul(65_536)) / smax_own).min(65_536) as i32;
 
         out[idx] = f;
     }
@@ -3182,16 +3426,63 @@ struct AnonCondorcetCtx<'a> {
     q: &'a Query,
     t_scene: &'a [f32],
     t_own: &'a [f32],
+    t_exact_mask: &'a [u64],
     s_score: &'a [f32],
     bridge_boost: &'a [f32],
 }
 
-/// Deterministic 5-ballot Condorcet `@1` verifier for anonymous User/Assistant dialogues
-/// (BEAM & LongMemEval_S). Strictly reorders within `0..5` so `@5` membership is 100% invariant.
+// hardcode-scan: closed-class (revision, state-update, and correction markers)
+const CLOSED_REVISION_CUES: &[&str] = &[
+    "actually",
+    "instead",
+    "anymore",
+    "switched",
+    "changed",
+    "updated",
+    "updating",
+    "revised",
+    "adjusted",
+    "increased",
+    "decreased",
+    "extended",
+    "replaced",
+    "postponed",
+    "rescheduled",
+];
+
+fn turn_has_revision_cue(text: &str) -> bool {
+    let low = text.to_ascii_lowercase();
+    if low.contains("no longer") || low.contains("instead of") || low.contains("rather than") {
+        return true;
+    }
+    raw_tokens(&low)
+        .iter()
+        .any(|w| CLOSED_REVISION_CUES.contains(&w.as_str()))
+}
+
+fn turns_share_rare_slot_anchor(ix: &Index, t_a: usize, t_b: usize) -> bool {
+    let ns = ix.session_turns.len().max(1);
+    let hub_df = ((ns / 3).clamp(4, 32)) as u32;
+    let a = &ix.turns[t_a];
+    let b = &ix.turns[t_b];
+    if a.entities.iter().any(|e| {
+        b.entities.contains(e) && ix.s_stats.df.get(e).copied().unwrap_or(0) <= hub_df
+    }) {
+        return true;
+    }
+    a.content.iter().any(|c| {
+        b.content.contains(c) && (1..=hub_df).contains(&ix.s_stats.df.get(c).copied().unwrap_or(0))
+    })
+}
+
+/// Deterministic 5-ballot Condorcet `@1` verifier for anonymous User/Assistant dialogues.
+/// Strictly reorders within `0..5` (or inserts a latest-leaf revision ahead while keeping `@5`
+/// intact) and preserves `@5` membership on Rank-1 user-source recovery.
 fn apply_anonymous_dialogue_at1_condorcet_q16(
     ctx: &AnonCondorcetCtx<'_>,
-    final_turn_indices: &mut [usize],
-    final_session_indices: &mut [usize],
+    final_turn_indices: &mut Vec<usize>,
+    final_session_indices: &mut Vec<usize>,
+    k: usize,
 ) {
     let w = final_turn_indices.len().min(5);
     if w < 2 {
@@ -3199,20 +3490,19 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
     }
     let ix = ctx.ix;
     let spec = build_query_at1_spec(ix, ctx.plan, ctx.q);
-    let t0 = final_turn_indices[0];
-    let s0 = ix.turns[t0].session;
+    let _t0 = final_turn_indices[0];
+    let _s0 = ix.turns[_t0].session;
     let sight_of = |s: usize| -> u64 {
         let sc = ctx.s_score.get(s).copied().unwrap_or(0.0)
             + ctx.bridge_boost.get(s).copied().unwrap_or(0.0);
         ieee754_bits_to_q16(sc.to_bits())
     };
-    let sight0 = sight_of(s0);
     let role_ok = |ti: usize| -> bool {
         let tr = &ix.turns[ti];
         if ctx.eff_it.assistant_attribution {
             tr.field == 1
         } else {
-            tr.field == 0 && !tr.is_question
+            tr.field == 0 && (!tr.is_question || tr.content.len() >= 6)
         }
     };
     let self_share_of = |ti: usize| -> u64 {
@@ -3220,6 +3510,697 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
         let scn = ieee754_bits_to_q16(ctx.t_scene.get(ti).copied().unwrap_or(0.0).to_bits()).max(1);
         own.saturating_mul(65_536) / scn
     };
+
+    let mut q_mask_full = 0u64;
+    for qt in &ctx.plan.terms {
+        if qt.exact_hit
+            && let Some(g) = qt.group
+            && g < 64
+        {
+            q_mask_full |= 1u64 << g;
+        }
+    }
+
+    let q_low = ctx.q.text.trim_start().to_ascii_lowercase();
+    let q_toks = raw_tokens(&ctx.q.text);
+    let is_history_or_agg = q_low.starts_with("have i ")
+        || q_low.starts_with("have we ")
+        || q_low.contains("did i ")
+        || q_low.contains("did we ")
+        || q_toks
+            .iter()
+            .any(|w| matches!(w.as_str(), "between" | "across" | "compare" | "compared" | "both"));
+
+    // 0. Session-to-Turn Slot-0 Coherence Sync (`!has_named_speakers_eff`):
+    //    When Rank-1 turn `t0` is a stray standing-policy rule on a non-rule query OR belongs
+    //    to a lower-ranked session while `final_session_indices[0]`'s turn sits in Slots `1..5`
+    //    with comparable/better coverage, seat `final_session_indices[0]`'s turn at Rank 1.
+    if let Some(&s_head) = final_session_indices.first() {
+        let t0_cur = final_turn_indices[0];
+        let t0_is_stray_rule = ix.turns[t0_cur].is_standing_policy && !ctx.eff_it.task_under_rules;
+        if t0_is_stray_rule || ix.turns[t0_cur].session != s_head {
+            let own0_c = ieee754_bits_to_q16(ctx.t_own.get(t0_cur).copied().unwrap_or(0.0).to_bits());
+            let ex0_c = (ctx.t_exact_mask.get(t0_cur).copied().unwrap_or(0) & q_mask_full).count_ones();
+            let mut head_slot: Option<(usize, u32, u64)> = None;
+            for (slot, &tc) in final_turn_indices.iter().enumerate().take(w).skip(1) {
+                let trc = &ix.turns[tc];
+                if trc.is_backchannel || trc.is_standing_policy || turn_is_superseded(ix, tc) {
+                    continue;
+                }
+                if !t0_is_stray_rule && trc.session != s_head {
+                    continue;
+                }
+                if !ctx.eff_it.assistant_attribution
+                    && (trc.field != 0 || trc.is_pure_info_question)
+                {
+                    continue;
+                }
+                let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+                let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+                let sync_ok = t0_is_stray_rule
+                    || (exc >= ex0_c && ownc.saturating_mul(100) >= own0_c.saturating_mul(72))
+                    || (exc > ex0_c && ownc > 0);
+                if sync_ok && head_slot.is_none_or(|(_, be, bo)| (exc, ownc) > (be, bo)) {
+                    head_slot = Some((slot, exc, ownc));
+                }
+            }
+            if let Some((win_slot, _, _)) = head_slot {
+                final_turn_indices[..=win_slot].rotate_right(1);
+            } else if !ctx.eff_it.assistant_attribution
+                && let Some(members) = ix.session_turns.get(s_head)
+            {
+                let mut best_direct: Option<(usize, u32, u64)> = None;
+                for &tc in members {
+                    if tc == t0_cur {
+                        continue;
+                    }
+                    let trc = &ix.turns[tc];
+                    if trc.field != 0
+                        || trc.is_pure_info_question
+                        || trc.is_backchannel
+                        || trc.is_standing_policy
+                        || turn_is_superseded(ix, tc)
+                    {
+                        continue;
+                    }
+                    let ownc =
+                        ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+                    let exc =
+                        (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+                    if exc == 0 {
+                        continue;
+                    }
+                    let sync_ok = t0_is_stray_rule
+                        || (exc > ex0_c && ownc > 0);
+                    if sync_ok && best_direct.is_none_or(|(_, be, bo)| (exc, ownc) > (be, bo)) {
+                        best_direct = Some((tc, exc, ownc));
+                    }
+                }
+                if let Some((win_ti, _, _)) = best_direct {
+                    if let Some(pos) = final_turn_indices.iter().position(|&x| x == win_ti) {
+                        final_turn_indices.remove(pos);
+                    }
+                    final_turn_indices.insert(0, win_ti);
+                }
+            }
+        }
+    }
+    let t0 = final_turn_indices[0];
+    let s0 = ix.turns[t0].session;
+
+    // 1. User-Source Recovery over Assistant Echo (`!assistant_attribution`):
+    //    When Rank 1 is an assistant turn (`field == 1`) and its preceding same-session user
+    //    source (`field == 0`, declarative or substantive multi-clause question) sits inside Top-5,
+    //    preferring non-superseded user turns (`>= 28%` own score on immediate parent `pc+1 == p0`),
+    //    restore the originating user turn to Rank 1 while preserving Top-5 membership.
+    if !ctx.eff_it.assistant_attribution && ix.turns[t0].field == 1 {
+        let own0 = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let ex0 = ctx.t_exact_mask.get(t0).copied().unwrap_or(0) & q_mask_full;
+        let pos0 = turn_pos(ix, t0);
+        let mut user_src_slot: Option<(usize, bool, u32, u64)> = None;
+        for (slot, &tc) in final_turn_indices.iter().enumerate().take(w).skip(1) {
+            let trc = &ix.turns[tc];
+            let substantive_user = !trc.is_question || trc.content.len() >= 6;
+            if trc.field != 0 || !substantive_user || trc.is_backchannel {
+                continue;
+            }
+            if trc.session != s0 && tc + 1 != t0 {
+                continue;
+            }
+            let direct_parent = tc + 1 == t0
+                || match (turn_pos(ix, tc), pos0) {
+                    (Some(pc), Some(p0)) => pc < p0 && p0 - pc == 1,
+                    _ => false,
+                };
+            let near_prev = direct_parent
+                || match (turn_pos(ix, tc), pos0) {
+                    (Some(pc), Some(p0)) => pc < p0 && p0 - pc <= 2,
+                    _ => false,
+                };
+            if !near_prev {
+                continue;
+            }
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            if ownc == 0 {
+                continue;
+            }
+            let exc = ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full;
+            let cov_match = (exc & ex0) == ex0
+                || ownc.saturating_mul(100) >= own0.saturating_mul(58)
+                || (direct_parent
+                    && exc != 0
+                    && (ownc.saturating_mul(100) >= own0.saturating_mul(25)
+                        || exc.count_ones() >= 2));
+            if cov_match {
+                let fresh = !turn_is_superseded(ix, tc);
+                let bits = exc.count_ones();
+                if user_src_slot.is_none_or(|(_, bf, bb, bo)| (fresh, bits, ownc) > (bf, bb, bo)) {
+                    user_src_slot = Some((slot, fresh, bits, ownc));
+                }
+            }
+        }
+        if let Some((win_slot, _, _, _)) = user_src_slot {
+            final_turn_indices[..=win_slot].rotate_right(1);
+        }
+    }
+
+    // 2. Closed-Class Revision-Cue + Latest-Leaf Override at Rank 1 (current-state updates):
+    //    When the query asks for current state (`!past_override && !is_history_or_agg`), if a newer
+    //    non-superseded user declarative in Top-10 shares the entity/slot signature with `t0` and
+    //    either carries a closed-class revision cue or supersedes `t0`, seat the newest leaf at #1.
+    let t0_now = final_turn_indices[0];
+    let s0_now = ix.turns[t0_now].session;
+    let ts0_now = ix.session_ts.get(s0_now).copied().unwrap_or(0);
+    if !spec.past_override
+        && !ctx.eff_it.is_event_sequence
+        && !ctx.eff_it.assistant_attribution
+        && !is_history_or_agg
+        && final_turn_indices.len() >= 2
+    {
+        let own0_now = ieee754_bits_to_q16(ctx.t_own.get(t0_now).copied().unwrap_or(0.0).to_bits());
+        let sight0_now = sight_of(s0_now);
+        let ex0_now = ctx.t_exact_mask.get(t0_now).copied().unwrap_or(0) & q_mask_full;
+        let sup0_now = turn_is_superseded(ix, t0_now)
+            || ix.torrens_superseded.get(t0_now).copied().unwrap_or(false);
+        let top_scan = final_turn_indices.len().min(10);
+        let mut best_rev: Option<(bool, usize, usize)> = None;
+        for (slot, &tc) in final_turn_indices.iter().enumerate().take(top_scan).skip(1) {
+            let trc = &ix.turns[tc];
+            let substantive_user = !trc.is_question || trc.content.len() >= 6;
+            if trc.field != 0 || !substantive_user || trc.is_backchannel || turn_is_superseded(ix, tc) {
+                continue;
+            }
+            let sc = trc.session;
+            let tsc = ix.session_ts.get(sc).copied().unwrap_or(0);
+            if tc <= t0_now || sc <= s0_now || (ts0_now > 0 && tsc > 0 && tsc < ts0_now) {
+                continue;
+            }
+            if sight_of(sc).saturating_mul(100) < sight0_now.saturating_mul(75) {
+                continue;
+            }
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            if ownc == 0 || ownc.saturating_mul(100) < own0_now.saturating_mul(65) {
+                continue;
+            }
+            let exc = ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full;
+            let cov_ok = (exc & ex0_now) == ex0_now
+                || (exc.count_ones() >= 2 && exc.count_ones() >= ex0_now.count_ones());
+            if !cov_ok {
+                continue;
+            }
+            let explicit_sup = trc.supersedes_turns.contains(&t0_now)
+                || ix.session_supersedes_back.get(sc).is_some_and(|v| v.contains(&s0_now))
+                || sup0_now;
+            // #5 Cellular Sheaf Cohomology H^1 + #6 Dempster-Shafer Conflict Mass `K`:
+            // When two turns share a rare entity/slot anchor across epochs and yield non-zero
+            // sheaf residual + DS conflict (`pair_sheaf_conflict_q16 > Q16/2`), promote the newer gluer.
+            let sheaf_ds_conflict = crate::retrieval::graph::sheaf_dempster_q16::pair_sheaf_conflict_q16(ix, t0_now, tc);
+            let has_rev_cue = turn_has_revision_cue(&trc.body_for_headers) || sheaf_ds_conflict >= 32_768;
+            let same_slot = turns_share_rare_slot_anchor(ix, t0_now, tc);
+            if explicit_sup || (has_rev_cue && same_slot) {
+                let cand_key = (explicit_sup || has_rev_cue, tc, slot);
+                if best_rev.is_none_or(|cur| (cand_key.0, cand_key.1) > (cur.0, cur.1)) {
+                    best_rev = Some(cand_key);
+                }
+            }
+        }
+        if let Some((_, win_ti, win_slot)) = best_rev {
+            let win_sess = ix.turns[win_ti].session;
+            if win_slot < 5 {
+                final_turn_indices[..=win_slot].rotate_right(1);
+            } else {
+                // Keep Top-4 incumbents (Slots 0..4) inside Top-5 so All@5 on pairs is preserved.
+                final_turn_indices.remove(win_slot);
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+            }
+            if win_sess != s0_now {
+                let sw = final_session_indices.len().min(5);
+                if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
+                    && spos > 0
+                {
+                    final_session_indices[..=spos].rotate_right(1);
+                }
+            }
+            return;
+        }
+    }
+
+    // 1b. Strict Assistant-Attribution & "did I" User-Attribution Enforcement:
+    //     When the query asks `"did you recommend/suggest/..."` (`eff_it.assistant_attribution`)
+    //     and a User turn sits at Slot 0, promote a matching Assistant reply from Top-7.
+    //     Conversely when the query asks `"did i ..."` and an Assistant turn sits at Slot 0,
+    //     promote a matching substantive User turn from Top-6.
+    if ctx.eff_it.assistant_attribution && ix.turns[t0].field == 0 {
+        let own0_a = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let scan = final_turn_indices.len().min(10);
+        let mut best_asst: Option<(u32, u64, usize)> = None;
+        for (slot, &tc) in final_turn_indices.iter().enumerate().take(scan).skip(1) {
+            let trc = &ix.turns[tc];
+            if trc.field != 1 || trc.is_question || trc.is_backchannel {
+                continue;
+            }
+            if sight_of(trc.session).saturating_mul(100) < sight_of(s0).saturating_mul(75) {
+                continue;
+            }
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            let in_top2_sess = final_session_indices.iter().take(2).any(|&s| s == trc.session);
+            if (exc >= 1 || in_top2_sess) && ownc.saturating_mul(100) >= own0_a.saturating_mul(45) {
+                let key = (exc, ownc, slot);
+                if best_asst.is_none_or(|b| (key.0, key.1) > (b.0, b.1)) {
+                    best_asst = Some(key);
+                }
+            }
+        }
+        if let Some((_, _, win_slot)) = best_asst {
+            if win_slot < 5 {
+                final_turn_indices[..=win_slot].rotate_right(1);
+            } else {
+                let win_ti = final_turn_indices.remove(win_slot);
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+            }
+            return;
+        }
+        // Fallback: scan substantive `field == 1` replies inside Top-2 sessions with WordNet/ConceptNet
+        // lexical expansion so paraphrased assistant recommendations ("flow of requests" <-> "rate limits") promote.
+        let mut q_lex_asst: Vec<u32> = Vec::new();
+        for qw in &ctx.plan.groups {
+            if qw.starts_with('\u{1}') || !is_content(qw) {
+                continue;
+            }
+            for (lem, _) in crate::wordnet::full_lexicon_neighbors(qw).into_iter().take(16) {
+                if let Some(id) = ix.vocab.get(lem)
+                    && !q_lex_asst.contains(&id)
+                {
+                    q_lex_asst.push(id);
+                }
+            }
+            for (lem, _) in crate::conceptnet::two_hop_neighbors(qw, 8) {
+                if let Some(id) = ix.vocab.get(lem)
+                    && !q_lex_asst.contains(&id)
+                {
+                    q_lex_asst.push(id);
+                }
+            }
+        }
+        let scn0_a = ieee754_bits_to_q16(ctx.t_scene.get(t0).copied().unwrap_or(0.0).to_bits());
+        let mut sess_asst: Option<(u32, usize, u64, usize)> = None;
+        for &si in final_session_indices.iter().take(2) {
+            if sight_of(si).saturating_mul(100) < sight_of(s0).saturating_mul(65) {
+                continue;
+            }
+            for &tc in &ix.session_turns[si] {
+                if tc == t0 {
+                    continue;
+                }
+                let trc = &ix.turns[tc];
+                if trc.field != 1 || trc.is_question || trc.is_backchannel {
+                    continue;
+                }
+                let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+                let scnc = ieee754_bits_to_q16(ctx.t_scene.get(tc).copied().unwrap_or(0.0).to_bits());
+                let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+                let lex_h = q_lex_asst
+                    .iter()
+                    .filter(|id| trc.content.contains(id) || trc.feats.iter().any(|f| f.id == **id))
+                    .count();
+                let bridge_ok = exc >= 1 || lex_h >= 1;
+                if (bridge_ok && scnc.saturating_mul(100) >= scn0_a.saturating_mul(40))
+                    || ownc.saturating_mul(100) >= own0_a.saturating_mul(45)
+                {
+                    let key = (exc, lex_h, scnc.max(ownc), tc);
+                    if sess_asst.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                        sess_asst = Some(key);
+                    }
+                }
+            }
+        }
+        if let Some((_, _, _, win_ti)) = sess_asst {
+            final_turn_indices.retain(|&x| x != win_ti);
+            final_turn_indices.insert(0, win_ti);
+            final_turn_indices.truncate(k.max(5));
+            return;
+        }
+    } else if !ctx.eff_it.assistant_attribution
+        && (q_low.contains("did i ")
+            || q_low.contains("did we ")
+            || q_low.contains("have i ")
+            || q_low.contains("was i "))
+        && ix.turns[t0].field == 1
+    {
+        let own0_u = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let scan = final_turn_indices.len().min(10);
+        let mut best_u: Option<(u32, u64, usize)> = None;
+        for (slot, &tc) in final_turn_indices.iter().enumerate().take(scan).skip(1) {
+            let trc = &ix.turns[tc];
+            if trc.field != 0 || trc.is_backchannel || turn_is_superseded(ix, tc) {
+                continue;
+            }
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            if ownc.saturating_mul(100) >= own0_u.saturating_mul(50) {
+                let key = (exc, ownc, slot);
+                if best_u.is_none_or(|b| (key.0, key.1) > (b.0, b.1)) {
+                    best_u = Some(key);
+                }
+            }
+        }
+        if let Some((_, _, win_slot)) = best_u {
+            if win_slot < 5 {
+                final_turn_indices[..=win_slot].rotate_right(1);
+            } else {
+                let win_ti = final_turn_indices.remove(win_slot);
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+            }
+            return;
+        }
+    }
+
+    // Re-read Slot 0 in case User-Source Recovery just restored the user turn.
+    let t0 = final_turn_indices[0];
+    let s0 = ix.turns[t0].session;
+
+    // Protect a condition-matched standing rule already seated at Slot 0 by Stage 12 Step 2
+    // from being evicted by downstream rare-anchor or habitus tie-breakers.
+    if ix.turns[t0].is_standing_policy {
+        return;
+    }
+
+    // 1c. Closed-Class Quantitative Answer-Type Gate (`information_extraction`):
+    //     When a quantitative query ("how much/how long/how old/what probability/percentage") seats a
+    //     Slot-0 turn lacking digits (or lacking expected currency/duration units), promote the strongest
+    //     unit/digit-bearing exact-hit turn from Top-10 or Top-10 sessions (`field == 0`) to Slot 0.
+    // hardcode-scan: closed-class (quantitative WH interrogatives & currency/percent/duration format cues)
+    let is_quant_ie_q = !ctx.eff_it.is_event_sequence
+        && !eff_summary_request(&ctx.q.text)
+        && (q_low.starts_with("how much ")
+            || q_low.starts_with("how long ")
+            || q_low.starts_with("how old ")
+            || q_low.starts_with("what probability")
+            || q_low.starts_with("what percentage"));
+    let want_unit_sym = q_low.contains("cost")
+        || q_low.contains("price")
+        || q_low.contains("pay")
+        || q_low.contains("much")
+        || q_low.contains("percentage");
+    let want_dur_unit = q_low.starts_with("how long ");
+    let t0_body_q = ix.turns[t0].body_for_headers.as_str();
+    let t0_low_q = t0_body_q.to_ascii_lowercase();
+    let t0_has_digit = t0_body_q.bytes().any(|b| b.is_ascii_digit());
+    let has_dur_unit = |s_low: &str| {
+        s_low.bytes().any(|b| b.is_ascii_digit())
+            && (s_low.contains(" year")
+                || s_low.contains(" month")
+                || s_low.contains(" week")
+                || s_low.contains(" day")
+                || s_low.contains(" hour"))
+    };
+    let t0_missing_quant = !t0_has_digit
+        || (want_unit_sym && !(t0_body_q.contains('$') || t0_body_q.contains('%')))
+        || (want_dur_unit && !has_dur_unit(&t0_low_q));
+    if is_quant_ie_q
+        && !ix.turns[t0].is_standing_policy
+        && t0_missing_quant
+    {
+        let own0_q = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let mut quant_cands: Vec<usize> = final_turn_indices
+            .iter()
+            .copied()
+            .skip(1)
+            .take(9)
+            .collect();
+        for &si in final_session_indices.iter().take(10) {
+            for &ti in &ix.session_turns[si] {
+                let tr = &ix.turns[ti];
+                if ti != t0
+                    && tr.field == 0
+                    && !tr.is_backchannel
+                    && !tr.is_standing_policy
+                    && !quant_cands.contains(&ti)
+                {
+                    quant_cands.push(ti);
+                }
+            }
+        }
+        let mut best_quant: Option<(bool, u32, u64, usize)> = None;
+        for tc in quant_cands {
+            let trc = &ix.turns[tc];
+            if trc.is_backchannel || trc.is_standing_policy {
+                continue;
+            }
+            let body = trc.body_for_headers.as_str();
+            if !body.bytes().any(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let body_low = body.to_ascii_lowercase();
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            let unit_hit = (want_unit_sym && (body.contains('$') || body.contains('%')))
+                || (want_dur_unit && has_dur_unit(&body_low));
+            let min_own_pct = if unit_hit { 20u64 } else { 45u64 };
+            if exc >= 1 && ownc.saturating_mul(100) >= own0_q.saturating_mul(min_own_pct) {
+                let key = (unit_hit, exc, ownc, tc);
+                if best_quant.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    best_quant = Some(key);
+                }
+            }
+        }
+        if let Some((_, _, _, win_ti)) = best_quant {
+            let win_sess = ix.turns[win_ti].session;
+            if let Some(win_slot) = final_turn_indices.iter().position(|&x| x == win_ti) {
+                if win_slot < 5 {
+                    final_turn_indices[..=win_slot].rotate_right(1);
+                } else {
+                    final_turn_indices.remove(win_slot);
+                    final_turn_indices.insert(0, win_ti);
+                    final_turn_indices.truncate(k.max(5));
+                }
+            } else {
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+            }
+            if win_sess != s0 {
+                let sw = final_session_indices.len().min(5);
+                if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
+                    && spos > 0
+                {
+                    final_session_indices[..=spos].rotate_right(1);
+                }
+            }
+            return;
+        }
+    }
+
+    // 1d. Closed-Class Episodic Entity-Rich Extraction Gate (`"what ... did I say/mention/outline"`):
+    //     When a factual "did I say/mention" query lands on a low-entity Slot-0 turn (`<= 2` entities)
+    //     while a Top-10 or Top-3 session user turn packs rich explicit technologies/entities with strong exact IC,
+    //     promote it to Slot 0.
+    // hardcode-scan: closed-class (first-person past episodic mention interrogatives)
+    let is_entity_ie_q = !ctx.eff_it.temporal
+        && !ctx.eff_it.is_event_sequence
+        && !ctx.eff_it.assistant_attribution
+        && !eff_summary_request(&ctx.q.text)
+        && (q_low.contains("did i say")
+            || q_low.contains("did i mention")
+            || q_low.contains("did i outline")
+            || q_low.contains("did i use"));
+    if is_entity_ie_q && ix.turns[t0].slot_entities_clean <= 2 {
+        let own0_e = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let mut ent_cands: Vec<usize> = final_turn_indices.iter().copied().skip(1).take(9).collect();
+        for &si in final_session_indices.iter().take(3) {
+            for &ti in &ix.session_turns[si] {
+                let tr = &ix.turns[ti];
+                if ti != t0
+                    && tr.field == 0
+                    && !tr.is_backchannel
+                    && !tr.is_standing_policy
+                    && !ent_cands.contains(&ti)
+                {
+                    ent_cands.push(ti);
+                }
+            }
+        }
+        let min_ents = ix.turns[t0].slot_entities_clean.saturating_add(2);
+        let mut best_ent: Option<(u32, u16, u64, usize)> = None;
+        for tc in ent_cands {
+            let trc = &ix.turns[tc];
+            if trc.field != 0
+                || trc.is_backchannel
+                || trc.is_standing_policy
+                || trc.slot_entities_clean < min_ents
+            {
+                continue;
+            }
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            if exc >= 2 && ownc.saturating_mul(100) >= own0_e.saturating_mul(60) {
+                let key = (exc, trc.slot_entities_clean, ownc, tc);
+                if best_ent.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    best_ent = Some(key);
+                }
+            }
+        }
+        if let Some((_, _, _, win_ti)) = best_ent {
+            let win_sess = ix.turns[win_ti].session;
+            if let Some(win_slot) = final_turn_indices.iter().position(|&x| x == win_ti) {
+                if win_slot < 5 {
+                    final_turn_indices[..=win_slot].rotate_right(1);
+                } else {
+                    final_turn_indices.remove(win_slot);
+                    final_turn_indices.insert(0, win_ti);
+                    final_turn_indices.truncate(k.max(5));
+                }
+            } else {
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+            }
+            if win_sess != s0 {
+                let sw = final_session_indices.len().min(5);
+                if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
+                    && spos > 0
+                {
+                    final_session_indices[..=spos].rotate_right(1);
+                }
+            }
+            return;
+        }
+    }
+
+    // 2b. Closed-Class Constraint & Directive Density Promotion (#3) + Short Ack-Question Demotion (#6)
+    //     + Chronological Latest-State Tie-Break (#9):
+    {
+        let own0_c = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let ex0_c = (ctx.t_exact_mask.get(t0).copied().unwrap_or(0) & q_mask_full).count_ones();
+        let is_adv = crate::retrieval::seating::constraint_density_q16::is_advice_or_preference_query(&ctx.q.text);
+        let d0 = if is_adv {
+            crate::retrieval::seating::constraint_density_q16::deontic_directive_density_q16(&ix.turns[t0].body_for_headers)
+        } else {
+            0
+        };
+        let t0_ack = crate::retrieval::fusion::summary_silhouette_q16::is_short_ack_question(ix, t0);
+        // Exclusive Rare-Anchor Tournament: find ultra-rare exact query anchors (`df <= 2`) missing from `t0`.
+        let rare_missing_from_t0: Vec<u32> = ctx
+            .plan
+            .terms
+            .iter()
+            .filter(|qt| {
+                qt.exact_hit
+                    && !ix.turns[t0].content.contains(&qt.id)
+                    && ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(99) <= 2
+            })
+            .map(|qt| qt.id)
+            .collect();
+        let mut promo_slot: Option<(u8, u64, u32, usize)> = None;
+        for (slot, &tc) in final_turn_indices.iter().enumerate().take(w).skip(1) {
+            let trc = &ix.turns[tc];
+            if trc.field != ix.turns[t0].field
+                && (ctx.eff_it.assistant_attribution || trc.field != 0)
+            {
+                continue;
+            }
+            if trc.is_backchannel || trc.is_standing_policy || turn_is_superseded(ix, tc) {
+                continue;
+            }
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            if ownc == 0 || sight_of(trc.session).saturating_mul(100) < sight_of(s0).saturating_mul(75) {
+                continue;
+            }
+            // Priority 3: Exclusive ultra-rare anchor hit missing from `t0` (e.g. `endpoint`)
+            if !rare_missing_from_t0.is_empty()
+                && !trc.is_question
+                && ownc.saturating_mul(100) >= own0_c.saturating_mul(85)
+                && exc >= ex0_c
+            {
+                let rare_hits = rare_missing_from_t0
+                    .iter()
+                    .filter(|id| trc.content.contains(id))
+                    .count() as u64;
+                if rare_hits > 0 && exc >= ex0_c {
+                    let key = (4u8, rare_hits, exc, slot);
+                    if promo_slot.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                        promo_slot = Some(key);
+                    }
+                    continue;
+                }
+            }
+            // Priority 2 (#3): High deontic constraint density on advice/preference queries
+            if is_adv && d0 < 2_500 && !trc.is_question {
+                let dc = crate::retrieval::seating::constraint_density_q16::deontic_directive_density_q16(&trc.body_for_headers);
+                if dc >= 4_500
+                    && ownc.saturating_mul(100) >= own0_c.saturating_mul(65)
+                    && exc.saturating_add(1) >= ex0_c
+                {
+                    let key = (3u8, dc, exc, slot);
+                    if promo_slot.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                        promo_slot = Some(key);
+                    }
+                    continue;
+                }
+            }
+            // Priority 1 (#6): Demote short ack/clarification question at Slot 0
+            if t0_ack && !trc.is_question && trc.content.len() >= 10 && ownc.saturating_mul(100) >= own0_c.saturating_mul(65) {
+                let key = (2u8, ownc, exc, slot);
+                if promo_slot.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    promo_slot = Some(key);
+                }
+                continue;
+            }
+            // Priority 0 (#9 + Pillar 7a IA-RAG Directional Allen Cone):
+            // On temporal directional queries ("before/after/during"), prefer Top-5 turns inside
+            // the matching Allen cone; on current-state queries, let fresher assertions break ties.
+            let allen_cone = crate::retrieval::graph::temporal_allen::detect_ia_rag_cone(&ctx.q.text);
+            if allen_cone != crate::retrieval::graph::temporal_allen::AllenDirCone::None
+                && !trc.is_question
+                && exc >= ex0_c
+                && ownc.saturating_mul(100) >= own0_c.saturating_mul(78)
+                && crate::retrieval::graph::temporal_allen::satisfies_ia_rag_cone(ix, allen_cone, t0, tc)
+            {
+                let key = (2u8, ownc, exc, slot);
+                if promo_slot.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    promo_slot = Some(key);
+                }
+                continue;
+            }
+            if ctx.eff_it.current_state
+                && !spec.past_override
+                && !is_history_or_agg
+                && !ctx.eff_it.is_event_sequence
+                && !ctx.eff_it.assistant_attribution
+                && !trc.is_question
+                && trc.session > s0
+                && ex0_c >= 1
+                && exc >= ex0_c
+                && ownc.saturating_mul(100) >= own0_c.saturating_mul(88)
+            {
+                let key = (1u8, trc.session as u64, exc, slot);
+                if promo_slot.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    promo_slot = Some(key);
+                }
+            }
+        }
+        if let Some((_, _, _, win_slot)) = promo_slot {
+            let win_sess = ix.turns[final_turn_indices[win_slot]].session;
+            final_turn_indices[..=win_slot].rotate_right(1);
+            if win_sess != s0 {
+                let sw = final_session_indices.len().min(5);
+                if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
+                    && spos > 0
+                {
+                    final_session_indices[..=spos].rotate_right(1);
+                }
+            }
+            return;
+        }
+    }
+
+    // Re-read Slot 0 after Step 2b/c/d.
+    let t0 = final_turn_indices[0];
+    let s0 = ix.turns[t0].session;
+    let sight0 = sight_of(s0);
 
     let (lr0, dur0) = eval_li_roth_turn(ix, &spec, t0);
     let r0 = role_ok(t0);
@@ -3243,7 +4224,7 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
             continue;
         }
         let rc = role_ok(tc);
-        if r0 && !rc && !sup0 {
+        if r0 && !rc {
             continue;
         }
         let (lrc, durc) = eval_li_roth_turn(ix, &spec, tc);
@@ -3312,6 +4293,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
     t_own: &[f32],
     t_turn_raw: &[f32],
     t_bridge: &[f32],
+    t_exact_mask: &[u64],
     s_score: &[f32],
     bridge_boost: &[f32],
     k: usize,
@@ -3320,10 +4302,132 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
         || is_monologue_corpus
         || eff_it.is_event_sequence
         || eff_summary_request(&q.text)
-        || pref_on
-        || eff_it.task_under_rules
     {
         return;
+    }
+    // Pillar 6 (HabitusMem `2611.25855` + MINDSET `2610.08586` Scope Energy Rank-1 Re-Seating):
+    // Unlocked specifically on anonymous dialogue `pref_on || task_under_rules` queries where
+    // Top-5 near-misses previously stalled because transient debug / assistant turns stole Slot 0.
+    if pref_on || eff_it.task_under_rules {
+        if !has_named_speakers_eff && final_turn_indices.len() >= 2 {
+            let q_low_h = q.text.to_ascii_lowercase();
+            // hardcode-scan: closed-class (genuine personal preference/advice openings vs general how-to rules)
+            let is_genuine_pref_q = q_low_h.contains("suggest")
+                || q_low_h.contains("recommend")
+                || q_low_h.contains("prefer")
+                || q_low_h.contains("i'd like")
+                || q_low_h.contains("i would like")
+                || q_low_h.contains("i'm looking")
+                || q_low_h.contains("i'm working")
+                || q_low_h.contains("i'm planning")
+                || q_low_h.contains("can you help me");
+            let w = final_turn_indices.len().min(6);
+            let t0 = final_turn_indices[0];
+            let s0 = ix.turns[t0].session;
+            let u0 = crate::retrieval::seating::habitus_energy_q16::habitus_scope_utility_q16(ix, t0, true);
+            let d0 = crate::retrieval::seating::constraint_density_q16::deontic_directive_density_q16(
+                &ix.turns[t0].body_for_headers,
+            );
+            let own0 = ieee754_bits_to_q16(t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+            let mut q_mask_h = 0u64;
+            for qt in &plan.terms {
+                if qt.exact_hit
+                    && let Some(g) = qt.group
+                    && g < 64
+                {
+                    q_mask_h |= 1u64 << g;
+                }
+            }
+            let ex0 = (t_exact_mask.get(t0).copied().unwrap_or(0) & q_mask_h).count_ones();
+            let q_toks_h = raw_tokens(&q.text);
+            let t0_cond_matched_rule = ix.turns[t0].is_standing_policy
+                && ix.standing_rules.iter().any(|r| {
+                    r.turn == t0 && rule_condition_matches(ix, r, plan, &q_toks_h)
+                });
+            let t0_is_decoy = crate::retrieval::seating::habitus_energy_q16::is_status_metric_decoy(
+                &ix.turns[t0].body_for_headers,
+            );
+            let t0_weak_scope = !t0_cond_matched_rule
+                && (ix.turns[t0].field == 1
+                    || (u0 < 0 && !ix.turns[t0].is_standing_policy)
+                    || crate::retrieval::fusion::summary_silhouette_q16::is_short_ack_question(ix, t0)
+                    || (is_genuine_pref_q && (ix.turns[t0].is_standing_policy || t0_is_decoy)))
+                && !(ix.turns[t0].is_standing_policy && !is_genuine_pref_q);
+            if t0_weak_scope {
+                let mut best_h: Option<(i64, u64, u32, usize)> = None;
+                for (slot, &tc) in final_turn_indices.iter().enumerate().take(w).skip(1) {
+                    let trc = &ix.turns[tc];
+                    if trc.field != 0 || trc.is_backchannel || turn_is_superseded(ix, tc) {
+                        continue;
+                    }
+                    if is_genuine_pref_q && trc.is_standing_policy {
+                        continue;
+                    }
+                    if crate::retrieval::seating::habitus_energy_q16::is_status_metric_decoy(&trc.body_for_headers) {
+                        continue;
+                    }
+                    let uc = crate::retrieval::seating::habitus_energy_q16::habitus_scope_utility_q16(ix, tc, true);
+                    let beats_stray_policy = is_genuine_pref_q && ix.turns[t0].is_standing_policy;
+                    if !beats_stray_policy && !t0_is_decoy && uc <= u0 {
+                        continue;
+                    }
+                    let dc = crate::retrieval::seating::constraint_density_q16::deontic_directive_density_q16(
+                        &trc.body_for_headers,
+                    );
+                    let ownc = ieee754_bits_to_q16(t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+                    let exc = (t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_h).count_ones();
+                    let min_pct = if beats_stray_policy || t0_is_decoy { 55 } else { 75 };
+                    let rel_ok = ownc > 0
+                        && ownc.saturating_mul(100) >= own0.saturating_mul(min_pct)
+                        && (exc >= 1 && (beats_stray_policy || t0_is_decoy || exc >= ex0 || dc >= d0.saturating_add(2_500)));
+                    if rel_ok {
+                        let key = (uc, dc, exc, slot);
+                        if best_h.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                            best_h = Some(key);
+                        }
+                    }
+                }
+                if let Some((_, _, _, win_slot)) = best_h {
+                    let win_sess = ix.turns[final_turn_indices[win_slot]].session;
+                    if win_slot < 5 {
+                        final_turn_indices[..=win_slot].rotate_right(1);
+                    } else {
+                        let win_ti = final_turn_indices.remove(win_slot);
+                        final_turn_indices.insert(0, win_ti);
+                        final_turn_indices.truncate(k.max(5));
+                    }
+                    if win_sess != s0 {
+                        let sw = final_session_indices.len().min(5);
+                        if let Some(spos) = final_session_indices[..sw].iter().position(|&s| s == win_sess)
+                            && spos > 0
+                        {
+                            final_session_indices[..=spos].rotate_right(1);
+                        }
+                    }
+                }
+            }
+        }
+        // Unlock anonymous dialogue Condorcet & IE gates (`1b` Assistant-Attribution, `1c` Quantitative,
+        // `1d` Entity-Rich Extraction) when the Slot-0 turn is NOT a protected standing policy.
+        // hardcode-scan: closed-class (factual IE quantitative/attribution triggers)
+        let q_low_ie = q.text.trim_start().to_ascii_lowercase();
+        let run_ie_after_habitus = !has_named_speakers_eff
+            && !final_turn_indices
+                .first()
+                .is_some_and(|&t0| ix.turns[t0].is_standing_policy)
+            && (eff_it.assistant_attribution
+                || q_low_ie.contains("did i ")
+                || q_low_ie.contains("did we ")
+                || q_low_ie.contains("have i ")
+                || q_low_ie.contains("was i ")
+                || q_low_ie.starts_with("how much ")
+                || q_low_ie.starts_with("how long ")
+                || q_low_ie.starts_with("how old ")
+                || q_low_ie.starts_with("what probability")
+                || q_low_ie.starts_with("what percentage"));
+        if !run_ie_after_habitus {
+            return;
+        }
     }
     if !has_named_speakers_eff {
         let anon_ctx = AnonCondorcetCtx {
@@ -3333,6 +4437,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             q,
             t_scene,
             t_own,
+            t_exact_mask,
             s_score,
             bridge_boost,
         };
@@ -3340,6 +4445,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             &anon_ctx,
             final_turn_indices,
             final_session_indices,
+            k,
         );
         return;
     }
@@ -3357,6 +4463,14 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
         return;
     }
 
+    let pool_scores = PoolScoreSlices {
+        t_scene,
+        t_own,
+        t_turn_raw,
+        t_bridge,
+        s_score,
+        bridge_boost,
+    };
     let feats = extract_pool_features_q16(
         ix,
         plan,
@@ -3364,11 +4478,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
         &pool,
         final_turn_indices,
         final_session_indices,
-        t_scene,
-        t_own,
-        t_turn_raw,
-        s_score,
-        bridge_boost,
+        &pool_scores,
     );
 
     if let Some(dump_path) = at1_feat_dump_path() {
@@ -3402,7 +4512,116 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
         return;
     }
 
-    let scores: Vec<i64> = feats.iter().map(eval_at1_gbdt_q16).collect();
+    let mut scores: Vec<i64> = feats.iter().map(eval_at1_gbdt_q16).collect();
+
+    // #4 Tropical (max,+) 2-Hop Squaring bonus in `@1` scoring for Multi-Hop queries:
+    // Adds a bounded Q16 tropical 2-hop bridge bonus to declarative candidates connected
+    // to top Pass-1 anchors through rare non-query bridge entities.
+    if eff_it.multi_hop {
+        let mut q_gmask = 0u64;
+        for qt in &plan.terms {
+            if qt.exact_hit
+                && let Some(g) = qt.group
+                && g < 64
+            {
+                q_gmask |= 1u64 << g;
+            }
+        }
+        let q_toks_mh = raw_tokens(&q.text);
+        let mut matched_sps: Vec<String> = Vec::new();
+        for tr in ix.turns.iter().take(64) {
+            let sp = tr.speaker.to_ascii_lowercase();
+            if !sp.is_empty()
+                && sp != "user"
+                && sp != "assistant"
+                && q_toks_mh.iter().any(|w| w == &sp)
+                && !matched_sps.contains(&sp)
+            {
+                matched_sps.push(sp);
+            }
+        }
+        let single_sp = if matched_sps.len() == 1 {
+            Some(matched_sps[0].as_str())
+        } else {
+            None
+        };
+        let trop_map =
+            crate::retrieval::graph::tropical_bridge_q16::tropical_max_plus_entity_bridge_q16(
+                ix,
+                plan,
+                t_own,
+                t_exact_mask,
+                q_gmask,
+                single_sp,
+            );
+        if let Some(max_t) = trop_map.values().copied().max()
+            && max_t > 0
+        {
+            const TROP_AT1_CAP_Q16: u64 = 16_000;
+            for (i, &ti) in pool.iter().enumerate() {
+                if let Some(&tsc) = trop_map.get(&ti)
+                    && feats[i][32] == 0
+                {
+                    let bonus = (((tsc as u128).saturating_mul(TROP_AT1_CAP_Q16 as u128))
+                        / (max_t as u128)) as i64;
+                    scores[i] = scores[i].saturating_add(bonus);
+                }
+            }
+        }
+    }
+
+    // #6 Co-Hyponym Sibling Mismatch Penalty (guarded by `any_cand_matches_qw` so
+    // false-premise Adversarial source passages are NEVER penalized when the queried
+    // sibling does not exist in the candidate pool):
+    {
+        const COHYP_MISMATCH_PENALTY_Q16: i64 = 18_000;
+        let q_toks_ch = raw_tokens(&q.text);
+        let mut checked_qw: Vec<String> = Vec::new();
+        for qw in &q_toks_ch {
+            if !is_content(qw) || qw.len() < 3 || checked_qw.contains(qw) {
+                continue;
+            }
+            checked_qw.push(qw.clone());
+            let sibs = crate::wordnet::strict_co_hyponym_siblings(qw);
+            if sibs.is_empty() {
+                continue;
+            }
+            let qw_ids: Vec<u32> = [ix.vocab.get(qw), ix.vocab.get(&stem_term(&stem(qw)))]
+                .into_iter()
+                .flatten()
+                .collect();
+            if qw_ids.is_empty() {
+                continue;
+            }
+            let any_cand_matches_qw = pool.iter().any(|&ti| {
+                let tr = &ix.turns[ti];
+                !tr.is_question
+                    && qw_ids
+                        .iter()
+                        .any(|id| tr.content.contains(id) || tr.feats.iter().any(|f| f.id == *id))
+            });
+            if !any_cand_matches_qw {
+                continue;
+            }
+            let sib_ids: Vec<u32> = sibs
+                .into_iter()
+                .filter_map(|s| ix.vocab.get(s))
+                .collect();
+            if sib_ids.is_empty() {
+                continue;
+            }
+            for (i, &ti) in pool.iter().enumerate() {
+                let tr = &ix.turns[ti];
+                let has_qw = qw_ids
+                    .iter()
+                    .any(|id| tr.content.contains(id) || tr.feats.iter().any(|f| f.id == *id));
+                if !has_qw && sib_ids.iter().any(|sid| tr.content.contains(sid)) {
+                    scores[i] = scores[i].saturating_sub(COHYP_MISMATCH_PENALTY_Q16);
+                }
+            }
+        }
+    }
+
     let mut order: Vec<usize> = (0..pool.len()).collect();
     order.sort_by(|&a, &b| {
         scores[b]
@@ -3461,6 +4680,43 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             new_turns.push(ti);
         }
     }
+    // Post-GBDT Partner Q -> Queried Speaker Answer Promotion:
+    // When Slot 0 is an unqueried partner's question (`is_question && feats[i0][15] < 0`)
+    // and the immediately following turn in the same session is a declarative, non-backchannel,
+    // non-superseded reply by a queried speaker, promote that direct answer to Slot 0.
+    if new_turns.len() >= 2 {
+        let t0 = new_turns[0];
+        if ix.turns[t0].is_pure_info_question
+            && let Some(i0) = pool.iter().position(|&x| x == t0)
+            && feats[i0][15] < 0
+            && feats[i0][16] == 0
+        {
+            let s0_t = ix.turns[t0].session;
+            if let Some(members) = ix.session_turns.get(s0_t)
+                && let Some(p0) = members.iter().position(|&m| m == t0)
+                && p0 + 1 < members.len()
+            {
+                let nxt = members[p0 + 1];
+                let nt_tr = &ix.turns[nxt];
+                let nxt_is_queried = if let Some(inxt) = pool.iter().position(|&x| x == nxt) {
+                    feats[inxt][15] > 0 && feats[inxt][32] == 0
+                } else {
+                    !turn_is_superseded(ix, nxt)
+                        && !nt_tr.speaker.is_empty()
+                        && c2_query_mentions_speaker(&q.text, &nt_tr.speaker)
+                };
+                if nxt_is_queried && !nt_tr.is_question && !nt_tr.is_backchannel {
+                    if let Some(pos) = new_turns.iter().position(|&x| x == nxt) {
+                        new_turns.remove(pos);
+                    }
+                    new_turns.insert(0, nxt);
+                    if new_turns.len() > target_len {
+                        new_turns.truncate(target_len);
+                    }
+                }
+            }
+        }
+    }
     // Post-GBDT Same-Session Self-Payload Arbiter on Named Dialogues:
     // When Rank 1 (`t0`) and a same-session nearby declarative (`tc`, `|pos| <= 2`) are within
     // `<= 24_576` Q16 GBDT margin, prefer the originating self-payload turn over a question/echo opener.
@@ -3471,7 +4727,15 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             let s0_t = ix.turns[t0].session;
             let own0 = ieee754_bits_to_q16(t_own.get(t0).copied().unwrap_or(0.0).to_bits());
             let mut flip_slot: Option<usize> = None;
-            for slot in 1..new_turns.len().min(3) {
+            let pure_zero_decoy = ix.turns[t0].slot_entities_clean == 0 && feats[i0][9] == 0;
+            let scan_self = if pure_zero_decoy {
+                new_turns.len().min(5)
+            } else {
+                new_turns.len().min(3)
+            };
+            let max_pos_diff = if pure_zero_decoy { 4 } else { 2 };
+            let max_gap_self = if pure_zero_decoy { 48_000 } else { 24_576 };
+            for slot in 1..scan_self {
                 let tc = new_turns[slot];
                 if ix.turns[tc].session != s0_t
                     || ix.turns[tc].is_question
@@ -3480,7 +4744,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                     continue;
                 }
                 let near = match (p0, turn_pos(ix, tc)) {
-                    (Some(a), Some(b)) => a.abs_diff(b) <= 2,
+                    (Some(a), Some(b)) => a.abs_diff(b) <= max_pos_diff,
                     _ => false,
                 };
                 if !near {
@@ -3489,7 +4753,7 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                 let Some(ic) = pool.iter().position(|&x| x == tc) else {
                     continue;
                 };
-                if feats[ic][32] > 0 || scores[i0].saturating_sub(scores[ic]) > 24_576 {
+                if feats[ic][32] > 0 || scores[i0].saturating_sub(scores[ic]) > max_gap_self {
                     continue;
                 }
                 let ownc = ieee754_bits_to_q16(t_own.get(tc).copied().unwrap_or(0.0).to_bits());
@@ -3499,7 +4763,11 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
                     && ix.turns[tc].slot_entities_clean >= 1
                     && feats[ic][20] >= feats[i0][20]
                     && feats[ic][15] >= feats[i0][15];
-                if cond_a || cond_b {
+                let cond_c = pure_zero_decoy
+                    && feats[ic][15] == 2
+                    && feats[ic][9] > 0
+                    && ix.turns[tc].slot_entities_clean >= 1;
+                if cond_a || cond_b || cond_c {
                     flip_slot = Some(slot);
                     break;
                 }
@@ -3509,15 +4777,654 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
             }
         }
     }
-    new_turns.truncate(k);
-    *final_turn_indices = new_turns;
-
+    // Post-GBDT Speaker-Subject Alignment & Lexical WH Answer-Type Hard Gate (`0..5` invariant):
+    // 1. When the query targets a single non-conjoined speaker (`feats[ic][15] == 2`) without `WH_PERSON`,
+    //    if Rank 1 is spoken by an unqueried speaker (`feats[i0][15] < 0`) and a Top-5 declarative by
+    //    the queried speaker covers strong non-speaker IC (or `t0` is a question / adjacent reply),
+    //    rotate the queried speaker's declarative to Rank 1.
+    // 2. When Rank 1 is a question (`is_question`) or fails the WH-type check (`feats[i0][20] < 0`)
+    //    while a Top-5 declarative satisfies it (`feats[ic][20] > feats[i0][20]`) without speaker
+    //    regression, rotate it to Rank 1.
+    if new_turns.len() >= 2 && (wh_slots(&q.text) & WH_PERSON) == 0 {
+        let t0 = new_turns[0];
+        if let Some(i0) = pool.iter().position(|&x| x == t0) {
+            let sp_names_tr = session_speaker_names(ix, &ix.session_turns[ix.turns[t0].session]);
+            let q_exact_ids_sp: Vec<u32> = plan
+                .terms
+                .iter()
+                .filter(|qt| qt.exact_hit && !is_speaker_term(ix, qt.id, &sp_names_tr))
+                .map(|qt| qt.id)
+                .collect();
+            let turn_only_other = |ti: usize| -> bool {
+                let tr = &ix.turns[ti];
+                if tr.other_speaker_terms.is_empty() {
+                    return false;
+                }
+                let mut hit = false;
+                for &qid in &q_exact_ids_sp {
+                    if tr.content.contains(&qid) {
+                        hit = true;
+                        if !tr.other_speaker_terms.contains(&qid) {
+                            return false;
+                        }
+                    }
+                }
+                hit
+            };
+            let mut sp_win: Option<(usize, i32, i64)> = None;
+            let t0_adv_protected = (feats[i0][41] > 0
+                || (feats[i0][15] < 0 && feats[i0][16] > 0))
+                && !ix.turns[t0].is_pure_info_question
+                && !turn_only_other(t0);
+            if feats[i0][15] < 0 && !t0_adv_protected {
+                let q_toks_sp = raw_tokens(&q.text);
+                let q_refs_sp: Vec<&str> = q_toks_sp.iter().map(String::as_str).collect();
+                let is_od_infer_sp =
+                    crate::retrieval::lexical::speaker_translation_q16::is_open_domain_inferential_shape(
+                        &q_refs_sp,
+                    );
+                let p0 = turn_pos(ix, t0);
+                let s0_t = ix.turns[t0].session;
+                let own0 = ieee754_bits_to_q16(t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+                let scn0 = ieee754_bits_to_q16(t_scene.get(t0).copied().unwrap_or(0.0).to_bits());
+                let sp_scan = if is_od_infer_sp {
+                    new_turns.len().min(8)
+                } else {
+                    new_turns.len().min(6)
+                };
+                for slot in 1..sp_scan {
+                    let tc = new_turns[slot];
+                    let trc = &ix.turns[tc];
+                    let allow_multi_clause_od = is_od_infer_sp && trc.content.len() >= 10;
+                    if (trc.is_question && !allow_multi_clause_od) || trc.is_backchannel {
+                        continue;
+                    }
+                    let Some(ic) = pool.iter().position(|&x| x == tc) else {
+                        continue;
+                    };
+                    if (feats[ic][32] > 0 && !allow_multi_clause_od) || feats[ic][15] != 2 {
+                        continue;
+                    }
+                    let adj_same_sess = trc.session == s0_t
+                        && match (p0, turn_pos(ix, tc)) {
+                            (Some(a), Some(b)) => a.abs_diff(b) <= 2,
+                            _ => false,
+                        };
+                    let ownc = ieee754_bits_to_q16(t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+                    let scnc = ieee754_bits_to_q16(t_scene.get(tc).copied().unwrap_or(0.0).to_bits());
+                    let od_sp_ok = is_od_infer_sp
+                        && scores[i0].saturating_sub(scores[ic]) <= 95_000
+                        && (adj_same_sess
+                            || trc.is_habitual
+                            || scnc.saturating_mul(100) >= scn0.saturating_mul(35)
+                            || feats[ic][9] * 10 >= feats[i0][9] * 5);
+                    // Vocative / 2nd-person praise flip: only flip non-OD `feats[i0][15] < 0` with relaxed IC
+                    // when `t0` exclusively references the queried terms in 2nd-person (`turn_only_other(t0)`),
+                    // preventing false-premise Adversarial queries from evicting Speaker B's 1st-person gold fact.
+                    let vocative_sp_ok = turn_only_other(t0)
+                        && !turn_only_other(tc)
+                        && feats[ic][9] * 10 >= feats[i0][9] * 8
+                        && scores[i0].saturating_sub(scores[ic]) <= 48_000;
+                    let ic_ok = if ix.turns[t0].is_question {
+                        feats[ic][9] * 10 >= feats[i0][9] * 7
+                    } else {
+                        od_sp_ok
+                            || vocative_sp_ok
+                            || (trc.session == s0_t
+                                && feats[ic][9] >= feats[i0][9]
+                                && ownc.saturating_mul(100) >= own0.saturating_mul(65)
+                                && scores[i0].saturating_sub(scores[ic]) <= 42_000)
+                            || (feats[ic][9] >= feats[i0][9]
+                                && ((adj_same_sess && ownc * 5 >= own0 * 4)
+                                    || (ownc >= own0
+                                        && scores[i0].saturating_sub(scores[ic]) <= 32_000)))
+                    };
+                    if ic_ok && feats[ic][20] >= feats[i0][20] {
+                        let key = (slot, feats[ic][9], scores[ic]);
+                        if sp_win.is_none_or(|(_, bic, bsc)| (key.1, key.2) > (bic, bsc)) {
+                            sp_win = Some(key);
+                        }
+                    }
+                }
+            }
+            // Pass 1: Cross-speaker subject alignment (`sp_win`).
+            if let Some((slot, _, _)) = sp_win {
+                new_turns[..=slot].rotate_right(1);
+            }
+            // Pass 2 (unchained C13): Strict Speaker-Attributed Predicate Guard (`turn_only_other`).
+            let t0 = new_turns[0];
+            if let Some(i0) = pool.iter().position(|&x| x == t0)
+                && feats[i0][15] == 2
+                && turn_only_other(t0)
+            {
+                let mut own_win: Option<(usize, i32, i64)> = None;
+                for slot in 1..new_turns.len().min(5) {
+                    let tc = new_turns[slot];
+                    let trc = &ix.turns[tc];
+                    if trc.is_question || trc.is_backchannel || turn_only_other(tc) {
+                        continue;
+                    }
+                    let Some(ic) = pool.iter().position(|&x| x == tc) else {
+                        continue;
+                    };
+                    if feats[ic][32] == 0
+                        && feats[ic][15] == 2
+                        && feats[ic][9] * 10 >= feats[i0][9] * 8
+                        && scores[i0].saturating_sub(scores[ic]) <= 36_000
+                    {
+                        let key = (slot, feats[ic][9], scores[ic]);
+                        if own_win.is_none_or(|(_, bic, bsc)| (key.1, key.2) > (bic, bsc)) {
+                            own_win = Some(key);
+                        }
+                    }
+                }
+                if let Some((slot, _, _)) = own_win {
+                    new_turns[..=slot].rotate_right(1);
+                }
+            }
+            // Pass 3 (unchained C13): #7 Cross-Speaker Self-Disclosure Tie-Break (`self_win`).
+            let t0 = new_turns[0];
+            if let Some(i0) = pool.iter().position(|&x| x == t0)
+                && ((feats[i0][15] == 2 && ix.turns[t0].is_question)
+                    || (feats[i0][15] == -1
+                        && feats[i0][41] <= 0
+                        && (ix.turns[t0].is_question || turn_only_other(t0))))
+            {
+                let mut self_win: Option<(usize, i32, i64)> = None;
+                for slot in 1..new_turns.len().min(5) {
+                    let tc = new_turns[slot];
+                    let trc = &ix.turns[tc];
+                    if trc.is_question || trc.is_backchannel || turn_only_other(tc) {
+                        continue;
+                    }
+                    let Some(ic) = pool.iter().position(|&x| x == tc) else {
+                        continue;
+                    };
+                    if feats[ic][32] == 0
+                        && feats[ic][15] == 2
+                        && feats[ic][9] >= feats[i0][9]
+                        && scores[i0].saturating_sub(scores[ic]) <= 24_000
+                    {
+                        let key = (slot, feats[ic][9], scores[ic]);
+                        if self_win.is_none_or(|(_, bic, bsc)| (key.1, key.2) > (bic, bsc)) {
+                            self_win = Some(key);
+                        }
+                    }
+                }
+                if let Some((slot, _, _)) = self_win {
+                    new_turns[..=slot].rotate_right(1);
+                }
+            }
+            // Pass 4 (unchained C13): 4-Bit ModalityMask Guard (`0x04 = HYPOTHETICAL`).
+            let t0 = new_turns[0];
+            if let Some(i0) = pool.iter().position(|&x| x == t0)
+                && (ix.turns[t0].modality_mask & 0x04) != 0
+            {
+                let q_low_mod = q.text.to_ascii_lowercase();
+                let is_past_q_m = q_low_mod.starts_with("what did ")
+                    || q_low_mod.starts_with("when did ")
+                    || q_low_mod.starts_with("where has ")
+                    || q_low_mod.starts_with("where did ")
+                    || q_low_mod.starts_with("what has ");
+                let ic_num = if is_past_q_m { 7 } else { 10 };
+                let max_gap = if is_past_q_m { 48_000 } else { 28_000 };
+                let mut mod_win: Option<(usize, i32, i64)> = None;
+                for slot in 1..new_turns.len().min(5) {
+                    let tc = new_turns[slot];
+                    let trc = &ix.turns[tc];
+                    if trc.is_question || trc.is_backchannel || (trc.modality_mask & 0x01) == 0 {
+                        continue;
+                    }
+                    let Some(ic) = pool.iter().position(|&x| x == tc) else {
+                        continue;
+                    };
+                    if feats[ic][32] == 0
+                        && feats[ic][15] >= feats[i0][15]
+                        && feats[ic][9] * 10 >= feats[i0][9] * ic_num
+                        && scores[i0].saturating_sub(scores[ic]) <= max_gap
+                    {
+                        let key = (slot, feats[ic][9], scores[ic]);
+                        if mod_win.is_none_or(|(_, bic, bsc)| (key.1, key.2) > (bic, bsc)) {
+                            mod_win = Some(key);
+                        }
+                    }
+                }
+                if let Some((slot, _, _)) = mod_win {
+                    new_turns[..=slot].rotate_right(1);
+                }
+            }
+            // Pass 5 (unchained C13): Lexical WH Answer-Type Hard Gate (`feats[i0][20] < 0`).
+            let t0 = new_turns[0];
+            if let Some(i0) = pool.iter().position(|&x| x == t0)
+                && feats[i0][20] < 0
+            {
+                let mut wh_win: Option<(usize, i32, i64)> = None;
+                for slot in 1..new_turns.len().min(5) {
+                    let tc = new_turns[slot];
+                    let trc = &ix.turns[tc];
+                    if trc.is_question || trc.is_backchannel {
+                        continue;
+                    }
+                    let Some(ic) = pool.iter().position(|&x| x == tc) else {
+                        continue;
+                    };
+                    if feats[ic][32] == 0
+                        && feats[ic][20] > 0
+                        && feats[ic][15] >= feats[i0][15]
+                        && feats[ic][9] * 10 >= feats[i0][9] * 9
+                        && scores[i0].saturating_sub(scores[ic]) <= 26_000
+                    {
+                        let key = (slot, feats[ic][20], scores[ic]);
+                        if wh_win.is_none_or(|(_, blr, bsc)| (key.1, key.2) > (blr, bsc)) {
+                            wh_win = Some(key);
+                        }
+                    }
+                }
+                if let Some((slot, _, _)) = wh_win {
+                    new_turns[..=slot].rotate_right(1);
+                }
+            }
+        }
+    }
     let q_toks_sync = raw_tokens(&q.text);
     let q_refs_sync: Vec<&str> = q_toks_sync.iter().map(String::as_str).collect();
     let is_inferential_modal =
         crate::retrieval::lexical::speaker_translation_q16::is_open_domain_inferential_shape(
             &q_refs_sync,
         );
+    let q_low_od = q.text.trim_start().to_ascii_lowercase();
+    let is_strong_od_infer = is_inferential_modal
+        && has_named_speakers_eff
+        && (q_low_od.starts_with("would ")
+            || q_low_od.contains(" would ")
+            || q_low_od.starts_with("could ")
+            || q_low_od.contains(" could ")
+            || q_low_od.contains(" likely")
+            || q_low_od.contains(" might "))
+        && new_turns.len() >= 2;
+    if is_strong_od_infer {
+        // Dedicated Open-Domain Inferential Rank-1 Arbiter:
+        // Fuses KITE Upward-Cone Typed Meet + Discrete Sinkhorn OT + SYNAPSE Spreading Activation
+        // + exact/compound-suffix IC + `is_habitual` + `t_scene` over candidate turns by the
+        // queried speaker(s), rescuing turns where generic polysemous decoys stole Slot 0.
+        let mut queried_sp_od: BTreeSet<String> = BTreeSet::new();
+        for (idx, &ti) in pool.iter().enumerate() {
+            if feats[idx][15] > 0 && !ix.turns[ti].speaker.is_empty() {
+                queried_sp_od.insert(ix.turns[ti].speaker.to_ascii_lowercase());
+            }
+        }
+        let ns_od = (ix.session_turns.len() as u32).max(1);
+        let max_suf_df = (ns_od / 3).max(4);
+        let mut q_suffix_ids: Vec<u32> = Vec::new();
+        for w in &q_toks_sync {
+            if !w.is_ascii() || !is_content(w) || queried_sp_od.contains(w.as_str()) {
+                continue;
+            }
+            if w.len() >= 6 && ix.vocab.get(w).is_none() {
+                for (vid, vname) in ix.vocab.names.iter().enumerate() {
+                    if !vname.starts_with('\u{1}')
+                        && crate::retrieval::lexical::bm25f::damerau_levenshtein_le_1(w, vname)
+                    {
+                        let cand_id = vid as u32;
+                        let df = ix.s_stats.df.get(&cand_id).copied().unwrap_or(0);
+                        if (1..=max_suf_df).contains(&df) && !q_suffix_ids.contains(&cand_id) {
+                            q_suffix_ids.push(cand_id);
+                        }
+                    }
+                }
+            }
+            if w.len() < 7 {
+                continue;
+            }
+            for split in 3..=(w.len() - 4) {
+                let suf = &w[split..];
+                let st_suf = stem(suf);
+                for cand_id in [ix.vocab.get(suf), ix.vocab.get(&st_suf)]
+                    .into_iter()
+                    .flatten()
+                {
+                    let df = ix.s_stats.df.get(&cand_id).copied().unwrap_or(0);
+                    if (1..=max_suf_df).contains(&df) && !q_suffix_ids.contains(&cand_id) {
+                        q_suffix_ids.push(cand_id);
+                    }
+                }
+            }
+        }
+        let (_, kite_t_od) = crate::retrieval::index::kite_typed::score_kite_typed_facet_meet_q16(
+            ix,
+            plan,
+            &q.text,
+            &queried_sp_od,
+            0,
+            65_536,
+        );
+        let ot_od = crate::retrieval::lexical::sinkhorn_ot_q16::SinkhornQuery::build(
+            ix,
+            &q.text,
+            &queried_sp_od,
+        );
+        let max_scn_od = t_scene
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max)
+            .max(1e-6);
+        let mut od_cands: Vec<(usize, u64)> = Vec::new();
+        for (idx, &ti) in pool.iter().enumerate() {
+            let tr = &ix.turns[ti];
+            if tr.is_question || tr.is_backchannel || turn_is_superseded(ix, ti) {
+                continue;
+            }
+            if !queried_sp_od.is_empty() && !queried_sp_od.contains(&tr.speaker.to_ascii_lowercase()) {
+                continue;
+            }
+            let scn_q = (((t_scene.get(ti).copied().unwrap_or(0.0).max(0.0)) / max_scn_od) * 65_536.0) as u64;
+            let exact_q = (feats[idx][9].max(0) as u64).min(65_536);
+            let suf_q = if q_suffix_ids.iter().any(|id| tr.content.contains(id)) {
+                24_576u64
+            } else {
+                0u64
+            };
+            let kite_q = kite_t_od.get(ti).copied().unwrap_or(0);
+            let ot_q = ot_od.score_turn_q16(ix, ti);
+            let hab_q = if tr.is_habitual { 16_384u64 } else { 0u64 };
+            let comb = scn_q
+                .saturating_add(exact_q.saturating_mul(3) / 2)
+                .saturating_add(suf_q)
+                .saturating_add(kite_q.saturating_mul(3) / 2)
+                .saturating_add(ot_q.saturating_mul(2))
+                .saturating_add(hab_q);
+            if comb > 0 {
+                od_cands.push((ti, comb));
+            }
+        }
+        od_cands.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        od_cands.truncate(20);
+        let syn_ranked = crate::retrieval::graph::synapse_activation_q16::synapse_activate_speaker_turns_q16(
+            ix,
+            &od_cands,
+        );
+        if let Some(&(best_ti, best_syn)) = syn_ranked.first() {
+            let t0 = new_turns[0];
+            let best_in_topk = new_turns.iter().take(10).position(|&x| x == best_ti);
+            let best_kite = kite_t_od.get(best_ti).copied().unwrap_or(0);
+            let t0_kite = kite_t_od.get(t0).copied().unwrap_or(0);
+            let best_exact_q = pool
+                .iter()
+                .position(|&x| x == best_ti)
+                .map(|idx| feats[idx][9].max(0) as u64)
+                .unwrap_or(0);
+            let t0_exact_q = pool
+                .iter()
+                .position(|&x| x == t0)
+                .map(|idx| feats[idx][9].max(0) as u64)
+                .unwrap_or(0);
+            let t0_syn = syn_ranked
+                .iter()
+                .find(|&&(ti, _)| ti == t0)
+                .map(|&(_, sc)| sc)
+                .unwrap_or(0);
+            let t0_wrong_sp = !queried_sp_od.is_empty()
+                && !queried_sp_od.contains(&ix.turns[t0].speaker.to_ascii_lowercase());
+            let decisive = best_ti != t0
+                && (t0_wrong_sp
+                    || (best_syn > t0_syn.saturating_mul(115) / 100
+                        && best_kite >= t0_kite
+                        && best_exact_q >= t0_exact_q)
+                    || (best_exact_q > t0_exact_q && best_syn >= t0_syn)
+                    || (t_scene.get(best_ti).copied().unwrap_or(0.0)
+                        > 1.15 * t_scene.get(t0).copied().unwrap_or(0.0)
+                        && best_kite > t0_kite));
+            if decisive {
+                if let Some(pos) = best_in_topk {
+                    new_turns[..=pos].rotate_right(1);
+                } else {
+                    new_turns.retain(|&x| x != best_ti);
+                    new_turns.insert(0, best_ti);
+                    new_turns.truncate(k);
+                }
+                let win_sess = ix.turns[best_ti].session;
+                if let Some(s_pos) = final_session_indices.iter().take(10).position(|&s| s == win_sess)
+                    && s_pos > 0
+                {
+                    let moved = final_session_indices.remove(s_pos);
+                    final_session_indices.insert(0, moved);
+                }
+            }
+        }
+    }
+    // Forward GeoNames (City -> Country/US-State), WordNet Forward Hypernym-Category,
+    // and Single-Speaker Possessive Alignment Arbiter for named-speaker dialogues.
+    if has_named_speakers_eff && !new_turns.is_empty() {
+        let mut sp_set_w17: Vec<String> = Vec::new();
+        for (idx, &ti) in pool.iter().enumerate() {
+            if feats[idx][15] > 0 && !ix.turns[ti].speaker.is_empty() {
+                let sp_l = ix.turns[ti].speaker.to_ascii_lowercase();
+                if !sp_set_w17.contains(&sp_l) {
+                    sp_set_w17.push(sp_l);
+                }
+            }
+        }
+        let single_sp_w17: Option<&str> = if sp_set_w17.len() == 1 {
+            Some(sp_set_w17[0].as_str())
+        } else {
+            None
+        };
+        let q_toks_w17 = raw_tokens(&q.text);
+        let countries_list = crate::geonames::geo_class_instances("country");
+        let states_list = crate::geonames::geo_class_instances("state");
+        let explicit_places: Vec<String> = q_toks_w17
+            .iter()
+            .filter(|w| {
+                w.len() >= 4
+                    && !sp_set_w17.iter().any(|sp| sp == w.as_str())
+                    && (countries_list.iter().any(|c| c == w.as_str())
+                        || states_list.iter().any(|s| s == w.as_str()))
+            })
+            .cloned()
+            .collect();
+        let wants_country = q_toks_w17
+            .iter()
+            .any(|w| matches!(w.as_str(), "country" | "countries" | "nation" | "nations"));
+        let wants_state = q_toks_w17
+            .iter()
+            .any(|w| matches!(w.as_str(), "state" | "states" | "province" | "provinces"));
+        // hardcode-scan: closed-class (WH determiners & generic classifier nouns skipped as hypernym heads)
+        let q_hyp_target: Option<String> = q_toks_w17
+            .windows(4)
+            .find_map(|win| {
+                if (win[0] == "which" || win[0] == "what")
+                    && matches!(
+                        win[1].as_str(),
+                        "kind" | "sort" | "type" | "breed" | "genre" | "style" | "form"
+                    )
+                    && win[2] == "of"
+                    && win[3].len() >= 3
+                    && is_content(&win[3])
+                    && !crate::wordnet::full_lexicon_neighbors(&win[3]).is_empty()
+                {
+                    Some(win[3].clone())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                q_toks_w17.windows(2).find_map(|win| {
+                    if (win[0] == "which" || win[0] == "what")
+                        && win[1].len() >= 4
+                        && is_content(&win[1])
+                        && !matches!(
+                            win[1].as_str(),
+                            "country"
+                                | "state"
+                                | "city"
+                                | "kind"
+                                | "sort"
+                                | "type"
+                                | "breed"
+                                | "genre"
+                                | "style"
+                                | "form"
+                                | "ways"
+                                | "things"
+                                | "year"
+                                | "month"
+                                | "time"
+                                | "additional"
+                        )
+                        && !crate::wordnet::full_lexicon_neighbors(&win[1]).is_empty()
+                    {
+                        Some(win[1].clone())
+                    } else {
+                        None
+                    }
+                })
+            });
+        let geo_score_turn = |ti: usize| -> u32 {
+            if explicit_places.is_empty() && !wants_country && !wants_state {
+                return 0;
+            }
+            let mut sc = 0u32;
+            for tw in raw_tokens(&ix.turns[ti].body_for_headers) {
+                if tw.len() < 4 || q_toks_w17.iter().any(|qw| qw == &tw) {
+                    continue;
+                }
+                if !explicit_places.is_empty()
+                    && (explicit_places.iter().any(|p| p == &tw)
+                        || crate::geonames::geo_neighbors(&tw)
+                            .iter()
+                            .any(|&(nb, _)| explicit_places.iter().any(|p| p == nb)))
+                {
+                    sc = sc.saturating_add(3);
+                }
+                if wants_country
+                    && (countries_list.iter().any(|c| c == &tw)
+                        || crate::geonames::geo_neighbors(&tw)
+                            .iter()
+                            .any(|&(nb, _)| countries_list.iter().any(|c| c == nb)))
+                {
+                    sc = sc.saturating_add(2);
+                }
+                if wants_state
+                    && (states_list.iter().any(|s| s == &tw)
+                        || crate::geonames::geo_neighbors(&tw)
+                            .iter()
+                            .any(|&(nb, _)| states_list.iter().any(|s| s == nb)))
+                {
+                    sc = sc.saturating_add(2);
+                }
+            }
+            sc
+        };
+        let hyp_score_turn = |ti: usize| -> u32 {
+            let Some(ref hyp) = q_hyp_target else {
+                return 0;
+            };
+            let mut sc = 0u32;
+            for tw in raw_tokens(&ix.turns[ti].body_for_headers) {
+                if tw.len() < 4 || q_toks_w17.iter().any(|qw| qw == &tw) {
+                    continue;
+                }
+                if tw == *hyp || crate::wordnet::heyting_implication_ic_q16(&tw, hyp) > 0 {
+                    sc = sc.saturating_add(1);
+                }
+            }
+            sc
+        };
+        let t0 = new_turns[0];
+        let mut q_nonsp_mask = 0u64;
+        for qt in &plan.terms {
+            if qt.exact_hit
+                && let Some(g) = qt.group
+                && g < 64
+            {
+                let gnm = plan.groups.get(g).map(String::as_str).unwrap_or("");
+                if !sp_set_w17.iter().any(|sp| sp == gnm) {
+                    q_nonsp_mask |= 1u64 << g;
+                }
+            }
+        }
+        let ex0_nonsp = (t_exact_mask.get(t0).copied().unwrap_or(0) & q_nonsp_mask).count_ones();
+        let geo0 = geo_score_turn(t0);
+        let hyp0 = hyp_score_turn(t0);
+        let mut cand_turns_w17: Vec<usize> = pool.clone();
+        for &si in final_session_indices.iter().take(5) {
+            for &ti in &ix.session_turns[si] {
+                if !cand_turns_w17.contains(&ti) {
+                    cand_turns_w17.push(ti);
+                }
+            }
+        }
+        let mut promoted_w17: Option<usize> = None;
+        if !explicit_places.is_empty() || wants_country || wants_state || q_hyp_target.is_some() {
+            let mut best_ans: Option<(u32, u32, u64, usize)> = None;
+            let tsc0 = t_scene.get(t0).copied().unwrap_or(0.0);
+            let i0_w17 = pool.iter().position(|&x| x == t0);
+            let gsc0_w17 = i0_w17.map(|i| scores[i]).unwrap_or(i64::MIN / 2);
+            for &tc in &cand_turns_w17 {
+                if tc == t0 {
+                    continue;
+                }
+                let trc = &ix.turns[tc];
+                if trc.is_question || trc.is_backchannel || turn_is_superseded(ix, tc) {
+                    continue;
+                }
+                if let Some(sp) = single_sp_w17
+                    && !trc.speaker.eq_ignore_ascii_case(sp)
+                {
+                    continue;
+                }
+                let gc = geo_score_turn(tc);
+                let hc = hyp_score_turn(tc);
+                let gain_geo = gc > geo0 && geo0 == 0;
+                let gain_hyp = q_hyp_target.is_some() && hc > hyp0 && hyp0 == 0;
+                if !gain_geo && !gain_hyp {
+                    continue;
+                }
+                let exc_ns = (t_exact_mask.get(tc).copied().unwrap_or(0) & q_nonsp_mask).count_ones();
+                let tscc = t_scene.get(tc).copied().unwrap_or(0.0);
+                let gsc_c = pool
+                    .iter()
+                    .position(|&x| x == tc)
+                    .map(|i| scores[i])
+                    .unwrap_or(i64::MIN / 2);
+                let geo_ok = gain_geo
+                    && exc_ns >= ex0_nonsp
+                    && (tscc >= 0.65 * tsc0 || gsc_c.saturating_add(24_000) >= gsc0_w17);
+                let hyp_ok = gain_hyp
+                    && exc_ns >= ex0_nonsp
+                    && tscc >= 0.72 * tsc0
+                    && gsc_c.saturating_add(22_000) >= gsc0_w17;
+                if geo_ok || hyp_ok {
+                    let key = (gc * 2 + hc, exc_ns, ieee754_bits_to_q16(tscc.to_bits()), tc);
+                    if best_ans.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                        best_ans = Some(key);
+                    }
+                }
+            }
+            if let Some((_, _, _, win_ti)) = best_ans {
+                promoted_w17 = Some(win_ti);
+            }
+        }
+        if let Some(win_ti) = promoted_w17 {
+            if let Some(pos) = new_turns.iter().take(10).position(|&x| x == win_ti) {
+                if pos > 0 {
+                    new_turns[..=pos].rotate_right(1);
+                }
+            } else {
+                new_turns.retain(|&x| x != win_ti);
+                new_turns.insert(0, win_ti);
+            }
+            let win_sess = ix.turns[win_ti].session;
+            if let Some(s_pos) = final_session_indices.iter().take(8).position(|&s| s == win_sess)
+                && s_pos > 0
+            {
+                let mv = final_session_indices.remove(s_pos);
+                final_session_indices.insert(0, mv);
+            }
+        }
+    }
+    new_turns.truncate(k);
+    *final_turn_indices = new_turns;
     if !is_inferential_modal
         && let Some(&win_ti) = final_turn_indices.first()
         && final_session_indices.len() >= 2
@@ -3527,7 +5434,11 @@ pub(in crate::retrieval) fn apply_at1_gatekeeper_q16(
         if win_sess != cur_s0
             && let Some(s_pos) = final_session_indices.iter().take(6).position(|&s| s == win_sess)
         {
-            let win_sc = scores[order[0]];
+            let win_sc = pool
+                .iter()
+                .position(|&x| x == win_ti)
+                .map(|i| scores[i])
+                .unwrap_or(scores[order[0]]);
             let cur_s0_best = (0..pool.len())
                 .filter(|&i| ix.turns[pool[i]].session == cur_s0)
                 .map(|i| scores[i])
@@ -3552,5 +5463,13 @@ mod tests {
         let digest = Sha256::digest(&bytes);
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(hex, AT1_GBDT_SHA256, "AT1 GBDT sha256 mismatch");
+    }
+
+    #[test]
+    fn closed_revision_cues_reject_ambient_time_words() {
+        assert!(turn_has_revision_cue("I switched my diet to vegetarian instead of keto"));
+        assert!(turn_has_revision_cue("Actually my weekly quota was updated to 500"));
+        assert!(turn_has_revision_cue("I am no longer taking the morning class"));
+        assert!(!turn_has_revision_cue("Right now I need to plan my new schedule for May"));
     }
 }

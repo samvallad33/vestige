@@ -10,7 +10,29 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
     let mut group_of = DetHashMap::default();
     let mut focal_ids: DetHashSet<u32> = DetHashSet::default();
 
-    let raw_q = raw_tokens(&q.text);
+    // Strip trailing closed-class output-formatting constraints ("Mention ONLY and ONLY five items.")
+    // so constraint words/cardinalities never pollute lexical BM25 groups on ordering/summary queries.
+    let plan_text: &str = {
+        let low_full = q.text.to_ascii_lowercase();
+        // hardcode-scan: closed-class (trailing output-formatting instruction clauses)
+        let cut = ["mention only", "list only", "give only", "return only"]
+            .iter()
+            .filter_map(|pat| low_full.rfind(pat))
+            .filter(|&pos| {
+                pos >= 16
+                    && matches!(
+                        q.text.as_bytes().get(pos.saturating_sub(1)).copied(),
+                        Some(b' ' | b'.' | b'?' | b'!' | b'\n')
+                    )
+            })
+            .min();
+        match cut {
+            Some(pos) => q.text[..pos].trim_end(),
+            None => q.text.as_str(),
+        }
+    };
+    let raw_q = raw_tokens(plan_text);
+    let q_low_plan = plan_text.to_ascii_lowercase();
     let episodic_past_recall = wh_slots(&q.text) != 0
         || intent.sniper_how_many
         || intent.multi_hop
@@ -164,6 +186,14 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
         )
     });
     let mut porphyry_genus_mask: u64 = 0;
+    let mut taxonomic_drop_mask: u64 = 0;
+    if raw_q.len() >= 3
+        && raw_q[0] == "in"
+        && matches!(raw_q[1].as_str(), "what" | "which")
+        && matches!(raw_q[2].as_str(), "way" | "ways")
+    {
+        taxonomic_drop_mask |= 1u64 << 2;
+    }
     if !has_first_person_q
         && let Some(wi) = wh_det_pos
         && n_docs >= 24
@@ -172,7 +202,10 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
     {
         let h1 = &raw_q[wi + 1];
         let w2 = &raw_q[wi + 2];
-        if (is_closed_post_head(w2) || has_later_cap_entity)
+        if w2 == "of" && (wi + 1) < 64 && matches!(h1.as_str(), "kind" | "kinds" | "type" | "types" | "sort" | "sorts") {
+            // hardcode-scan: closed-class (taxonomic WH classifier nouns in "what kind/type/sort of")
+            taxonomic_drop_mask |= 1u64 << (wi + 1);
+        } else if (is_closed_post_head(w2) || has_later_cap_entity)
             && is_discountable_genus_word(h1)
             && (wi + 1) < 64
         {
@@ -199,6 +232,9 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
         if !is_content(w) {
             continue;
         }
+        if idx < 64 && (taxonomic_drop_mask & (1u64 << idx)) != 0 {
+            continue;
+        }
         if zero_rel_scaffolding && rel_spec.scaffold_positions.get(idx).copied().unwrap_or(false) {
             continue;
         }
@@ -207,11 +243,9 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
         }
         // hardcode-scan: closed-class (epistemic/modal framing modifiers on hypothetical queries)
         let is_hyp_scaffold = is_hypothetical_modal_q
-            && has_later_cap_entity
-            && matches!(
-                w.as_str(),
-                "likely" | "potentially" | "might" | "consider" | "considered" | "future"
-            );
+            && (matches!(w.as_str(), "likely" | "potentially")
+                || (has_later_cap_entity
+                    && matches!(w.as_str(), "might" | "consider" | "considered" | "future")));
         if (idx < 64 && (porphyry_genus_mask & (1u64 << idx)) != 0) || is_hyp_scaffold {
             if let Some(id) = ix.vocab.get(w) {
                 terms.push(QTerm { id, weight: 0.08, group: None, exact_hit: false });
@@ -236,11 +270,36 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
             }
             continue;
         }
+        let is_order_or_sum_q = crate::retrieval::eff_summary_request(&q.text)
+            || intent.is_event_sequence
+            || q_low_plan.contains("order in which")
+            || q_low_plan.contains("walk me through");
+        // hardcode-scan: closed-class (meta-task and ordering/enumeration scaffold operators)
         let is_meta_task_framing = can_demote_framing
-            && (crate::retrieval::eff_summary_request(&q.text) || intent.is_event_sequence)
+            && is_order_or_sum_q
             && matches!(
                 w.as_str(),
-                "summary" | "summarize" | "comprehensive" | "conversations" | "overview" | "progressed" | "aspects" | "timeline" | "walkthrough"
+                "summary"
+                    | "summarize"
+                    | "comprehensive"
+                    | "conversations"
+                    | "overview"
+                    | "progressed"
+                    | "aspects"
+                    | "timeline"
+                    | "walkthrough"
+                    | "walk"
+                    | "brought"
+                    | "different"
+                    | "items"
+                    | "order"
+                    | "including"
+                    | "related"
+                    | "various"
+                    | "throughout"
+                    | "across"
+                    | "provide"
+                    | "give"
             );
         let is_frame = (can_demote_framing && frame_token(w)) || is_meta_task_framing;
         if is_frame {
@@ -277,6 +336,46 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
             terms.push(QTerm { id, weight, group: Some(g), exact_hit: true });
             group_of.insert(id, g);
             focal_ids.insert(id);
+        }
+        // Stage-01 Vocab-Attested Compound Splitting (`len >= 6`, e.g. "roadtrip" -> "road" + "trip"):
+        // If `w` splits into two corpus-attested content words (`len >= 3` each), emit both under group `g`
+        // so BM25F, MRF, and `s_exact_mask` match at Stage 01 without waiting for downstream bridges.
+        if w.is_ascii() && w.len() >= 6 && w.bytes().all(|b| b.is_ascii_alphabetic()) {
+            let w_df = ix.vocab.get(w).map(|id| corpus_df(id)).unwrap_or(0);
+            if w_df <= 2 {
+                for split_at in 3..=(w.len() - 3) {
+                    let left = &w[..split_at];
+                    let right = &w[split_at..];
+                    if is_content(left)
+                        && is_content(right)
+                        && let (Some(lid), Some(rid)) = (ix.vocab.get(left), ix.vocab.get(right))
+                    {
+                        if corpus_df(lid) > 0 && corpus_df(rid) > 0 {
+                            terms.push(QTerm { id: lid, weight: 0.72, group: Some(g), exact_hit: true });
+                            terms.push(QTerm { id: rid, weight: 0.72, group: Some(g), exact_hit: true });
+                            group_of.entry(lid).or_insert(g);
+                            group_of.entry(rid).or_insert(g);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // Adjacent query compound join ("road" + "trip" -> "roadtrip" when attested in corpus vocab):
+        if let Some(next_w) = raw_q.get(idx + 1)
+            && is_content(next_w)
+            && w.len() >= 3
+            && next_w.len() >= 3
+            && w.is_ascii()
+            && next_w.is_ascii()
+        {
+            let joined = format!("{w}{next_w}");
+            if let Some(jid) = ix.vocab.get(&joined)
+                && corpus_df(jid) > 0
+            {
+                terms.push(QTerm { id: jid, weight: 0.78, group: Some(g), exact_hit: true });
+                group_of.entry(jid).or_insert(g);
+            }
         }
         if let Some(full) = nick_bind.get(w) {
             if let Some(id) = ix.vocab.get(full) {

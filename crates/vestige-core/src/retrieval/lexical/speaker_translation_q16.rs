@@ -15,28 +15,60 @@ use std::collections::BTreeMap;
 
 use crate::retrieval::fusion::aspect_coverage_q16::Q16_ONE;
 
+/// Normalize curly apostrophes to ASCII and lowercase for closed-class modal matching.
+#[inline]
+fn norm_modal_token(w: &str) -> String {
+    w.replace('\u{2019}', "'").to_ascii_lowercase()
+}
+
+/// Strict closed-class epistemic inferential query gate (`would/wouldn't/could/couldn't/
+/// might/mightn't/likely/potentially/probably`). High-precision Open-Domain signal.
+/// hardcode-scan: closed-class (epistemic modals and likelihood adverbs only; zero topic words).
+pub(in crate::retrieval) fn is_strict_epistemic_inferential(tokens: &[&str]) -> bool {
+    if tokens.len() < 3 {
+        return false;
+    }
+    tokens.iter().any(|w| {
+        let low = norm_modal_token(w);
+        matches!(
+            low.as_str(),
+            "would"
+                | "wouldn't"
+                | "wouldnt"
+                | "could"
+                | "couldn't"
+                | "couldnt"
+                | "might"
+                | "mightn't"
+                | "mightnt"
+                | "likely"
+                | "potentially"
+                | "probably"
+        )
+    })
+}
+
 /// Closed-class open-domain inferential query shape gate.
 /// hardcode-scan: closed-class (interrogatives, modals, and copulas only; zero topic words).
 pub(in crate::retrieval) fn is_open_domain_inferential_shape(tokens: &[&str]) -> bool {
     if tokens.len() < 3 {
         return false;
     }
-    let first = tokens[0].to_ascii_lowercase();
+    if is_strict_epistemic_inferential(tokens) {
+        return true;
+    }
+    let first = norm_modal_token(tokens[0]);
     let is_wh = matches!(first.as_str(), "what" | "which" | "how" | "who" | "where");
-    let has_modal = tokens.iter().any(|w| {
-        matches!(
-            w.to_ascii_lowercase().as_str(),
-            "would" | "could" | "might" | "may" | "should"
-        )
+    let has_aux_modal = tokens.iter().any(|w| {
+        let low = norm_modal_token(w);
+        matches!(low.as_str(), "may" | "should" | "shouldn't" | "shouldnt")
     });
-    if is_wh && has_modal {
+    if is_wh && has_aux_modal {
         return true;
     }
-    // Sentence-initial modal ("Would Alice enjoy...").
-    if matches!(first.as_str(), "would" | "could" | "might" | "may") {
+    if matches!(first.as_str(), "may") {
         return true;
     }
-    // Sentence-initial copular/auxiliary predicative frame ("Is X ...", "Does X ...").
     let is_copula_head = matches!(first.as_str(), "is" | "are" | "was" | "were" | "does" | "do");
     if is_copula_head
         && !tokens.iter().any(|w| {
@@ -93,8 +125,9 @@ pub(in crate::retrieval) fn score_speaker_translation_lift_q16(
             *e = e.saturating_add(w_q16);
             sess_len = sess_len.saturating_add(w_q16);
         }
-        let denom = sess_len.saturating_add(Q16_ONE * 8); // Dirichlet prior mu = 8.0
+        let denom = (sess_len >> 2).saturating_add(Q16_ONE * 16); // Sublinear Dirichlet prior
         let mut s_total: u64 = 0;
+        let mut matched_preds: u32 = 0;
 
         for (&qid, &q_ic) in query_pred_ic_q16 {
             let Some(nbrs) = trans_map.get(&qid) else {
@@ -103,21 +136,32 @@ pub(in crate::retrieval) fn score_speaker_translation_lift_q16(
             let mut trans_mass: u64 = 0;
             for &(wid, t_qw_q16) in nbrs {
                 if let Some(&w_tf) = sess_tf.get(&wid) {
-                    // Direct translation channel + speaker-profile reinforcement.
+                    // Direct translation channel (BM25-saturated TF + length-smoothed P(w|d))
+                    // blended with speaker-profile reinforcement.
+                    let tf_sat = (((w_tf as u128) << 16)
+                        / (w_tf.saturating_add(Q16_ONE * 2) as u128)) as u64;
                     let p_w_d = (((w_tf as u128) << 16) / (denom as u128)) as u64;
                     let prof_w = profile_acc.get(&wid).copied().unwrap_or(0);
                     let p_prof = (((prof_w as u128) << 16) / (profile_norm as u128)) as u64;
-                    let combined_p = p_w_d.saturating_add(p_prof >> 1);
+                    let combined_p = (tf_sat >> 1)
+                        .saturating_add(p_w_d)
+                        .saturating_add(p_prof >> 1)
+                        .min(Q16_ONE * 2);
                     let contrib =
                         ((t_qw_q16 as u128).saturating_mul(combined_p as u128) >> 16) as u64;
                     trans_mass = trans_mass.saturating_add(contrib);
                 }
             }
             if trans_mass > 0 {
+                matched_preds += 1;
                 let weighted =
                     ((q_ic as u128).saturating_mul(trans_mass.min(Q16_ONE) as u128) >> 16) as u64;
                 s_total = s_total.saturating_add(weighted);
             }
+        }
+        if matched_preds >= 2 && s_total > 0 {
+            let extra = u64::from((matched_preds - 1).min(3));
+            s_total = s_total.saturating_add(s_total.saturating_mul(extra) >> 2);
         }
         if s_total > 0 {
             raw_scores.insert(sid, s_total);
@@ -145,9 +189,16 @@ mod tests {
     fn closed_class_gate_fires_on_open_domain_and_skips_factual_single_hop() {
         assert!(is_open_domain_inferential_shape(&["What", "would", "Alice", "enjoy"]));
         assert!(is_open_domain_inferential_shape(&["Would", "Alice", "enjoy", "hiking"]));
+        assert!(is_open_domain_inferential_shape(&["What", "pets", "wouldn't", "bother", "Alice"]));
+        assert!(is_open_domain_inferential_shape(&["May", "Alice", "prefer", "tea"]));
+        assert!(is_open_domain_inferential_shape(&["What", "should", "Alice", "try"]));
         assert!(is_open_domain_inferential_shape(&["Is", "Bob", "an", "extrovert"]));
+        assert!(is_open_domain_inferential_shape(&["Does", "Bob", "live", "near", "water"]));
+        assert!(is_strict_epistemic_inferential(&["What", "pets", "wouldn't", "bother", "Alice"]));
+        assert!(!is_strict_epistemic_inferential(&["Is", "Bob", "an", "extrovert"]));
         assert!(!is_open_domain_inferential_shape(&["When", "did", "Alice", "move"]));
         assert!(!is_open_domain_inferential_shape(&["Where", "did", "Bob", "buy", "coffee"]));
+        assert!(!is_open_domain_inferential_shape(&["Was", "Alice", "home", "yesterday"]));
     }
 
     #[test]

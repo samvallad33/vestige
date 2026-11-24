@@ -2,6 +2,7 @@
 
 use crate::retrieval::*;
 
+pub(in crate::retrieval) mod kite_typed;
 pub(in crate::retrieval) mod normalize;
 pub(in crate::retrieval) mod policy;
 pub(in crate::retrieval) mod postings;
@@ -102,6 +103,16 @@ pub(in crate::retrieval) struct TurnIx {
     pub(in crate::retrieval) question_clause_ids: DetHashSet<u32>,
     pub(in crate::retrieval) answers_question: bool,
     pub(in crate::retrieval) is_short_reply: bool,
+    /// Bare sub-sentential reply (`<= 3` content tokens) directly answering a prior speaker's question.
+    pub(in crate::retrieval) is_bare_spp: bool,
+    /// Closed-class first-person habitual aspect bit (separates standing habits from one-off events).
+    pub(in crate::retrieval) is_habitual: bool,
+    /// Content term IDs appearing only in 2nd-person ("you"/"your") clauses without 1SG ownership.
+    pub(in crate::retrieval) other_speaker_terms: DetHashSet<u32>,
+    /// Ingest-compiled relative-to-epoch temporal intervals `[v_s, v_e)` resolved against `session_ts`.
+    pub(in crate::retrieval) resolved_timex: Vec<(i64, i64)>,
+    /// 4-bit ModalityMask: `0x01 = ASSERTED`, `0x02 = NEGATED`, `0x04 = HYPOTHETICAL`, `0x08 = INTERROGATIVE`.
+    pub(in crate::retrieval) modality_mask: u8,
     pub(in crate::retrieval) is_backchannel: bool,
     pub(in crate::retrieval) anaphoric: bool,
     pub(in crate::retrieval) is_personal_constraint: bool,
@@ -142,6 +153,16 @@ pub(in crate::retrieval) struct TurnIx {
     /// Step 14 ingest-time closed-class user preference/constraint role-object ids (`prose_body` only).
     pub(in crate::retrieval) role_objs: Vec<u32>,
     pub(in crate::retrieval) raw_links: Vec<TurnLink>,
+    /// True when the turn contains an executed structured `[tool_call ...]` receipt block.
+    pub(in crate::retrieval) has_tool_call: bool,
+    /// True when any `[tool_call <fn>(...)]` in this turn invokes a state-mutating CRUD verb.
+    pub(in crate::retrieval) tool_has_mutation: bool,
+    /// Executed `[tool_call <fn>(...)]` function names parsed at ingest time (empty on plain chat).
+    pub(in crate::retrieval) tool_names: Vec<String>,
+    /// Ingest-time sliding-window within-session coreference entity IDs bound onto
+    /// anaphoric follow-up turns (`it`, `there`, `he`, `she`, definite NPs) without
+    /// altering BM25F document lengths.
+    pub(in crate::retrieval) coref_entities: Vec<u32>,
     /// Dump-only. Full prose body, filled only when VESTIGE_REPLAY_DUMP is set.
     /// Never read by ranking.
     pub(in crate::retrieval) body: String,
@@ -255,6 +276,33 @@ pub(in crate::retrieval) struct Index {
     pub(in crate::retrieval) spatial_events: Vec<crate::retrieval::graph::torrens::SpatialEvent>,
     /// Lazy cache for corpus-wide Fellegi-Sunter role-entity aliases.
     pub(in crate::retrieval) fellegi_aliases: OnceLock<Vec<(u32, u32)>>,
+    /// Per-speaker standing trait bag (`speaker_lower -> top high-IC (term_id, weight_q16)`),
+    /// gathered from first-person turns with 2x weight on habitual aspect turns.
+    pub(in crate::retrieval) speaker_trait_bags: std::collections::BTreeMap<String, Vec<(u32, u64)>>,
+    /// True iff at least one indexed turn contains a structured `[tool_call ...]` receipt.
+    pub(in crate::retrieval) has_tool_calls: bool,
+    /// Lazy KITE upward-cone typed facet index (WordNet 3.1 synsets + Wikidata containers).
+    pub(in crate::retrieval) kite: OnceLock<kite_typed::KiteTypedIndex>,
+}
+
+impl Index {
+    pub(in crate::retrieval) fn kite_index(&self) -> &kite_typed::KiteTypedIndex {
+        self.kite
+            .get_or_init(|| kite_typed::build_kite_typed_index(&self.turns))
+    }
+}
+
+/// Split a turn's prose from any trailing serialized `[tool_call ...]` receipt lines.
+/// Returns `(human_prose, Some(tool_receipt_block))` when present, or `(text, None)`
+/// with zero allocation and zero behavior change on plain dialogue turns.
+fn split_tool_call_receipt(text: &str) -> (&str, Option<&str>) {
+    if text.starts_with("[tool_call ") {
+        return ("", Some(text));
+    }
+    if let Some(pos) = text.find("\n[tool_call ") {
+        return (&text[..pos], Some(&text[pos + 1..]));
+    }
+    (text, None)
 }
 
 pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Index {
@@ -374,7 +422,9 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
         }
 
         for (ti, t) in s.turns.iter().enumerate() {
-            let (prose_body, blip_opt) = split_blip_caption(&t.content);
+            let (raw_prose_body, blip_opt) = split_blip_caption(&t.content);
+            let (prose_body, tool_receipt_opt) = split_tool_call_receipt(raw_prose_body);
+            let has_tool_call = tool_receipt_opt.is_some();
             let raw = raw_tokens(prose_body);
             let nick_bound = nicks.bindings_in(prose_body);
             let role = t.role.trim();
@@ -443,6 +493,114 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                     let eid = vocab.intern(&bent);
                     blip_feats.push(Feat { id: eid, w: 0.85, counts_len: false, inheritable: false });
                     entities.insert(eid);
+                }
+            }
+            // Stream 3: Structured `[tool_call ...]` receipt field (counts_len:false, inheritable:false).
+            // Keeps entity handles (`ORD-6014`, `BK-1000`), dollar amounts, statuses, and product values
+            // searchable without inflating BM25F document length `dl` with serialized JSON boilerplate.
+            let mut tool_names: Vec<String> = Vec::new();
+            let mut tool_has_mutation = false;
+            if let Some(receipt) = tool_receipt_opt {
+                // Extract executed `[tool_call <fn>(` names for deterministic CRUD polarity alignment.
+                let mut rest = receipt;
+                while let Some(pos) = rest.find("[tool_call ") {
+                    let after = &rest[pos + "[tool_call ".len()..];
+                    let end = after
+                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-' && c != '.')
+                        .unwrap_or(after.len());
+                    if end > 0 {
+                        let fname = after[..end].to_ascii_lowercase();
+                        // hardcode-scan: closed-class (CRUD state-mutating verb prefixes for tool protocols)
+                        let is_mut = [
+                            "add_", "update_", "process_", "create_", "cancel_", "delete_",
+                            "remove_", "modify_", "edit_", "set_", "change_", "submit_",
+                            "place_", "apply_", "issue_", "refund_", "exchange_", "book_",
+                            "rebook_", "patch_", "post_", "put_", "write_",
+                        ]
+                        .iter()
+                        .any(|p| fname.starts_with(p));
+                        if is_mut {
+                            tool_has_mutation = true;
+                        }
+                        if !tool_names.contains(&fname) {
+                            tool_names.push(fname);
+                        }
+                    }
+                    rest = &after[end..];
+                }
+                let mut seen_rcpt: DetHashSet<u32> = DetHashSet::default();
+                for handle in extract_exact_technical_handles(receipt) {
+                    let hid = vocab.intern(&handle);
+                    if seen_rcpt.insert(hid) {
+                        feats.push(Feat {
+                            id: hid,
+                            w: 1.15,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                        entities.insert(hid);
+                        content.insert(hid);
+                        s_ents.insert(hid);
+                        s_cont.insert(hid);
+                    }
+                }
+                for (slot_tok, _) in typed_slot_tokens(receipt) {
+                    let sid = vocab.intern(&slot_tok);
+                    if seen_rcpt.insert(sid) {
+                        feats.push(Feat {
+                            id: sid,
+                            w: 0.70,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                        entities.insert(sid);
+                        s_ents.insert(sid);
+                    }
+                }
+                for rent in proper_entity_tokens(receipt) {
+                    let eid = vocab.intern(&rent);
+                    if seen_rcpt.insert(eid) {
+                        feats.push(Feat {
+                            id: eid,
+                            w: 0.85,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                        entities.insert(eid);
+                        s_ents.insert(eid);
+                    }
+                }
+                // hardcode-scan: protocol (JSON serialization literals excluded from receipt BM25F).
+                for rw in raw_tokens(receipt).into_iter().filter(|w| {
+                    is_content(w)
+                        && !matches!(
+                            w.as_str(),
+                            "tool_call" | "tool" | "call" | "true" | "false" | "null"
+                        )
+                }) {
+                    let rid = vocab.intern(&rw);
+                    if seen_rcpt.insert(rid) {
+                        feats.push(Feat {
+                            id: rid,
+                            w: 0.65,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                        content.insert(rid);
+                        s_cont.insert(rid);
+                        if p.enable_stemming {
+                            let rst = stem(&rw);
+                            let rsid = vocab.intern(&stem_term(&rst));
+                            if seen_rcpt.insert(rsid) {
+                                feats.push(Feat {
+                                    id: rsid,
+                                    w: 0.45,
+                                    counts_len: false,
+                                    inheritable: false,
+                                });
+                            }
+                        }
+                    }
                 }
             }
             // Pre-saturation BM25F title boost for structured `{Title}\n{Body}` documents.
@@ -539,11 +697,178 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
             let qshape = analyze_question(&mut vocab, prose_body, is_question, p.enable_stemming, &speaker_names);
             let is_pure_info_question = qshape.is_pure;
             let anaphoric = raw.iter().take(12).any(|w| ANAPHORS.contains(&w.as_str()));
-            let has_temporal = raw.iter().any(|w| {
-                token_is_temporal_word(w.as_str())
-                    || matches!(w.as_str(), "am" | "pm")
-                    || (w.len() >= 3 && (w.ends_with("st") || w.ends_with("nd") || w.ends_with("rd") || w.ends_with("th")) && w[..w.len()-2].chars().all(|c| c.is_ascii_digit()))
-            });
+            let raw_refs_idx: Vec<&str> = raw.iter().map(String::as_str).collect();
+            let is_habitual =
+                crate::retrieval::seating::standing_constraint_q16::is_habitual_first_person_utterance(
+                    &raw_refs_idx,
+                );
+            // 4-bit ModalityMask (`0x01 = ASSERTED`, `0x02 = NEGATED`, `0x04 = HYPOTHETICAL`, `0x08 = INTERROGATIVE`).
+            // hardcode-scan: closed-class (negation, epistemic/prospective hypothetical modals, interrogative markers)
+            let modality_mask: u8 = {
+                let mut mm: u8 = 0;
+                if is_question {
+                    mm |= 0x08;
+                }
+                let has_neg_m = raw.iter().any(|w| {
+                    matches!(
+                        w.as_str(),
+                        "not" | "never" | "no" | "none" | "neither" | "dont" | "didnt" | "wasnt"
+                            | "werent" | "cant" | "cannot" | "wont" | "havent" | "hasnt" | "hadnt"
+                    )
+                });
+                if has_neg_m {
+                    mm |= 0x02;
+                }
+                let low_body_m = prose_body.to_ascii_lowercase();
+                // hardcode-scan: closed-class (completed past-tense auxiliaries vs prospective markers)
+                let has_past_realis = low_body_m.contains("yesterday")
+                    || low_body_m.contains("last ")
+                    || low_body_m.contains(" ago")
+                    || raw.iter().any(|w| {
+                        matches!(
+                            w.as_str(),
+                            "went" | "did" | "was" | "were" | "had" | "made" | "finished" | "saw"
+                        )
+                    });
+                let is_pure_prospective = (low_body_m.contains("off to go ")
+                    || low_body_m.contains("thinking about ")
+                    || low_body_m.contains("planning to ")
+                    || low_body_m.contains("plan to ")
+                    || low_body_m.contains("gonna ")
+                    || low_body_m.contains("going to ")
+                    || low_body_m.contains("might go ")
+                    || low_body_m.contains("maybe we can"))
+                    && !has_past_realis;
+                if is_pure_prospective {
+                    mm |= 0x04;
+                }
+                if !is_question && !is_pure_prospective {
+                    mm |= 0x01;
+                }
+                mm
+            };
+            // Relative-to-epoch timex compiler at ingest: compile relative dates ("last Saturday",
+            // "two Saturdays ago", "yesterday", "last year") against `ts` into canonical `[v_s, v_e)`
+            // spans and normalized calendar month/year features.
+            let resolved_timex = if ts > 0 {
+                crate::retrieval::graph::bitemporal_heideltime::compile_ingest_timex_anchors(
+                    &raw_refs_idx,
+                    ts,
+                )
+            } else {
+                Vec::new()
+            };
+            if !resolved_timex.is_empty() {
+                let (sess_y, _, _) =
+                    crate::retrieval::graph::bitemporal_heideltime::epoch_ts_to_ymd_tokens(ts);
+                let mut seen_timex_tok: DetHashSet<String> = DetHashSet::default();
+                for &(iv_s, iv_e) in &resolved_timex {
+                    let span = iv_e.saturating_sub(iv_s);
+                    let mid = iv_s + span / 2;
+                    if span <= 3 * 86_400 {
+                        // Intern ONLY structured exact-day tokens (`__DATE__YYYY_MM_DD`, `__MD__MM_DD`)
+                        // for resolved relative dates that shift to a DIFFERENT calendar day than the
+                        // session date (`day != sess_day`, e.g., "yesterday", "last Friday"). Never
+                        // emit bare numbers/weekdays/seasons or same-day "today" boosts into `t_own`.
+                        let sess_day = ts.div_euclid(86_400);
+                        let mut day_ts = if span > 86_400 { iv_s + 43_200 } else { mid };
+                        loop {
+                            if day_ts.div_euclid(86_400) != sess_day {
+                                for ctok in calendar_tokens(day_ts) {
+                                    if (ctok.starts_with("__DATE__") || ctok.starts_with("__MD__"))
+                                        && seen_timex_tok.insert(ctok.clone())
+                                    {
+                                        let cid = vocab.intern(&ctok);
+                                        feats.push(Feat {
+                                            id: cid,
+                                            w: 0.95,
+                                            counts_len: false,
+                                            inheritable: true,
+                                        });
+                                    }
+                                }
+                            }
+                            day_ts = day_ts.saturating_add(86_400);
+                            if span <= 86_400 || day_ts >= iv_e {
+                                break;
+                            }
+                        }
+                    }
+                    let (ry, rm, _) =
+                        crate::retrieval::graph::bitemporal_heideltime::epoch_ts_to_ymd_tokens(mid);
+                    let y_str = ry.to_string();
+                    if (ry != sess_y || span <= 45 * 86_400)
+                        && seen_timex_tok.insert(y_str.clone())
+                    {
+                        let yid = vocab.intern(&y_str);
+                        feats.push(Feat {
+                            id: yid,
+                            w: 0.72,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                    }
+                    if span <= 45 * 86_400 && seen_timex_tok.insert(rm.to_string()) {
+                        let mid_id = vocab.intern(rm);
+                        feats.push(Feat {
+                            id: mid_id,
+                            w: 0.72,
+                            counts_len: false,
+                            inheritable: false,
+                        });
+                    }
+                }
+            }
+            // Strict speaker-attributed predicates (named speakers): identify content terms
+            // appearing ONLY in 2nd-person ("you"/"your") clauses without 1st-person ownership.
+            let mut other_speaker_terms: DetHashSet<u32> = DetHashSet::default();
+            if !speaker.is_empty() && speaker != "user" && speaker != "assistant" {
+                let mut own_1sg_terms: DetHashSet<u32> = DetHashSet::default();
+                for clause in prose_body.split(['.', '!', '?', ';']) {
+                    let c_toks = raw_tokens(clause);
+                    if c_toks.is_empty() {
+                        continue;
+                    }
+                    // hardcode-scan: closed-class (1SG and 2SG personal pronouns only)
+                    let has_1sg_c = c_toks.iter().any(|w| {
+                        matches!(w.as_str(), "i" | "my" | "me" | "myself" | "im" | "ive" | "id" | "we" | "our")
+                    });
+                    let has_2sg_c = c_toks.iter().any(|w| {
+                        matches!(w.as_str(), "you" | "your" | "yours" | "yourself" | "youre" | "youve" | "youd" | "youll")
+                    });
+                    if has_2sg_c && !has_1sg_c {
+                        for w in &c_toks {
+                            if is_content(w)
+                                && let Some(cid) = vocab.get(w)
+                            {
+                                other_speaker_terms.insert(cid);
+                            }
+                        }
+                    } else if has_1sg_c {
+                        for w in &c_toks {
+                            if is_content(w)
+                                && let Some(cid) = vocab.get(w)
+                            {
+                                own_1sg_terms.insert(cid);
+                            }
+                        }
+                    }
+                }
+                for owned in own_1sg_terms {
+                    other_speaker_terms.remove(&owned);
+                }
+            }
+            let has_temporal = !resolved_timex.is_empty()
+                || raw.iter().any(|w| {
+                    token_is_temporal_word(w.as_str())
+                        || matches!(w.as_str(), "am" | "pm")
+                        || (w.len() >= 3
+                            && (w.ends_with("st")
+                                || w.ends_with("nd")
+                                || w.ends_with("rd")
+                                || w.ends_with("th"))
+                            && w[..w.len() - 2].chars().all(|c| c.is_ascii_digit()))
+                });
             let has_numeric = prose_body.chars().any(|c| c.is_ascii_digit());
             let has_spatial = !entities.is_empty() && raw.iter().any(|w| closed_locative(w));
             let has_causal = !t.links.is_empty();
@@ -636,6 +961,11 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 question_clause_ids: qshape.clause_ids,
                 answers_question: false,
                 is_short_reply: false,
+                is_bare_spp: false,
+                is_habitual,
+                other_speaker_terms,
+                resolved_timex,
+                modality_mask,
                 is_backchannel,
                 anaphoric,
                 is_personal_constraint,
@@ -661,6 +991,10 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 first_move_num: step9_first_move_num(prose_body),
                 role_objs,
                 raw_links: t.links.clone(),
+                has_tool_call,
+                tool_has_mutation,
+                tool_names,
+                coref_entities: Vec::new(),
                 body: if replay_dump_path().is_some() {
                     prose_body.to_string()
                 } else {
@@ -692,6 +1026,13 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                         || turns[b].has_numeric)
                 {
                     turns[b].is_short_reply = true;
+                }
+                if turns[b].answers_question
+                    && !turns[b].is_question
+                    && !turns[b].is_backchannel
+                    && turns[b].content.len() <= 3
+                {
+                    turns[b].is_bare_spp = true;
                 }
             }
         }
@@ -743,6 +1084,23 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 sb.add(2, bf, 1.0);
                 turn_own_bags[ti].add(2, bf, 1.0);
                 turn_bags[ti].add(2, bf, 1.0);
+            }
+            // Bare-SPP Ellipsis Fusion: fuse 1-3 word sub-sentential replies ("Barely!",
+            // "Last Tuesday.") with their parent question's inheritable open-class predicates
+            // directly into `turn_own_bags[ti]` at index time so `t_own` & `t_exact_mask`
+            // carry the question's predicate terms onto the gold answer turn.
+            if p.enable_carry && pos > 0 && t.is_bare_spp {
+                let src = &turns[members[pos - 1]];
+                let field = t.field;
+                let spp_feats: Vec<Feat> = src
+                    .feats
+                    .iter()
+                    .copied()
+                    .filter(|f| f.inheritable)
+                    .collect();
+                for f in spp_feats {
+                    turn_own_bags[ti].add_inherited(field, f, 0.65);
+                }
             }
             // In named-speaker dialogues (`LoCoMo`), a follow-up question does NOT state the
             // previous speaker's facts; in `user`/`assistant` dialogues, user follow-up questions
@@ -969,6 +1327,91 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
     let (bridge_vocab, turn_bridge_postings, ppmi_neighbors) =
         postings::build_bridge_postings_and_ppmi(p, &vocab, &turns, &t_own_stats);
 
+    // Speaker-Scoped Standing Trait Bag (named-speaker dialogues):
+    // Gather high-IC predicates from each speaker's first-person declarative turns (`I`/`my`/`me`),
+    // weighting habitual aspect turns 2x and skipping 2nd-person `other_speaker_terms`.
+    let mut speaker_trait_bags: std::collections::BTreeMap<String, Vec<(u32, u64)>> =
+        std::collections::BTreeMap::new();
+    {
+        let ns_u32 = (session_turns.len() as u32).max(1);
+        let trait_df_cap = (ns_u32 * 2 / 3).clamp(3, 28);
+        let mut raw_traits: std::collections::BTreeMap<String, std::collections::BTreeMap<u32, u64>> =
+            std::collections::BTreeMap::new();
+        for (ti, tr) in turns.iter().enumerate() {
+            if tr.is_question
+                || tr.is_backchannel
+                || turn_superseded.get(ti).copied().unwrap_or(false)
+                || tr.speaker.is_empty()
+                || tr.speaker == "user"
+                || tr.speaker == "assistant"
+            {
+                continue;
+            }
+            let sp_key = tr.speaker.to_ascii_lowercase();
+            let toks = raw_tokens(&turn_prose_cache[ti]);
+            // hardcode-scan: closed-class (1SG personal pronouns only)
+            let has_1sg = toks.iter().any(|w| {
+                matches!(w.as_str(), "i" | "my" | "me" | "myself" | "im" | "ive" | "id" | "we" | "our")
+            });
+            if !has_1sg && !tr.is_habitual {
+                continue;
+            }
+            let mult: u64 = if tr.is_habitual { 2 } else { 1 };
+            let entry = raw_traits.entry(sp_key).or_default();
+            for &cid in &tr.content {
+                if tr.other_speaker_terms.contains(&cid) {
+                    continue;
+                }
+                let df = s_stats.df.get(&cid).copied().unwrap_or(0);
+                if (1..=trait_df_cap).contains(&df) {
+                    let ic = crate::retrieval::fusion::aspect_coverage_q16::aspect_ic_q16(df, ns_u32);
+                    *entry.entry(cid).or_insert(0) += ic.saturating_mul(mult);
+                }
+            }
+        }
+        for (sp, map) in raw_traits {
+            let mut vec: Vec<(u32, u64)> = map.into_iter().collect();
+            vec.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            vec.truncate(64);
+            speaker_trait_bags.insert(sp, vec);
+        }
+    }
+
+    // Ingest-time sliding-window within-session anaphoric coreference: bind up to 4
+    // rarest topic entity IDs (`df <= 12`) from the preceding 1..=2 turns in the same
+    // session onto anaphoric or definite-NP follow-up turns without modifying BM25F `dl`.
+    let coref_max_df = ((turns.len() / 30).clamp(8, 16)) as u32;
+    for members in &session_turns {
+        for pos in 1..members.len() {
+            let ti = members[pos];
+            let needs_coref = turns[ti].anaphoric
+                || turns[ti].body_for_headers.to_ascii_lowercase().contains(" the ");
+            if !needs_coref {
+                continue;
+            }
+            let mut cands: Vec<(u32, u32)> = Vec::new();
+            let start = pos.saturating_sub(2);
+            for &prev_ti in &members[start..pos] {
+                for &eid in &turns[prev_ti].entities {
+                    if turns[ti].entities.contains(&eid) {
+                        continue;
+                    }
+                    let df = t_own_stats.df.get(&eid).copied().unwrap_or(1);
+                    if (1..=coref_max_df).contains(&df) && !cands.iter().any(|&(id, _)| id == eid) {
+                        cands.push((eid, df));
+                    }
+                }
+            }
+            if !cands.is_empty() {
+                cands.sort_by_key(|&(id, df)| (df, id));
+                cands.truncate(4);
+                turns[ti].coref_entities = cands.into_iter().map(|(id, _)| id).collect();
+            }
+        }
+    }
+
+    let has_tool_calls = turns.iter().any(|t| t.has_tool_call);
+
     Index {
         vocab,
         session_ids,
@@ -1012,5 +1455,8 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
         torrens_superseded,
         spatial_events,
         fellegi_aliases: OnceLock::new(),
+        speaker_trait_bags,
+        has_tool_calls,
+        kite: OnceLock::new(),
     }
 }

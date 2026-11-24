@@ -199,13 +199,15 @@ pub(in crate::retrieval) fn build_rsb_and_supersession_edges(
     }
 
     // 3. Synaptic Tagging `CaptureWindow` (Frey & Morris 1997; Redondo & Morris 2011; 9-hour window):
-    //    A high-salience turn (`is_standing_policy`, `is_personal_constraint`, or `FAILURE_MARKERS`)
-    //    captures the immediately preceding tagged user initiative turn within `CaptureWindow::backward_hours` (9h)
-    //    or the immediate preceding same-episode sub-session (`session_episode_prev`).
+    //    A high-salience turn (`is_standing_policy`, `is_personal_constraint`, or `is_initiative`
+    //    milestone) captures the preceding tagged user initiative turn within `CaptureWindow::backward_hours`
+    //    (9h) or the immediate preceding same-episode sub-session (`session_episode_prev`).
     let capture_window = crate::neuroscience::CaptureWindow::default();
     let max_back_secs = (capture_window.backward_hours * 3600.0) as i64;
     for ti in 1..turns.len() {
-        let is_prp = turns[ti].is_standing_policy || turns[ti].is_personal_constraint;
+        let is_prp = turns[ti].is_standing_policy
+            || turns[ti].is_personal_constraint
+            || (turns[ti].is_initiative && turns[ti].entities.len() >= 2);
         if !is_prp {
             continue;
         }
@@ -223,7 +225,7 @@ pub(in crate::retrieval) fn build_rsb_and_supersession_edges(
                 continue;
             }
             if let Some(&init_ti) = session_turns[back_s].iter().rev().find(|&&cand| turns[cand].is_initiative) {
-                // Require at least 1 shared entity or schema domain so unrelated adjacent topics don't capture blindly.
+                // Require at least 1 shared entity so unrelated adjacent topics don't capture blindly.
                 let shares_anchor = turns[ti].entities.iter().any(|e| turns[init_ti].entities.contains(e));
                 if shares_anchor {
                     if !turns[ti].exact_edges.iter().any(|&(_, t)| t == init_ti) {

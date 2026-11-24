@@ -142,6 +142,55 @@ pub(in crate::retrieval) fn apply_allen_boxcox_tail_refinement(
     }
 }
 
+/// IA-RAG (`2606.06044`, Jun 2026) Directional Allen Interval Cone:
+/// Maps closed-class temporal prepositions onto Allen forward (`R_F`), backward (`R_B`), or
+/// overlap cones for sub-graph time tightening around an anchor event turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::retrieval) enum AllenDirCone {
+    None,
+    Forward,  // "after", "since", "following"
+    Backward, // "before", "prior to", "earlier than"
+    Overlap,  // "during", "while"
+}
+
+pub(in crate::retrieval) fn detect_ia_rag_cone(q_text: &str) -> AllenDirCone {
+    let low = q_text.to_ascii_lowercase();
+    if low.contains(" before ") || low.contains(" prior to ") || low.contains(" earlier than ") {
+        AllenDirCone::Backward
+    } else if low.contains(" after ") || low.contains(" since ") || low.contains(" following ") {
+        AllenDirCone::Forward
+    } else if low.contains(" during ") || low.contains(" while ") {
+        AllenDirCone::Overlap
+    } else {
+        AllenDirCone::None
+    }
+}
+
+/// Returns `true` when `cand_ti` satisfies the requested IA-RAG Allen directional cone relative
+/// to `anchor_ti` (`Before/Meets` for `Backward`, `After/MetBy` for `Forward`, same-session for `Overlap`).
+pub(in crate::retrieval) fn satisfies_ia_rag_cone(
+    ix: &Index,
+    cone: AllenDirCone,
+    anchor_ti: usize,
+    cand_ti: usize,
+) -> bool {
+    let a = turn_time_interval(ix, cand_ti);
+    let b = turn_time_interval(ix, anchor_ti);
+    let rel = classify_allen_relation(a, b);
+    match cone {
+        AllenDirCone::None => true,
+        AllenDirCone::Backward => matches!(rel, AllenRel::Before | AllenRel::Meets),
+        AllenDirCone::Forward => matches!(rel, AllenRel::After | AllenRel::MetBy),
+        AllenDirCone::Overlap => {
+            ix.turns[cand_ti].session == ix.turns[anchor_ti].session
+                || matches!(
+                    rel,
+                    AllenRel::Equals | AllenRel::During | AllenRel::Contains | AllenRel::Overlaps | AllenRel::OverlappedBy
+                )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
