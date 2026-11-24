@@ -59,10 +59,21 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     // Synchronous store work goes to the blocking pool, matching consolidate.
     let storage = Arc::clone(storage);
     let strata = crate::strata_memory::is_strata_backend(storage.as_ref());
+    let scope_for_laws = config.scope.clone();
+    let storage_for_laws = Arc::clone(&storage);
     let report =
         tokio::task::spawn_blocking(move || run_strata_dream_compile(storage.as_ref(), &config))
             .await
             .map_err(|e| format!("dream compile task failed: {e}"))??;
+    let induced_laws = tokio::task::spawn_blocking(move || {
+        crate::cognitive_kernel::induce_standing_laws(
+            storage_for_laws.as_ref(),
+            &scope_for_laws,
+            true,
+        )
+    })
+    .await
+    .map_err(|e| format!("sleep law induction task failed: {e}"))??;
 
     let touched_edges = report.edges_strengthened
         + report.edges_downscaled
@@ -70,17 +81,19 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         + report.contradictions_found;
     let compiled = report.status == "compiled";
     let mut value = serde_json::to_value(report).map_err(|e| e.to_string())?;
+    value["inducedLaws"] = serde_json::to_value(&induced_laws).unwrap_or(Value::Null);
+    value["inducedLawCount"] = serde_json::json!(induced_laws.len());
     if strata {
         // contradictionsFound and insightsGenerated count RECORDED edges
-        // (corrects; derived_from / evidence_of). Nothing is detected from
-        // content, so a zero is "no such edge", never "checked and clean".
+        // (corrects; derived_from / evidence_of), while `inducedLaws` uses
+        // zero-vector Galois FCA + Ochiai + Titration over recurring failures.
         value["discovery"] = super::unavailable::part(
             super::unavailable::EMBEDDINGS_UNAVAILABLE,
-            "Contradictions and insights are counted from recorded edges only. Detecting them from memory content needs embeddings, which this build does not ship.",
+            "Contradictions and insights are counted from recorded edges; recurring failure laws are induced deterministically via Galois FCA + Ochiai without embeddings.",
         );
-        if compiled && touched_edges == 0 {
+        if compiled && touched_edges == 0 && induced_laws.is_empty() {
             value["emptyBecause"] = serde_json::json!(
-                "no recorded edge joins the replayed memories, so there was nothing to strengthen, downscale or count; record typed edges first"
+                "no recorded edge joins the replayed memories and fewer than 3 recurring failure signatures matched; record typed edges or episodes first"
             );
         }
     }

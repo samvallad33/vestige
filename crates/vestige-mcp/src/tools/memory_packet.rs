@@ -372,28 +372,37 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
         .filter(|tag| entity_matches_prompt(prompt, tag))
         .cloned()
         .collect();
+    let labile = crate::cognitive_kernel::labile_memory_ids(storage);
+    let mut circuit_diag = Value::Null;
     let (selected, selection, ranking): (Vec<&KnowledgeNode>, &str, &str) =
         if prompt.trim().is_empty() {
             // No prompt, no target: never inject unrelated salience.
             (Vec::new(), "none_empty_prompt", "none")
         } else {
             let tr_pool = requested.saturating_mul(6).max(32);
-            let tr_scored = super::recall::rank_loaded_nodes_total_recall(
+            let circuit = crate::circuit_index::query_circuit(
                 storage,
-                &nodes,
-                prompt,
-                tr_pool,
+                &crate::circuit_index::CircuitQuery {
+                    query: prompt,
+                    scope: Some(scope),
+                    include_superseded: false,
+                    valid_at: None,
+                    top_k: tr_pool,
+                    labile_ids: &labile,
+                },
             );
+            circuit_diag = crate::circuit_index::epistemic_json(&circuit);
             let pos_by_id: HashMap<&str, usize> = nodes
                 .iter()
                 .enumerate()
                 .map(|(i, n)| (n.id.as_str(), i))
                 .collect();
-            let mut hits: Vec<lexical::LexicalHit> = tr_scored
+            let mut hits: Vec<lexical::LexicalHit> = circuit
+                .hits
                 .into_iter()
-                .filter_map(|(id, sc)| {
-                    let index = *pos_by_id.get(id.as_str())?;
-                    let score_micro = ((sc as f64) * 1_000_000.0).round() as i64;
+                .filter_map(|h| {
+                    let index = *pos_by_id.get(h.id.as_str())?;
+                    let score_micro = ((h.score as f64) * 1_000_000.0).round() as i64;
                     (score_micro > 0).then_some(lexical::LexicalHit { index, score_micro })
                 })
                 .collect();
@@ -499,7 +508,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             (
                 packed,
                 selection,
-                "exact_token_bm25_then_salience_then_recency",
+                "ghostcurrent_circuit_then_salience_then_recency",
             )
         };
     let ids: BTreeSet<&str> = selected.iter().map(|n| n.id.as_str()).collect();
@@ -557,6 +566,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
         "selection": selection,
         "token_budget": lexical::HOOK_TOKEN_BUDGET,
         "ranking_signal": ranking,
+        "circuit": circuit_diag,
     }))
 }
 

@@ -119,6 +119,12 @@ pub(super) struct TurnLedger {
     /// Whether `SessionStart` has already audited instruction files in `cwd`.
     #[serde(default)]
     pub instruction_checked: bool,
+    /// Last user prompt text observed this turn (for Output Operator false-abstention check).
+    #[serde(default)]
+    pub last_prompt: String,
+    /// Files that already received a PreToolUse blast-radius simulation notice this turn.
+    #[serde(default)]
+    pub blast_warned: Vec<String>,
 }
 
 impl TurnLedger {
@@ -132,6 +138,8 @@ impl TurnLedger {
         self.gates.clear();
         self.commits.clear();
         self.receipt_gaps.clear();
+        self.last_prompt.clear();
+        self.blast_warned.clear();
     }
 }
 
@@ -314,26 +322,135 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
     let mut lines = Vec::new();
     match inp.event.as_str() {
         "UserPromptSubmit" => {
+            if !inp.prompt.is_empty() {
+                g.session(&inp.session).ledger.last_prompt = inp.prompt.clone();
+            }
             note_directives(g, inp);
             lines.extend(directive_lines(g, inp));
             lines.extend(handle_lines(g, inp, storage));
             lines.extend(unverified_lines(g, inp, storage));
             lines.extend(resume_lines(g, inp));
+            lines.extend(crate::cognitive_kernel::anchor_watch_lines(
+                storage.as_ref(),
+                None,
+            ));
+            lines.extend(crate::cognitive_kernel::drain_due_intention_lines(
+                storage.as_ref(),
+            ));
         }
         "SessionStart" => {
             lines.extend(unverified_lines(g, inp, storage));
             lines.extend(resume_lines(g, inp));
             lines.extend(instruction_file_lines(g, inp, storage));
+            lines.extend(crate::cognitive_kernel::anchor_watch_lines(
+                storage.as_ref(),
+                None,
+            ));
+            lines.extend(crate::cognitive_kernel::drain_due_intention_lines(
+                storage.as_ref(),
+            ));
         }
-        "PreToolUse" => lines.extend(scope_lines(g, inp, storage)),
+        "PreToolUse" => {
+            lines.extend(scope_lines(g, inp, storage));
+            lines.extend(crate::cognitive_kernel::drain_due_intention_lines(
+                storage.as_ref(),
+            ));
+            if is_edit_tool(&inp.tool) && !inp.file.is_empty() {
+                let already = g
+                    .session(&inp.session)
+                    .ledger
+                    .blast_warned
+                    .iter()
+                    .any(|f| f == &inp.file);
+                if !already {
+                    g.session(&inp.session)
+                        .ledger
+                        .blast_warned
+                        .push(inp.file.clone());
+                    lines.extend(crate::cognitive_kernel::anchor_watch_lines(
+                        storage.as_ref(),
+                        Some(&inp.file),
+                    ));
+                    let cwd_path = (!inp.cwd.is_empty()).then(|| Path::new(&inp.cwd));
+                    let report = crate::cognitive_kernel::simulate_edit_blast_radius(
+                        storage.as_ref(),
+                        &inp.file,
+                        cwd_path,
+                    );
+                    if let Some(summary) = report.summary_line {
+                        lines.push(summary);
+                    }
+                }
+            }
+        }
         "PostToolUse" => {
             note_gate(g, inp, storage);
             note_success(g, inp);
             note_store_receipts(g, inp, storage);
+            if is_edit_tool(&inp.tool)
+                || (pairing::is_shell(&inp.tool)
+                    && (is_git_commit(&inp.command)
+                        || inp.command.contains("git checkout")
+                        || inp.command.contains("git merge")))
+            {
+                let touched = (!inp.file.is_empty()).then_some(inp.file.as_str());
+                let _ = crate::cognitive_kernel::sweep_anchor_watch(storage.as_ref(), touched);
+            }
+            if !inp.agent.is_empty()
+                && is_memory_write(inp)
+                && let Some(nid) = inp
+                    .tool_response
+                    .get("nodeId")
+                    .and_then(Value::as_str)
+                    .filter(|id| is_memory_id(id))
+            {
+                crate::cognitive_kernel::stage_subagent_write(storage.as_ref(), &inp.agent, nid);
+            }
         }
         "PostToolUseFailure" => note_failure(g, inp),
         "StopFailure" => note_stop_failure(g, inp),
-        "SubagentStart" => lines.extend(subagent_lines(g)),
+        "SubagentStart" => {
+            lines.extend(subagent_lines(g));
+            if !inp.agent.is_empty() {
+                let parent_held: Vec<String> = held_ids(g, &inp.session, "")
+                    .into_iter()
+                    .take(16)
+                    .collect();
+                let (passport, branch) = crate::cognitive_kernel::issue_subagent_passport(
+                    storage.as_ref(),
+                    &inp.session,
+                    &inp.agent,
+                    parent_held,
+                    &inp.tool_input,
+                );
+                lines.push(format!(
+                    "SubagentPassport issued: `{}` (caveats={}, branch=`{}`).",
+                    passport.passport_id,
+                    passport.caveats.len(),
+                    branch
+                ));
+            }
+        }
+        "SubagentStop" => {
+            if !inp.agent.is_empty()
+                && let Some(fold) =
+                    crate::cognitive_kernel::fold_subagent_stop(storage.as_ref(), &inp.agent)
+            {
+                if fold.branch_merged {
+                    lines.push(format!(
+                        "SubagentPassport `{}` folded ({} trail edges, {} branch writes merged to main).",
+                        fold.passport_id,
+                        fold.trail_edges.len(),
+                        fold.merged_count
+                    ));
+                } else if let Some(err) = fold.merge_error {
+                    lines.push(format!(
+                        "SubagentPassport `{}` branch merge quarantined: {err}.",
+                        fold.passport_id
+                    ));
+                }
+            }
+        }
         _ => {}
     }
     lines
@@ -859,6 +976,30 @@ fn stop_decision(g: &mut Global, inp: &Input, storage: &Arc<Storage>, d: &mut Ho
 }
 
 fn pre_tool_decision(g: &mut Global, inp: &Input, storage: &Arc<Storage>, d: &mut HostDecision) {
+    // Cryptographic SubagentPassport capability gate: enforced BEFORE any tool executes.
+    if !inp.agent.is_empty() {
+        let target_path = (!inp.file.is_empty()).then_some(inp.file.as_str());
+        let ns = inp
+            .tool_input
+            .get("scope")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+        let is_mutation = is_edit_tool(&inp.tool)
+            || is_memory_write(inp)
+            || pairing::is_shell(&inp.tool);
+        if let Err(deny_reason) = crate::cognitive_kernel::verify_subagent_tool(
+            storage.as_ref(),
+            &inp.agent,
+            tool_leaf(&inp.tool),
+            target_path,
+            ns,
+            is_mutation,
+        ) {
+            d.permission_decision = Some("deny".into());
+            d.permission_reason = Some(deny_reason);
+            return;
+        }
+    }
     if pairing::is_shell(&inp.tool) && is_git_commit(&inp.command) {
         let missing = unsaved(g, &inp.session);
         if !missing.is_empty() {
@@ -1369,7 +1510,19 @@ fn debts(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Vec<String> {
             )),
         }
     }
-    reasons.extend(citation_reasons(storage, &g.p.retired, &held_ids(g, &inp.session, &inp.agent), inp));
+    let held = held_ids(g, &inp.session, &inp.agent);
+    reasons.extend(citation_reasons(storage, &g.p.retired, &held, inp));
+    let edited = g.session(&inp.session).ledger.edited.clone();
+    let gates = g.session(&inp.session).ledger.gates.clone();
+    let last_prompt = g.session(&inp.session).ledger.last_prompt.clone();
+    reasons.extend(crate::cognitive_kernel::audit_stop_output(
+        storage.as_ref(),
+        &inp.last_assistant_message,
+        &held,
+        &edited,
+        &gates,
+        &last_prompt,
+    ));
     reasons
 }
 

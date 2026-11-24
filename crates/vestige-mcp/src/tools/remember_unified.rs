@@ -141,6 +141,42 @@ pub async fn execute(
         }
     }
 
+    // Step 2B: Strata Intake Compiler — compile exclusive slots, chiral bindings,
+    // verified auto-supersession, BLAKE3 file Anchor Watch, native 9h Synaptic Capture,
+    // and incremental ZSet delta updates automatically on every save.
+    let scope_for_intake = parsed.scope.as_deref().unwrap_or("user");
+    let explicit_files_for_intake = parsed.files.clone().unwrap_or_default();
+    let repo_for_intake = fence_base_dir(&raw_args, &parsed);
+    let mut intake_reports = Vec::new();
+    let mut auto_superseded_links = Vec::new();
+    for nid in &new_node_ids {
+        if let Ok(Some(node)) = storage.get_node(nid) {
+            let report = crate::cognitive_kernel::compile_ingest_write(
+                storage.as_ref(),
+                &crate::cognitive_kernel::IntakeWriteRequest {
+                    node_id: nid,
+                    content: &node.content,
+                    node_type: &node.node_type,
+                    tags: &node.tags,
+                    scope: scope_for_intake,
+                    repo_path: repo_for_intake,
+                    files: &explicit_files_for_intake,
+                },
+            );
+            for old_id in &report.auto_superseded_ids {
+                auto_superseded_links.push(json!({
+                    "kind": "supersedes",
+                    "source": nid,
+                    "target": old_id,
+                }));
+            }
+            intake_reports.push(json!({
+                "nodeId": nid,
+                "report": report,
+            }));
+        }
+    }
+
     // The native planner is bounded. Keep all retrieval tags, but skip scans
     // whose trigger cannot produce a change; never trim identities to fit.
     let scope = parsed.scope.as_deref().unwrap_or("user");
@@ -273,6 +309,13 @@ pub async fn execute(
     let mut response = ingest_res;
     if let Some(obj) = response.as_object_mut() {
         obj.insert("birth_certificate".to_string(), birth_cert_json);
+        obj.insert("intake_compile".to_string(), json!(intake_reports));
+        if !auto_superseded_links.is_empty() {
+            let links = obj.entry("links".to_string()).or_insert_with(|| json!([]));
+            if let Some(arr) = links.as_array_mut() {
+                arr.extend(auto_superseded_links);
+            }
+        }
         obj.insert("backfilled_handles".to_string(), json!(backfilled_handles));
         obj.insert("backfill_receipts".to_string(), json!(backfill_receipts));
         obj.insert("backfill_skipped".to_string(), json!(backfill_skipped));

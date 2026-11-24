@@ -330,21 +330,25 @@ pub async fn execute(
         };
         let include_superseded = args.include_superseded.unwrap_or(false);
         let pool = (limit as usize).saturating_mul(4).max(32);
-        let ranked = super::recall::rank_nodes_lexical_scoped(
+        let labile = crate::cognitive_kernel::labile_memory_ids(storage.as_ref());
+        let circuit = crate::circuit_index::query_circuit(
             storage.as_ref(),
-            effective_scope,
-            include_superseded,
-            valid_at,
-            &args.query,
-            pool,
+            &crate::circuit_index::CircuitQuery {
+                query: &args.query,
+                scope: effective_scope,
+                include_superseded,
+                valid_at,
+                top_k: pool,
+                labile_ids: &labile,
+            },
         );
         let min_ret = args.min_retention.unwrap_or(0.0);
         let mut results = Vec::new();
-        for (id, score) in ranked {
+        for hit in &circuit.hits {
             if results.len() >= limit as usize {
                 break;
             }
-            if let Ok(Some(node)) = storage.get_node(&id) {
+            if let Ok(Some(node)) = storage.get_node(&hit.id) {
                 if node.retention_strength < min_ret {
                     continue;
                 }
@@ -367,7 +371,11 @@ pub async fn execute(
                 }
                 let mut val = format_node(&node, detail_level);
                 if let Some(obj) = val.as_object_mut() {
-                    obj.insert("score".to_string(), serde_json::json!(score));
+                    obj.insert("score".to_string(), serde_json::json!(hit.score));
+                    obj.insert(
+                        "circuitProof".to_string(),
+                        serde_json::to_value(&hit.proof).unwrap_or(Value::Null),
+                    );
                 }
                 results.push(val);
             }
@@ -377,7 +385,8 @@ pub async fn execute(
             "results": results,
             "total": results.len(),
             "query": args.query,
-            "engine": vestige_core::retrieval::ENGINE,
+            "engine": circuit.engine,
+            "circuit": crate::circuit_index::epistemic_json(&circuit),
         }));
     }
 

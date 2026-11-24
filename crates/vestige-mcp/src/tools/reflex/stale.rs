@@ -19,6 +19,8 @@ pub(super) struct Retirement {
     pub how: String,
     pub ts: String,
     pub session: String,
+    #[serde(default)]
+    pub agent: String,
     pub receipt: Option<String>,
     /// The successor's first sentence, when the change carried its text.
     pub first: String,
@@ -176,11 +178,31 @@ pub fn record(conn: &ConnectionState, storage: &Arc<Storage>, tool: &str, result
         return;
     };
     let ts = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut manifests: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    for (sid, sess) in &g.sessions {
+        for (aid, ctx) in &sess.contexts {
+            let key = format!("{sid}:{aid}");
+            let held: std::collections::BTreeSet<String> =
+                ctx.held.iter().map(|(id, _)| id.clone()).collect();
+            manifests.insert(key, held);
+        }
+    }
+    let mut retired_ids = Vec::new();
     for mut r in found {
         g.p.retire_seq += 1;
         r.seq = g.p.retire_seq;
         r.ts = ts.clone();
         r.session = session.clone();
+        let ripple = crate::cognitive_kernel::compute_correction_ripple(&r.old, &manifests);
+        if !ripple.is_empty() {
+            tracing::debug!(
+                memory_id = %r.old,
+                targets = ?ripple,
+                "Reflex: queued live correction ripple to active agent manifests"
+            );
+        }
+        retired_ids.push(r.old.clone());
         g.p.retired.push(r);
     }
     if g.p.retired.len() > RETIRED_KEEP {
@@ -188,14 +210,27 @@ pub fn record(conn: &ConnectionState, storage: &Arc<Storage>, tool: &str, result
         g.p.retired.drain(..drop);
     }
     g.dirty = true;
+    drop(g);
+    for id in retired_ids {
+        crate::circuit_index::mark_zset_delta(storage.as_ref(), &id, -1);
+    }
 }
 
 /// One line for each retirement of a memory this context held before it was
-/// retired, made by any other session. Returns the line and the old id.
-pub(super) fn lines(retired: &[Retirement], session: &str, ctx: &Context) -> Vec<(String, String)> {
+/// retired, made by any other session or sibling subagent. Returns the line and the old id.
+pub(super) fn lines(
+    retired: &[Retirement],
+    session: &str,
+    agent: &str,
+    ctx: &Context,
+) -> Vec<(String, String)> {
     retired
         .iter()
-        .filter(|r| r.session != session)
+        .filter(|r| {
+            r.session != session
+                || (!agent.is_empty() && r.agent != agent)
+                || (agent.is_empty() && !r.agent.is_empty())
+        })
         .filter(|r| ctx.get(&r.old).is_some_and(|h| r.seq > h.seq))
         .map(|r| {
             let mut line = format!(
