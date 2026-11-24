@@ -895,11 +895,20 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && !is_monologue_corpus
         && ix.turns.len() >= 4
         && has_retro_asst_cue;
+    let closed_class_mh = has_named_speakers_eff
+        && !it.temporal
+        && !it.sniper_when
+        && !seq_mode_eff
+        && crate::retrieval::graph::hashimoto_tripartite_q16::closed_class_plural_or_collective_mh(
+            &q_toks_eff,
+        );
+    let mh_eff = it.multi_hop || closed_class_mh;
     let eff_it = QueryIntent {
         preference: it.preference || pref_live_eff,
         assistant_attribution: it.assistant_attribution || asst_attr_eff,
         current_state: it.current_state
             || (!past_cue_eff && !it.temporal && !seq_mode_eff && !it.sniper_how_many),
+        multi_hop: mh_eff,
         is_event_sequence: if large_or_mono { seq_mode_eff } else { it.is_event_sequence },
         task_under_rules: it.task_under_rules || task_live_eff,
         ..it.clone()

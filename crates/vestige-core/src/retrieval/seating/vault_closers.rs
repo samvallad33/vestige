@@ -390,7 +390,7 @@ pub(in crate::retrieval) fn apply_vault_closers(
     }
 
     // 5. `S8-004` Rhumb-union seat (`LoCoMo Multi-Hop`):
-    if plan.intent.multi_hop && plan.groups.len() >= 2 && ix.session_turns.len() >= 3 {
+    if eff_it.multi_hop && plan.groups.len() >= 2 && ix.session_turns.len() >= 3 {
         let pos_sessions: Vec<usize> = final_session_indices
             .iter()
             .take(15)

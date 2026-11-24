@@ -16,9 +16,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let q_toks_eff = &ctx.q_toks_eff;
     let smax = ctx.smax;
     let s_score = &ctx.s_score;
-    let bridge_boost = &ctx.bridge_boost;
+    let s_exact_mask = &ctx.s_exact_mask;
+    let mut bridge_boost = std::mem::take(&mut ctx.bridge_boost);
     let t_own = &ctx.t_own;
-    let t_scene = &ctx.t_scene;
+    let mut t_scene = std::mem::take(&mut ctx.t_scene);
     let t_bridge = &ctx.t_bridge;
     let t_mask = &ctx.t_mask;
     let t_exact_mask = &ctx.t_exact_mask;
@@ -491,7 +492,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
 
     if k >= 6 && !torrens_locked_head {
         let viterbi_chain = crate::retrieval::graph::viterbi::decode_viterbi_chain(ix, &plan, &final_turn_indices, &base_q16, &t_mask);
-        if (it.multi_hop || deficit_b) && !head0_solved {
+        if (eff_it.multi_hop || deficit_b) && !head0_solved {
             if let Some(ref chain) = viterbi_chain {
                 if chain.score_q16 > 0
                     && chain.path.len() >= 2
@@ -512,10 +513,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         {
                             continue;
                         }
-                        if !it.multi_hop && ((t_exact_mask[hop_ti] & !head_mask) == 0 || t_own[hop_ti] <= 0.0) {
+                        if !eff_it.multi_hop && ((t_exact_mask[hop_ti] & !head_mask) == 0 || t_own[hop_ti] <= 0.0) {
                             continue;
                         }
-                        let seat_end = (if is_monologue_corpus || it.multi_hop { 5 } else { 4 }).min(final_turn_indices.len());
+                        let seat_end = (if is_monologue_corpus || eff_it.multi_hop { 5 } else { 4 }).min(final_turn_indices.len());
                         let mut target_slot: Option<usize> = None;
                         for s in 1..seat_end {
                             let inc_ti = final_turn_indices[s];
@@ -527,12 +528,12 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                             }
                             let covered_dup = dup_sess && (t_exact_mask[inc_ti] & !earlier_mask) == 0;
                             let evict_ok = if is_monologue_corpus {
-                                (it.multi_hop && (ix.turns[inc_ti].is_pure_info_question || covered_dup))
+                                (eff_it.multi_hop && (ix.turns[inc_ti].is_pure_info_question || covered_dup))
                                     || (covered_dup
                                         && (ix.turns[inc_ti].is_pure_info_question || s >= 3)
                                         && t_own[inc_ti] < t_own[hop_ti])
                             } else {
-                                (it.multi_hop
+                                (eff_it.multi_hop
                                     && (ix.turns[inc_ti].is_question
                                         || (covered_dup && s >= 2 && t_own[inc_ti] < t_own[hop_ti])))
                                     || (covered_dup
@@ -596,10 +597,16 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 fused_cands.push(ti);
             }
         }
-        // #4 Tropical (max,+) 2-Hop Squaring + Entity-Denoised 2-Hop Bridge:
-        // Pull only new high-IC entities from the top 3..5 Pass-1 turns and admit the
-        // strongest tropical 2-hop chain turn when Multi-Hop / deficit_b has missing groups.
-        if ctx.has_named_speakers_eff && (it.multi_hop || deficit_b) {
+        // #4 Tropical (max,+) 2-Hop Squaring + Engine #1 Hashimoto Non-Backtracking Tripartite Bridge:
+        // Pull only new high-IC entities from the top Pass-1 turns and admit/boost uncovered
+        // Hop-2 endpoint turns & sessions cleanly when Multi-Hop / deficit_b has missing groups.
+        let split_mh_hash = ix.session_turns.len() >= 4
+            && crate::retrieval::graph::hashimoto_tripartite_q16::pigeonhole_corpus_split_mh(
+                plan,
+                s_exact_mask,
+                &speaker_lowers_rank,
+            );
+        if ctx.has_named_speakers_eff && (eff_it.multi_hop || deficit_b || split_mh_hash) {
             let single_qsp: Option<&str> = {
                 let mut m: Vec<&str> = speaker_lowers_rank
                     .iter()
@@ -625,6 +632,118 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     fused_cands.insert(0, ti);
                 }
             }
+
+            // Tier C Engine #1: Hashimoto Non-Backtracking Operator + Tripartite Residual `S_tri(q, b, c)`
+            if (eff_it.multi_hop || split_mh_hash) && !head0_solved && !eff_it.temporal {
+                let hash_scores =
+                    crate::retrieval::graph::hashimoto_tripartite_q16::hashimoto_tripartite_bridge_q16(
+                        ix,
+                        &plan,
+                        t_own,
+                        t_exact_mask,
+                        q_group_mask,
+                        single_qsp,
+                    );
+                if let Some(max_h) = hash_scores.values().copied().max()
+                    && max_h > 0
+                {
+                    let head_t_mask = final_turn_indices
+                        .first()
+                        .map_or(0u64, |&h0| t_exact_mask.get(h0).copied().unwrap_or(0) & q_group_mask);
+                    let head_s_mask = final_session_indices
+                        .first()
+                        .map_or(0u64, |&s0| s_exact_mask.get(s0).copied().unwrap_or(0) & q_group_mask);
+                    let head_s_opt = final_session_indices.first().copied();
+                    let t_scene_max = t_scene.iter().copied().fold(0.0f32, f32::max);
+
+                    let mut hash_ranked: Vec<(u32, u64, usize)> = hash_scores
+                        .iter()
+                        .map(|(&ti, &sc)| {
+                            let res_bits = ((t_exact_mask.get(ti).copied().unwrap_or(0) & q_group_mask)
+                                & !head_t_mask)
+                                .count_ones();
+                            (res_bits, sc, ti)
+                        })
+                        .collect();
+                    hash_ranked.sort_by(|a, b| {
+                        b.0.cmp(&a.0)
+                            .then_with(|| b.1.cmp(&a.1))
+                            .then_with(|| a.2.cmp(&b.2))
+                    });
+
+                    // Bounded turn-scene & session-bridge lift for uncovered Hop-2 endpoints:
+                    let mut sess_best_hash: std::collections::BTreeMap<usize, (u32, u64)> =
+                        std::collections::BTreeMap::new();
+                    for &(res_bits, hsc, ti) in hash_ranked.iter().take(8) {
+                        let ratio = (hsc as f32) / (max_h as f32);
+                        if t_scene_max > 0.0 {
+                            let cap = if res_bits > 0 { 0.24 } else { 0.10 };
+                            t_scene[ti] += t_scene_max * cap * ratio;
+                        }
+                        let si = ix.turns[ti].session;
+                        let s_res = ((s_exact_mask.get(si).copied().unwrap_or(0) & q_group_mask)
+                            & !head_s_mask)
+                            .count_ones();
+                        sess_best_hash
+                            .entry(si)
+                            .and_modify(|(rb, best)| {
+                                if s_res > *rb || (s_res == *rb && hsc > *best) {
+                                    *rb = s_res;
+                                    *best = hsc;
+                                }
+                            })
+                            .or_insert((s_res, hsc));
+                    }
+                    if smax > 0.0 {
+                        for (si, (s_res, hsc)) in sess_best_hash {
+                            if Some(si) == head_s_opt {
+                                continue;
+                            }
+                            let ratio = (hsc as f32) / (max_h as f32);
+                            let cap = if s_res > 0 { 0.22 } else { 0.08 };
+                            bridge_boost[si] += smax * cap * ratio;
+                        }
+                    }
+
+                    // Admit top Hashimoto Hop-2 endpoints into fused_cands (and uncovered slots 1..5 if redundant dup exists):
+                    for &(res_bits, _, ti) in hash_ranked.iter().take(2) {
+                        if !final_turn_indices.contains(&ti) && !fused_cands.contains(&ti) {
+                            fused_cands.insert(0, ti);
+                        }
+                        if res_bits > 0 && !final_turn_indices.contains(&ti) && final_turn_indices.len() >= 5 {
+                            let ti_sess = ix.turns[ti].session;
+                            let already_sess = final_turn_indices[..5]
+                                .iter()
+                                .any(|&x| ix.turns[x].session == ti_sess);
+                            if !already_sess {
+                                let seat_end = 5.min(final_turn_indices.len());
+                                for s in (1..seat_end).rev() {
+                                    let inc_ti = final_turn_indices[s];
+                                    let inc_sess = ix.turns[inc_ti].session;
+                                    let dup_sess = final_turn_indices[..s]
+                                        .iter()
+                                        .any(|&p_ti| ix.turns[p_ti].session == inc_sess);
+                                    let mut earlier_mask = 0u64;
+                                    for &p_ti in &final_turn_indices[..s] {
+                                        earlier_mask |= t_exact_mask[p_ti];
+                                    }
+                                    let covered_dup =
+                                        dup_sess && (t_exact_mask[inc_ti] & !earlier_mask) == 0;
+                                    if ix.turns[inc_ti].is_pure_info_question
+                                        || (covered_dup && s >= 3 && t_own[ti] > 0.0)
+                                    {
+                                        final_turn_indices.insert(s, ti);
+                                        if final_turn_indices.len() > k {
+                                            final_turn_indices.truncate(k);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if let Some(cand_ti) = fused_cands.into_iter().next() {
@@ -642,7 +761,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         for &e in &final_turn_indices[..idx] {
                             earlier_mask |= t_exact_mask[e];
                         }
-                        let covered_q = !it.multi_hop
+                        let covered_q = !eff_it.multi_hop
                             && dup
                             && ix.turns[vti].is_question
                             && t_own[vti] <= 0.0
@@ -660,6 +779,8 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
     }
 
+    ctx.bridge_boost = bridge_boost;
+    ctx.t_scene = t_scene;
     ctx.final_session_indices = final_session_indices;
     ctx.final_turn_indices = final_turn_indices;
     ctx.q_group_cnt = q_group_cnt;

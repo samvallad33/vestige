@@ -9,6 +9,7 @@ pub(in crate::retrieval) mod fellegi_sunter;
 pub(in crate::retrieval) mod freeman_brokerage;
 pub(in crate::retrieval) mod ghostlink_dgs;
 pub(in crate::retrieval) mod group_steiner_q16;
+pub(in crate::retrieval) mod hashimoto_tripartite_q16;
 pub(in crate::retrieval) mod historiography_source;
 pub(in crate::retrieval) mod lachmann_stemma;
 pub(in crate::retrieval) mod locke_ledger;
