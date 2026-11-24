@@ -140,12 +140,6 @@ pub(in crate::retrieval) fn compute_entrenchment_staleness_dag(ix: &Index) -> En
             }
         }
     }
-    for ti in 0..nt {
-        if ix.torrens_superseded.get(ti).copied().unwrap_or(false) && !stale[ti] {
-            stale[ti] = true;
-            queue.push_back((ti, 0));
-        }
-    }
 
     if queue.is_empty() {
         return EntrenchmentDagState {
@@ -154,18 +148,22 @@ pub(in crate::retrieval) fn compute_entrenchment_staleness_dag(ix: &Index) -> En
         };
     }
 
-    // 2. Build forward `derived_by[parent] -> Vec<child>` adjacency (`child > parent`).
+    // 2. Build forward `derived_by[parent] -> Vec<child>` adjacency (`child > parent`,
+    //    strictly same-session so cross-session RSB entity links never cascade staleness
+    //    onto independent future sessions).
     let mut derived_by: Vec<Vec<usize>> = vec![Vec::new(); nt];
     let mut add_deriv = |parent: usize, child: usize| {
-        if parent < nt && child < nt && child > parent && !derived_by[parent].contains(&child) {
+        if parent < nt
+            && child < nt
+            && child > parent
+            && ix.turns[child].session == ix.turns[parent].session
+            && !derived_by[parent].contains(&child)
+        {
             derived_by[parent].push(child);
         }
     };
     for (child, tr) in ix.turns.iter().enumerate() {
         for &(_, parent) in &tr.exact_edges {
-            add_deriv(parent, child);
-        }
-        for &parent in &tr.policy_backlinks {
             add_deriv(parent, child);
         }
         // Assistant recap/plan directly answering a superseded user turn inherits staleness.
@@ -226,6 +224,7 @@ pub(in crate::retrieval) fn apply_agm_entrenchment_demotion(
     ix: &Index,
     current_state: bool,
     is_historical_or_seq: bool,
+    t_exact_mask: &[u64],
     final_turn_indices: &mut Vec<usize>,
 ) {
     if !current_state || is_historical_or_seq || final_turn_indices.len() < 2 {
@@ -233,16 +232,25 @@ pub(in crate::retrieval) fn apply_agm_entrenchment_demotion(
     }
     let dag = compute_entrenchment_staleness_dag(ix);
     let head = final_turn_indices[0];
-    if !dag.transitive_stale[head] {
+    if !dag.transitive_stale[head] || ix.turns[head].is_standing_policy {
         return;
     }
+    let head_bits = t_exact_mask.get(head).copied().unwrap_or(0).count_ones();
     let window = final_turn_indices.len().min(10);
     if let Some(fresh_pos) = (1..window).find(|&slot| {
         let ti = final_turn_indices[slot];
-        !dag.transitive_stale[ti]
-            && !ix.turns[ti].is_question
-            && !ix.turns[ti].is_backchannel
-            && dag.entrenchment[ti] >= ENTRENCH_TEMPORARY
+        if dag.transitive_stale[ti]
+            || ix.turns[ti].is_question
+            || ix.turns[ti].is_backchannel
+            || dag.entrenchment[ti] < ENTRENCH_TEMPORARY
+        {
+            return false;
+        }
+        if ix.turns[ti].supersedes_turns.contains(&head) {
+            return true;
+        }
+        let ti_mask = t_exact_mask.get(ti).copied().unwrap_or(0);
+        ti_mask != 0 && ti_mask.count_ones() >= head_bits
     }) {
         let fresh_ti = final_turn_indices.remove(fresh_pos);
         final_turn_indices.insert(0, fresh_ti);

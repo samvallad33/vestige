@@ -5,6 +5,7 @@ pub(in crate::retrieval) mod hypergraph_mdl_q16;
 pub(in crate::retrieval) mod kemeny;
 pub(in crate::retrieval) mod kemeny_mrf;
 pub(in crate::retrieval) mod lin_bilmes;
+pub(in crate::retrieval) mod matroid_intersection_q16;
 pub(in crate::retrieval) mod pit_commensuration_q16;
 pub(in crate::retrieval) mod psl_ilp;
 pub(in crate::retrieval) mod scaldpp_q16;

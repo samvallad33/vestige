@@ -118,40 +118,92 @@ fn apply_session_late_sync_and_margin_swap(
     } else if !final_session_indices.is_empty() {
         // 1. `W2-001` Envelope-Seal-Calendar Session Head + Late-Pass Witness Sync:
         let incumbent = final_session_indices[0];
-        // Calendar exact-date (`__DAY__` + `__MONTH__`) & unique-month nomination:
+        // Calendar exact-date (`__DATE__` / `__MD__`) & unique-month nomination:
         let mut q_months: Vec<String> = Vec::new();
-        let mut q_days: Vec<String> = Vec::new();
+        let mut q_dates: Vec<String> = Vec::new();
+        let mut q_mds: Vec<String> = Vec::new();
         for tok in crate::retrieval::inline_date_tokens(q_text) {
             if let Some(mm) = tok.strip_prefix("__MONTH__")
                 && !q_months.iter().any(|m| m == mm)
             {
                 q_months.push(mm.to_string());
-            } else if let Some(dd) = tok.strip_prefix("__DAY__")
-                && !q_days.iter().any(|d| d == dd)
+            } else if let Some(ymd) = tok.strip_prefix("__DATE__")
+                && !q_dates.iter().any(|d| d == ymd)
             {
-                q_days.push(dd.to_string());
+                q_dates.push(ymd.to_string());
+            } else if let Some(md) = tok.strip_prefix("__MD__")
+                && !q_mds.iter().any(|d| d == md)
+            {
+                q_mds.push(md.to_string());
             }
         }
         // Exact calendar Day+Month anchor (e.g., "as mentioned on 3 June, 2023", "evening of 7 July, 2023"):
-        // if a unique session's timestamp matches both the queried month and day and has solid lexical sight,
-        // promote it directly to Slot 0!
-        if q_months.len() == 1 && q_days.len() == 1 && corpus_has_named_speakers(ix) {
-            let target_m = q_months[0].as_str();
-            let target_d = q_days[0].as_str();
-            let exact_hits: Vec<usize> = (0..ix.session_ts.len())
-                .filter(|&si| {
-                    let ts = ix.session_ts[si];
-                    if ts == 0 {
-                        return false;
-                    }
-                    let ctoks = crate::retrieval::calendar_tokens(ts);
-                    ctoks.iter().any(|ct| ct.strip_prefix("__MONTH__") == Some(target_m))
-                        && ctoks.iter().any(|ct| ct.strip_prefix("__DAY__") == Some(target_d))
+        // match EITHER `ix.session_ts[si]` OR any declarative (`!is_question && !is_backchannel`)
+        // turn's `resolved_timex` with `(iv_e - iv_s) <= 3 * 86_400` in session `si`.
+        let mut exact_day_promoted = false;
+        if (q_dates.len() == 1 || (q_dates.is_empty() && q_mds.len() == 1))
+            && corpus_has_named_speakers(ix)
+        {
+            let target_date = q_dates.first().map(String::as_str);
+            let target_md = q_mds.first().map(String::as_str);
+            let ts_matches_day = |ts: i64| -> bool {
+                if ts <= 0 {
+                    return false;
+                }
+                let ctoks = crate::retrieval::calendar_tokens(ts);
+                if let Some(td) = target_date {
+                    ctoks.iter().any(|ct| ct.strip_prefix("__DATE__") == Some(td))
+                } else if let Some(tmd) = target_md {
+                    ctoks.iter().any(|ct| ct.strip_prefix("__MD__") == Some(tmd))
+                } else {
+                    false
+                }
+            };
+            let sess_matches_day = |si: usize| -> bool {
+                if ts_matches_day(ix.session_ts[si]) {
+                    return true;
+                }
+                ix.session_turns[si].iter().any(|&ti| {
+                    let tr = &ix.turns[ti];
+                    !tr.is_question
+                        && !tr.is_backchannel
+                        && tr.resolved_timex.iter().any(|&(iv_s, iv_e)| {
+                            let span = iv_e.saturating_sub(iv_s);
+                            if span > 3 * 86_400 {
+                                return false;
+                            }
+                            let mid = iv_s + span / 2;
+                            if span <= 86_400 {
+                                ts_matches_day(mid)
+                            } else {
+                                let mut d_ts = iv_s + 43_200;
+                                while d_ts < iv_e {
+                                    if ts_matches_day(d_ts) {
+                                        return true;
+                                    }
+                                    d_ts = d_ts.saturating_add(86_400);
+                                }
+                                false
+                            }
+                        })
                 })
+            };
+            let exact_hits: Vec<usize> = (0..ix.session_ts.len())
+                .filter(|&si| sess_matches_day(si))
                 .collect();
-            if exact_hits.len() == 1 {
-                let exact_si = exact_hits[0];
-                if exact_si != incumbent
+            if !exact_hits.is_empty() && !exact_hits.contains(&incumbent) {
+                let best_hit = if exact_hits.len() == 1 {
+                    Some(exact_hits[0])
+                } else {
+                    exact_hits.iter().copied().max_by(|&a, &b| {
+                        sight(a)
+                            .partial_cmp(&sight(b))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| b.cmp(&a))
+                    })
+                };
+                if let Some(exact_si) = best_hit
+                    && exact_si != incumbent
                     && sight(exact_si) > 0.0
                     && sight(exact_si) >= 0.50 * sight(incumbent)
                 {
@@ -159,6 +211,7 @@ fn apply_session_late_sync_and_margin_swap(
                         final_session_indices.remove(pos);
                     }
                     final_session_indices.insert(0, exact_si);
+                    exact_day_promoted = true;
                 }
             }
         }
@@ -198,7 +251,8 @@ fn apply_session_late_sync_and_margin_swap(
         };
 
         let nominee = cal_nominee.unwrap_or(head_sess);
-        if nominee != incumbent
+        if !exact_day_promoted
+            && nominee != incumbent
             && let Some(pos) = final_session_indices.iter().take(5).position(|&s| s == nominee)
         {
             let prom_n = final_turn_indices
@@ -428,23 +482,34 @@ fn apply_session_late_sync_and_margin_swap(
                 };
                 let inc_mask = s_exact_mask.get(pool[incumbent]).copied().unwrap_or(0) & q_full_mask;
                 let top0_misses_group = q_full_mask != 0 && inc_mask != q_full_mask;
+                let q_toks_od = raw_tokens(q_text);
+                let q_refs_od: Vec<&str> = q_toks_od.iter().map(String::as_str).collect();
+                let is_od_shape = corpus_has_named_speakers(ix)
+                    && crate::retrieval::lexical::speaker_translation_q16::is_open_domain_inferential_shape(
+                        &q_refs_od,
+                    );
+                let od_bridge_override = is_od_shape && win_bb_q16 > inc_bb_q16;
                 let strong_bridge_consensus = top0_misses_group
                     && !nqc_lock
                     && votes_for_winner >= 3
                     && sight_q16[winner].saturating_mul(10) >= sight_q16[incumbent].saturating_mul(11)
                     && win_bb_q16 > inc_bb_q16;
-                let scene_veto = winner != incumbent
+                let scene_veto = !od_bridge_override
+                    && winner != incumbent
                     && corpus_has_named_speakers(ix)
                     && best_scene[incumbent] > best_scene[winner]
                     && !strong_bridge_consensus;
                 // Zero-regression IC guard (same as crate::retrieval::fusion::kemeny_mrf::solve_kemeny_order):
                 // do not dethrone #1 for a session with strictly lower exact query-IC unless
-                // `!nqc_lock` holds with >=3 Kemeny votes and >=10% bridge-backed Q16.16 sight margin.
-                let ic_holds = !mrf_voter
+                // `!nqc_lock` holds with >=3 Kemeny votes and >=10% bridge-backed Q16.16 sight margin,
+                // or an open-domain inferential query has strictly stronger bridge_boost.
+                let ic_holds = od_bridge_override
+                    || !mrf_voter
                     || exact_ic_q16[winner] >= exact_ic_q16[incumbent]
                     || strong_bridge_consensus;
-                let apply_head = (winner == incumbent
-                    || ((votes_for_winner >= override_votes || tie_break_sight) && ic_holds))
+                let apply_head = !exact_day_promoted
+                    && (winner == incumbent
+                        || ((votes_for_winner >= override_votes || tie_break_sight) && ic_holds))
                     && !scene_veto;
                 if apply_head {
                     for i in 0..n {
@@ -466,22 +531,35 @@ fn apply_session_late_sync_and_margin_swap(
             // to #1 only when it ties or beats the incumbent on `sight` and its
             // best turn wins the 5:4 scene margin. Unlike W2-006, a weaker
             // session cannot overwrite a stronger one.
+            let q_toks_sc = raw_tokens(q_text);
+            let q_refs_sc: Vec<&str> = q_toks_sc.iter().map(String::as_str).collect();
+            let is_od_closer = corpus_has_named_speakers(ix)
+                && crate::retrieval::lexical::speaker_translation_q16::is_open_domain_inferential_shape(
+                    &q_refs_sc,
+                );
             let cur_top = final_session_indices[0];
             let sc_inc = best_turn_in_sess(cur_top).map_or(0.0, |(sc, _)| sc);
             let sight_inc = sight(cur_top);
+            let bb_inc = bridge_boost.get(cur_top).copied().unwrap_or(0.0);
             let check_limit = final_session_indices.len().min(SESSION_FUSION_TOP_K);
             let mut best_cand: Option<(usize, f32, f32)> = None;
-            for pos in 1..check_limit {
-                let cand_s = final_session_indices[pos];
-                let sc_cand = best_turn_in_sess(cand_s).map_or(0.0, |(sc, _)| sc);
-                if sc_cand > 0.0
-                    && sc_cand * SESSION_SCENE_MARGIN_DEN >= sc_inc * SESSION_SCENE_MARGIN_NUM
-                    && sight(cand_s) >= sight_inc
-                {
-                    if best_cand.is_none_or(|(_, bsc, bsi)| {
-                        sc_cand > bsc || (sc_cand == bsc && sight(cand_s) > bsi)
-                    }) {
-                        best_cand = Some((pos, sc_cand, sight(cand_s)));
+            if !exact_day_promoted {
+                for pos in 1..check_limit {
+                    let cand_s = final_session_indices[pos];
+                    let bb_cand = bridge_boost.get(cand_s).copied().unwrap_or(0.0);
+                    if is_od_closer && bb_inc > bb_cand {
+                        continue;
+                    }
+                    let sc_cand = best_turn_in_sess(cand_s).map_or(0.0, |(sc, _)| sc);
+                    if sc_cand > 0.0
+                        && sc_cand * SESSION_SCENE_MARGIN_DEN >= sc_inc * SESSION_SCENE_MARGIN_NUM
+                        && sight(cand_s) >= sight_inc
+                    {
+                        if best_cand.is_none_or(|(_, bsc, bsi)| {
+                            sc_cand > bsc || (sc_cand == bsc && sight(cand_s) > bsi)
+                        }) {
+                            best_cand = Some((pos, sc_cand, sight(cand_s)));
+                        }
                     }
                 }
             }
@@ -4227,17 +4305,88 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 final_session_indices = merged_dpp;
             }
         }
-        // #4 Multi-Episode Chronological Milestone Lattice: spread `event_ordering` Top-K
-        // sessions across early/mid/late chronological phases while keeping #1 session at Slot 0.
+        // Engine #5 (Edmonds Weighted Matroid Intersection Q16.16):
+        // Global max-weight selection over Top-32 candidates subject to M1 (temporal/epoch bin)
+        // and M2 (query aspect/facet) partition matroids with Slot-0 Genesis pin.
         if !is_sum_sync
             && crate::retrieval::fusion::summary_silhouette_q16::is_chronological_progression_query(&q.text)
+            && final_session_indices.len() >= 3
         {
-            final_session_indices =
-                crate::retrieval::fusion::summary_silhouette_q16::interleave_chronological_milestones(
-                    ix,
-                    &final_session_indices,
-                    target_k,
-                );
+            use crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16;
+            use crate::retrieval::fusion::matroid_intersection_q16::{
+                select_sessions_matroid_q16, MatroidElem, MAX_MATROID_GROUND,
+            };
+            let ns_m = ix.session_turns.len().max(1);
+            let pool_n = final_session_indices.len().min(MAX_MATROID_GROUND);
+            let mut eff_ts_m = vec![0i64; ns_m];
+            let mut last_ts_m = 0i64;
+            for si in 0..ns_m {
+                if ix.session_ts[si] > 0 {
+                    last_ts_m = ix.session_ts[si];
+                }
+                eff_ts_m[si] = last_ts_m;
+            }
+            let mut m1_bins: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+            let mut m2_bins: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+            let elems: Vec<MatroidElem> = final_session_indices
+                .iter()
+                .take(pool_n)
+                .enumerate()
+                .map(|(rank_i, &si)| {
+                    let sc = (s_score.get(si).copied().unwrap_or(0.0)
+                        + bridge_boost.get(si).copied().unwrap_or(0.0))
+                    .max(0.0);
+                    let w_q16 = (ieee754_bits_to_q16(sc.to_bits()) as i64)
+                        .max(65_536 / (1 + (rank_i as i64) / 2));
+                    let m1_part = if eff_ts_m[si] > 0 {
+                        eff_ts_m[si].div_euclid(86_400) as usize
+                    } else {
+                        (si.saturating_mul(target_k) / ns_m).min(target_k.saturating_sub(1))
+                    };
+                    let em = s_exact_mask.get(si).copied().unwrap_or(0);
+                    let m2_part = if em != 0 {
+                        em.trailing_zeros() as usize
+                    } else {
+                        100 + (si % 7)
+                    };
+                    m1_bins.insert(m1_part);
+                    m2_bins.insert(m2_part);
+                    let chrono_key = if eff_ts_m[si] > 0 { eff_ts_m[si] } else { si as i64 };
+                    MatroidElem {
+                        id: si,
+                        weight_q16: w_q16,
+                        m1_part,
+                        m2_part,
+                        chrono_key,
+                    }
+                })
+                .collect();
+            let max_per_epoch = if m1_bins.len() >= target_k { 1 } else { 2 };
+            let max_per_aspect = if m2_bins.len() >= target_k { 1 } else { 2 };
+            let picked = select_sessions_matroid_q16(
+                &elems,
+                target_k.min(pool_n),
+                max_per_epoch,
+                max_per_aspect,
+                Some(0),
+                false,
+            );
+            if !picked.is_empty() {
+                let mut rebuilt = picked;
+                for &si in &final_session_indices {
+                    if !rebuilt.contains(&si) {
+                        rebuilt.push(si);
+                    }
+                }
+                final_session_indices = rebuilt;
+            } else {
+                final_session_indices =
+                    crate::retrieval::fusion::summary_silhouette_q16::interleave_chronological_milestones(
+                        ix,
+                        &final_session_indices,
+                        target_k,
+                    );
+            }
         }
         let mut synced_turns: Vec<usize> = Vec::with_capacity(target_k);
         let mut dyad_partners: Vec<usize> = Vec::new();
@@ -4513,6 +4662,17 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         &t_exact_mask,
         &s_score,
         &bridge_boost,
+        k,
+    );
+
+    // Engine #4 (Dechter STN Metric Floyd-Warshall): negative-cycle pruning + metric endpoint pair co-seating.
+    crate::retrieval::graph::stn_floyd_warshall::apply_stn_temporal_seating(
+        ix,
+        &q.text,
+        eff_it,
+        &mut final_turn_indices,
+        &mut final_session_indices,
+        t_exact_mask,
         k,
     );
 

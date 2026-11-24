@@ -763,11 +763,41 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                     crate::retrieval::graph::bitemporal_heideltime::epoch_ts_to_ymd_tokens(ts);
                 let mut seen_timex_tok: DetHashSet<String> = DetHashSet::default();
                 for &(iv_s, iv_e) in &resolved_timex {
-                    let mid = iv_s + (iv_e - iv_s) / 2;
-                    let (ry, rm, _rd) =
+                    let span = iv_e.saturating_sub(iv_s);
+                    let mid = iv_s + span / 2;
+                    if span <= 3 * 86_400 {
+                        // Intern ONLY structured exact-day tokens (`__DATE__YYYY_MM_DD`, `__MD__MM_DD`)
+                        // for resolved relative dates that shift to a DIFFERENT calendar day than the
+                        // session date (`day != sess_day`, e.g., "yesterday", "last Friday"). Never
+                        // emit bare numbers/weekdays/seasons or same-day "today" boosts into `t_own`.
+                        let sess_day = ts.div_euclid(86_400);
+                        let mut day_ts = if span > 86_400 { iv_s + 43_200 } else { mid };
+                        loop {
+                            if day_ts.div_euclid(86_400) != sess_day {
+                                for ctok in calendar_tokens(day_ts) {
+                                    if (ctok.starts_with("__DATE__") || ctok.starts_with("__MD__"))
+                                        && seen_timex_tok.insert(ctok.clone())
+                                    {
+                                        let cid = vocab.intern(&ctok);
+                                        feats.push(Feat {
+                                            id: cid,
+                                            w: 0.95,
+                                            counts_len: false,
+                                            inheritable: false,
+                                        });
+                                    }
+                                }
+                            }
+                            day_ts = day_ts.saturating_add(86_400);
+                            if span <= 86_400 || day_ts >= iv_e {
+                                break;
+                            }
+                        }
+                    }
+                    let (ry, rm, _) =
                         crate::retrieval::graph::bitemporal_heideltime::epoch_ts_to_ymd_tokens(mid);
                     let y_str = ry.to_string();
-                    if (ry != sess_y || (iv_e - iv_s) <= 45 * 86_400)
+                    if (ry != sess_y || span <= 45 * 86_400)
                         && seen_timex_tok.insert(y_str.clone())
                     {
                         let yid = vocab.intern(&y_str);
@@ -778,7 +808,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                             inheritable: false,
                         });
                     }
-                    if (iv_e - iv_s) <= 45 * 86_400 && seen_timex_tok.insert(rm.to_string()) {
+                    if span <= 45 * 86_400 && seen_timex_tok.insert(rm.to_string()) {
                         let mid_id = vocab.intern(rm);
                         feats.push(Feat {
                             id: mid_id,

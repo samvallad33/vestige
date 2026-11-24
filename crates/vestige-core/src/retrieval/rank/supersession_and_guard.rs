@@ -662,6 +662,7 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
         ctx.ix,
         ctx.eff_it.current_state,
         ctx.eff_it.is_event_sequence || is_historical_or_order_query(&ctx.q.text),
+        &ctx.t_exact_mask,
         &mut ctx.final_turn_indices,
     );
 }

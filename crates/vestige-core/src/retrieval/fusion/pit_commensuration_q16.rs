@@ -114,14 +114,19 @@ pub(in crate::retrieval) fn fuse_channels_pit_nqc_q16(
         let eff_w = ((prior_w as u128).saturating_mul(nqc_w as u128) >> 16).max(1) as u64;
         let surp = empirical_pit_surprisal_q16(raw);
         let max_s = surp.iter().copied().max().unwrap_or(0);
-        if max_s == 0 {
+        let max_r = raw.iter().copied().max().unwrap_or(0);
+        if max_s == 0 || max_r == 0 {
             continue;
         }
         total_w = total_w.saturating_add(eff_w);
         for i in 0..len {
-            if surp[i] > 0 {
+            if surp[i] > 0 && raw[i] > 0 {
                 let norm_s = ((surp[i] as u128) << 16) / (max_s as u128);
-                acc[i] = acc[i].saturating_add((norm_s.saturating_mul(eff_w as u128)) >> 16);
+                let norm_r = ((raw[i] as u128) << 16) / (max_r as u128);
+                // Geometric PIT x linear magnitude blend in Q16: resists extreme outlier
+                // collapse while preventing 1%-magnitude tail noise from inflating to 70% cap.
+                let blended = integer_sqrt(norm_s.saturating_mul(norm_r).min(u64::MAX as u128) as u64) as u128;
+                acc[i] = acc[i].saturating_add((blended.saturating_mul(eff_w as u128)) >> 16);
             }
         }
     }
