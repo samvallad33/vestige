@@ -315,5 +315,9 @@ pub(in crate::retrieval) fn run<'a>(
         deficit_b: false,
         torrens_locked_head: false,
         implicit_disclosure_locked: false,
+        wf_g1_s10: Vec::new(),
+        wf_g3_t10: Vec::new(),
+        wf_g4_s5: Vec::new(),
+        wf_g4_flags: Vec::new(),
     }
 }

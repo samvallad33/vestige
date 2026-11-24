@@ -1056,6 +1056,18 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                                 }
                             }
                         }
+                        // Include `[caption]` (`blip_feats`) photo descriptors owned by the speaker
+                        // so Open-Domain persona entailment sees visual evidence shared by the speaker.
+                        for f in &tr.blip_feats {
+                            if is_queried_sp && tr.other_speaker_terms.contains(&f.id) {
+                                continue;
+                            }
+                            let df = ix.s_stats.df.get(&f.id).copied().unwrap_or(0);
+                            if (1..=df_cap).contains(&df) {
+                                *tf_map.entry(f.id).or_insert(0) += (turn_w * 3) >> 2;
+                                corpus_sp_vocab.insert(f.id);
+                            }
+                        }
                     }
                     if !tf_map.is_empty() {
                         speaker_session_terms.insert(si, tf_map.into_iter().collect());
@@ -1078,7 +1090,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                                     && tr.content.contains(&wid)
                             })
                         });
-                    if in_top0_sp {
+                    if top0_full_cov && in_top0_sp {
                         continue;
                     }
                     let synth_qid = 0x7000_0000u32 + (q_idx as u32);
@@ -1407,6 +1419,116 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                                 t_scene[ti] += add_f;
                                 t_scene_sess[ti] += add_f;
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Active 2-Round Multi-Hop Residual Postings Lookup (Step 2):
+        // When non-speaker query groups are strictly split across sessions (Pigeonhole:
+        // `union_cov >= 2 && max_sess_cov < union_cov`), take top-6 partial-coverage Pass-1
+        // sessions `s1`, extract top-IC non-query pivot entities `e` (`2 <= s_df <= ns/3`),
+        // and run an active Pass-2 lookup for sessions `s2 != s1` carrying BOTH `e` AND
+        // an uncovered query group `union_mask & !M(s1)` so hidden-pivot Hop-2 sessions
+        // and their Pass-1 partners rise into Top-2 together!
+        if has_named_speakers_eff && !eff_it.temporal && !top0_full_cov && ns >= 4 && smax > 0.0 {
+            let mut non_sp_mask_r2 = 0u64;
+            let mut sp_lowers_r2: Vec<String> = Vec::new();
+            for tr in ix.turns.iter().take(128) {
+                let sl = tr.speaker.to_ascii_lowercase();
+                if !sl.is_empty() && sl != "user" && sl != "assistant" && !sp_lowers_r2.contains(&sl) {
+                    sp_lowers_r2.push(sl);
+                }
+            }
+            for (gi, g) in plan.groups.iter().take(64).enumerate() {
+                if !sp_lowers_r2.iter().any(|sp| sp.eq_ignore_ascii_case(g)) {
+                    non_sp_mask_r2 |= 1u64 << gi;
+                }
+            }
+            let union_m = ctx
+                .s_exact_mask
+                .iter()
+                .fold(0u64, |acc, &m| acc | (m & non_sp_mask_r2));
+            let union_cnt = union_m.count_ones();
+            let max_s_cnt = ctx
+                .s_exact_mask
+                .iter()
+                .map(|&m| (m & non_sp_mask_r2).count_ones())
+                .max()
+                .unwrap_or(0);
+            if union_cnt >= 2 && max_s_cnt < union_cnt {
+                let ns_u32_r2 = (ns as u32).max(1);
+                let df_hi = (ns_u32_r2 / 3).clamp(3, 12);
+                let mut pass1: Vec<(usize, f32)> = (0..ns)
+                    .filter(|&si| {
+                        let m = ctx.s_exact_mask[si] & union_m;
+                        m != 0 && m != union_m && (s_score[si] + bridge_boost[si]) > 0.0
+                    })
+                    .map(|si| (si, s_score[si] + bridge_boost[si]))
+                    .collect();
+                pass1.sort_unstable_by(|a, b| {
+                    b.1.partial_cmp(&a.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.0.cmp(&b.0))
+                });
+                let mut r2_raw = vec![0u64; ns];
+                for &(s1, _) in pass1.iter().take(6) {
+                    let m1 = ctx.s_exact_mask[s1] & union_m;
+                    let need = union_m & !m1;
+                    if need == 0 {
+                        continue;
+                    }
+                    let mut pivots: Vec<(u32, u64)> = Vec::new();
+                    for &eid in ix
+                        .session_entities[s1]
+                        .iter()
+                        .chain(ix.session_rare_nt[s1].iter().take(12))
+                    {
+                        if plan.group_of.contains_key(&eid) {
+                            continue;
+                        }
+                        let df = ix.s_stats.df.get(&eid).copied().unwrap_or(0);
+                        if (2..=df_hi).contains(&df) && !pivots.iter().any(|&(p, _)| p == eid) {
+                            pivots.push((eid, crate::retrieval::fusion::aspect_coverage_q16::aspect_ic_q16(df, ns_u32_r2)));
+                        }
+                    }
+                    pivots.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                    pivots.truncate(10);
+                    if pivots.is_empty() {
+                        continue;
+                    }
+                    for s2 in 0..ns {
+                        if s2 == s1 {
+                            continue;
+                        }
+                        let m2_new = ctx.s_exact_mask[s2] & need;
+                        if m2_new == 0 {
+                            continue;
+                        }
+                        let mut pivot_ic = 0u64;
+                        for &(pid, pic) in &pivots {
+                            if ix.session_entities[s2].contains(&pid)
+                                || ix.session_content[s2].contains(&pid)
+                            {
+                                pivot_ic = pivot_ic.saturating_add(pic);
+                            }
+                        }
+                        if pivot_ic > 0 {
+                            let cov_bonus = (m1 | m2_new).count_ones() as u64;
+                            let pair_proof = pivot_ic.saturating_mul(cov_bonus);
+                            r2_raw[s1] = r2_raw[s1].max(pair_proof);
+                            r2_raw[s2] = r2_raw[s2].max(pair_proof);
+                        }
+                    }
+                }
+                let max_r2 = r2_raw.iter().copied().max().unwrap_or(0);
+                if max_r2 > 0 {
+                    let r2_cap = 0.36 * smax;
+                    for si in 0..ns {
+                        if r2_raw[si] > 0 {
+                            let frac = (r2_raw[si] as f32) / (max_r2 as f32);
+                            bridge_boost[si] += r2_cap * frac;
                         }
                     }
                 }

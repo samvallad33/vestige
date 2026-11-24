@@ -60,11 +60,12 @@ fn apply_session_late_sync_and_margin_swap(
     torrens_locked_head: bool,
     taxa_lock_candidate: bool,
     k: usize,
-) {
+) -> bool {
+    let mut exact_day_promoted = false;
     if final_turn_indices.is_empty()
         || crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled(eff_it, q_text)
     {
-        return;
+        return false;
     }
     let sight = |si: usize| -> f32 {
         s_score.get(si).copied().unwrap_or(0.0) + bridge_boost.get(si).copied().unwrap_or(0.0)
@@ -140,7 +141,6 @@ fn apply_session_late_sync_and_margin_swap(
         // Exact calendar Day+Month anchor (e.g., "as mentioned on 3 June, 2023", "evening of 7 July, 2023"):
         // match EITHER `ix.session_ts[si]` OR any declarative (`!is_question && !is_backchannel`)
         // turn's `resolved_timex` with `(iv_e - iv_s) <= 3 * 86_400` in session `si`.
-        let mut exact_day_promoted = false;
         if (q_dates.len() == 1 || (q_dates.is_empty() && q_mds.len() == 1))
             && corpus_has_named_speakers(ix)
         {
@@ -494,23 +494,56 @@ fn apply_session_late_sync_and_margin_swap(
                     && votes_for_winner >= 3
                     && sight_q16[winner].saturating_mul(10) >= sight_q16[incumbent].saturating_mul(11)
                     && win_bb_q16 > inc_bb_q16;
+                let max_ex_ic = exact_ic_q16.iter().copied().max().unwrap_or(65_536).max(65_536);
+                let max_bb_q16 = pool
+                    .iter()
+                    .map(|&si| {
+                        crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                            bridge_boost.get(si).copied().unwrap_or(0.0).to_bits(),
+                        )
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let proof_ic_of = |idx: usize| -> u64 {
+                    let ex = exact_ic_q16[idx];
+                    let bb = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                        bridge_boost.get(pool[idx]).copied().unwrap_or(0.0).to_bits(),
+                    );
+                    let bridge_ic = if max_bb_q16 > 0 && bb > 0 {
+                        (((bb as u128).saturating_mul(max_ex_ic as u128) * 4)
+                            / (5 * (max_bb_q16 as u128))) as u64
+                    } else {
+                        0
+                    };
+                    ex.saturating_add(bridge_ic)
+                };
+                let win_proof_ic = proof_ic_of(winner);
+                let inc_proof_ic = proof_ic_of(incumbent);
                 let scene_veto = !od_bridge_override
                     && winner != incumbent
                     && corpus_has_named_speakers(ix)
                     && best_scene[incumbent] > best_scene[winner]
+                    && win_proof_ic <= inc_proof_ic
                     && !strong_bridge_consensus;
-                // Zero-regression IC guard (same as crate::retrieval::fusion::kemeny_mrf::solve_kemeny_order):
-                // do not dethrone #1 for a session with strictly lower exact query-IC unless
-                // `!nqc_lock` holds with >=3 Kemeny votes and >=10% bridge-backed Q16.16 sight margin,
-                // or an open-domain inferential query has strictly stronger bridge_boost.
+                // Unified Clause-Proof IC guard (Step 3): compare `win_proof_ic >= inc_proof_ic`
+                // combining exact lexical IC with verified Stage-04 bridge/timex/persona proofs so
+                // full-coverage Single-Hop stays #1 while proven OD/Temporal/Multi-Hop winners beat 1-word decoys.
                 let ic_holds = od_bridge_override
                     || !mrf_voter
-                    || exact_ic_q16[winner] >= exact_ic_q16[incumbent]
+                    || win_proof_ic >= inc_proof_ic
                     || strong_bridge_consensus;
                 let apply_head = !exact_day_promoted
                     && (winner == incumbent
                         || ((votes_for_winner >= override_votes || tie_break_sight) && ic_holds))
                     && !scene_veto;
+                if winner != incumbent && !apply_head {
+                    if scene_veto {
+                        crate::retrieval::rank::record_wf_flag("scene_veto");
+                    }
+                    if !ic_holds {
+                        crate::retrieval::rank::record_wf_flag("ic_holds_veto");
+                    }
+                }
                 if apply_head {
                     for i in 0..n {
                         final_session_indices[i] = pool[ord[i]];
@@ -641,7 +674,7 @@ fn apply_session_late_sync_and_margin_swap(
     // Skip on `summarization` and `event_ordering` so duplicate lexical turns never clobber
     // aspect-covered / topic-thread session selections (turns sync FROM sessions instead).
     if crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled(eff_it, q_text) {
-        return;
+        return exact_day_promoted;
     }
     let smax_sync = final_session_indices
         .iter()
@@ -694,6 +727,7 @@ fn apply_session_late_sync_and_margin_swap(
     {
         final_session_indices.truncate(k.max(5));
     }
+    exact_day_promoted
 }
 
 
@@ -941,7 +975,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     }
 
     // Synchronize sessions with `final_turn_indices` and land `W2-001` & `W2-006` session closers:
-    apply_session_late_sync_and_margin_swap(
+    let exact_day_promoted = apply_session_late_sync_and_margin_swap(
         ix,
         &q.text,
         &plan,
@@ -1021,67 +1055,84 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             &mut final_session_indices,
         );
 
-        // Domain C (Step 6B): Lexical-Anchored Weighted RRF + Weighted Local Kemenization
-        // with Condorcet Zero-Regression Shield (`w_lex = sum(aux) + 1` on crisp full-coverage queries).
+        // Domain C (Step 6B): Unified Clause-Proof Weighted RRF + Weighted Local Kemenization
+        // Replaces literal `s_exact_mask` locks and stale `keep0` pinning with unified
+        // `sight_all_q16` + `proof_ic_q16` + `best_scene_q16` + Stage-12 Kemeny consensus.
         if final_session_indices.len() >= 3 {
             use crate::retrieval::fusion::aspect_coverage_q16::Q16_ONE;
-            use crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16;
+            use crate::retrieval::fusion::kemeny_mrf::{ieee754_bits_to_q16, pool_mrf_and_exact_ic_q16};
             use crate::retrieval::graph::two_hop_rm3_ppr::lexical_anchored_rrf_kemeny_q16;
 
             let pool_len = final_session_indices.len().min(16);
             let pool: Vec<usize> = final_session_indices[..pool_len].to_vec();
+            let (_, exact_ic_pool) = pool_mrf_and_exact_ic_q16(ix, &plan, &pool, &s_exact_mask);
+            let max_ex_ic = exact_ic_pool.iter().copied().max().unwrap_or(65_536).max(65_536);
+            let bb_pool: Vec<u64> = pool
+                .iter()
+                .map(|&si| ieee754_bits_to_q16(bridge_boost.get(si).copied().unwrap_or(0.0).to_bits()))
+                .collect();
+            let max_bb = bb_pool.iter().copied().max().unwrap_or(0);
+            let mut proof_ic_map: std::collections::BTreeMap<usize, u64> = std::collections::BTreeMap::new();
+            for (i, &si) in pool.iter().enumerate() {
+                let bridge_ic = if max_bb > 0 && bb_pool[i] > 0 {
+                    (((bb_pool[i] as u128).saturating_mul(max_ex_ic as u128) * 4)
+                        / (5 * (max_bb as u128))) as u64
+                } else {
+                    0
+                };
+                proof_ic_map.insert(si, exact_ic_pool[i].saturating_add(bridge_ic));
+            }
+            let proof_of = |si: usize| -> u64 { proof_ic_map.get(&si).copied().unwrap_or(0) };
+
             let mut lex_rank = pool.clone();
             lex_rank.sort_by(|&a, &b| {
-                let la = ieee754_bits_to_q16(s_score[a].to_bits());
-                let lb = ieee754_bits_to_q16(s_score[b].to_bits());
-                lb.cmp(&la).then_with(|| a.cmp(&b))
-            });
-            let mut aux_bridge = pool.clone();
-            aux_bridge.sort_by(|&a, &b| {
                 sight_all_q16[b]
                     .cmp(&sight_all_q16[a])
                     .then_with(|| a.cmp(&b))
             });
+            let aux_cur = pool.clone();
             let mut aux_scene = pool.clone();
             aux_scene.sort_by(|&a, &b| {
                 best_scene_q16[b]
                     .cmp(&best_scene_q16[a])
                     .then_with(|| a.cmp(&b))
             });
-            let mut aux_cov = pool.clone();
-            aux_cov.sort_by(|&a, &b| {
-                let ca = (s_exact_mask.get(a).copied().unwrap_or(0) & q_group_mask).count_ones();
-                let cb = (s_exact_mask.get(b).copied().unwrap_or(0) & q_group_mask).count_ones();
-                cb.cmp(&ca)
+            let mut aux_proof = pool.clone();
+            aux_proof.sort_by(|&a, &b| {
+                proof_of(b)
+                    .cmp(&proof_of(a))
                     .then_with(|| sight_all_q16[b].cmp(&sight_all_q16[a]))
                     .then_with(|| a.cmp(&b))
             });
             let lex0 = lex_rank[0];
-            let lex0_q = ieee754_bits_to_q16(s_score[lex0].to_bits());
-            let lex1_q = lex_rank
-                .get(1)
-                .map(|&s1| ieee754_bits_to_q16(s_score[s1].to_bits()))
-                .unwrap_or(0);
-            let lex0_full = q_group_mask != 0
-                && (s_exact_mask.get(lex0).copied().unwrap_or(0) & q_group_mask) == q_group_mask;
-            // Strict Condorcet Shield protects Single-Hop & Adversarial while opening partial-coverage Multi-Hop.
-            let full_lex_lock = lex0_q.saturating_mul(3) >= lex1_q.saturating_mul(4)
-                || (lex0_full && !eff_it.multi_hop && lex0_q.saturating_mul(9) >= lex1_q.saturating_mul(10))
-                || (final_session_indices[0] != lex0 && lex0_full);
+            let lex1 = lex_rank.get(1).copied().unwrap_or(lex0);
+            let lex0_q = sight_all_q16[lex0];
+            let lex1_q = sight_all_q16[lex1];
+            // Unified Clause-Proof Condorcet Shield (zero literal `s_exact_mask` lock):
+            // Lock `lex0` inside RRF+Kemeny only when Stage-04 unified `sight_all_q16` leads
+            // decisively (`>= 1.35x`) AND holds unified `proof_ic_q16` parity/superiority
+            // AND no exact calendar day was promoted upstream.
+            let full_lex_lock = !exact_day_promoted
+                && !eff_it.multi_hop
+                && lex0 != lex1
+                && lex0_q.saturating_mul(100) >= lex1_q.saturating_mul(135)
+                && proof_of(lex0) >= proof_of(lex1);
             let aux_specs: [(&[usize], u64); 3] = [
-                (aux_bridge.as_slice(), (Q16_ONE * 3) >> 2),
+                (aux_cur.as_slice(), Q16_ONE),
                 (aux_scene.as_slice(), (Q16_ONE * 3) >> 2),
-                (aux_cov.as_slice(), Q16_ONE >> 1),
+                (aux_proof.as_slice(), Q16_ONE >> 1),
             ];
             let fused_ord = lexical_anchored_rrf_kemeny_q16(&pool, &lex_rank, &aux_specs, full_lex_lock);
-            // Preserve the current Slot 0 unless `!full_lex_lock && eff_it.multi_hop` cleanly agrees.
-            if !full_lex_lock && eff_it.multi_hop {
-                final_session_indices[..pool_len].copy_from_slice(&fused_ord);
-            } else {
-                let keep0 = final_session_indices[0];
-                let mut rest: Vec<usize> = fused_ord.into_iter().filter(|&s| s != keep0).collect();
-                rest.insert(0, keep0);
+            if full_lex_lock {
+                crate::retrieval::rank::record_wf_flag("full_lex_lock");
+            }
+            if exact_day_promoted {
+                let day_head = final_session_indices[0];
+                let mut rest: Vec<usize> = fused_ord.into_iter().filter(|&s| s != day_head).collect();
+                rest.insert(0, day_head);
                 final_session_indices[..pool_len].copy_from_slice(&rest[..pool_len]);
+            } else {
+                final_session_indices[..pool_len].copy_from_slice(&fused_ord);
             }
 
             // Wave 6 `S8-004` Session-Level Rhumb-Union Bridge Seat + M3 2-Hop Bridge-Entity Triangle Closure:
@@ -1296,7 +1347,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     &q_refs_duel,
                 );
             if !full_lex_lock
-                && !lex0_full
                 && (eff_it.multi_hop || eff_it.temporal || is_od_duel)
                 && final_session_indices.len() >= 2
             {
@@ -4643,6 +4693,15 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         &s_exact_mask,
         k,
     );
+
+    if crate::retrieval::rank::waterfall_log_path().is_some() {
+        ctx.wf_g4_s5 = final_session_indices
+            .iter()
+            .take(5)
+            .map(|&si| ix.session_ids[si].clone())
+            .collect();
+        ctx.wf_g4_flags = crate::retrieval::rank::take_wf_flags();
+    }
 
     // Unified Q16.16 GBDT/LambdaMART + Condorcet @1 & @5 Gatekeeper Scorer over deep pool
     crate::retrieval::seating::gatekeeper::apply_at1_gatekeeper_q16(

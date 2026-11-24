@@ -146,10 +146,26 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         // (same field the s5 gate analysis used). This is NOT a UTF-8 char count.
         let content_tokens = t.content.len();
         let keep_full_carry = t.speaker == "assistant" || t.is_short_reply || content_tokens <= 8;
+        let is_partner_q_reply = !t.is_question
+            && !t.is_backchannel
+            && (t.answers.is_some()
+                || ix
+                    .session_turns
+                    .get(t.session)
+                    .and_then(|m| {
+                        m.iter()
+                            .position(|&id| id == ti)
+                            .and_then(|pos| pos.checked_sub(1).map(|p| m[p]))
+                    })
+                    .is_some_and(|prv| {
+                        ix.turns[prv].is_question && ix.turns[prv].speaker != t.speaker
+                    }));
         if carry_mode_is_parity() {
             t_turn_raw[ti] = sc_own + 1.0 * (sc - sc_own);
         } else if keep_full_carry {
             t_turn_raw[ti] = sc.max(sc_own);
+        } else if is_partner_q_reply {
+            t_turn_raw[ti] = sc_own + 0.62 * (sc - sc_own).max(0.0);
         } else {
             t_turn_raw[ti] = sc_own + 0.18 * (sc - sc_own).max(0.0);
         }

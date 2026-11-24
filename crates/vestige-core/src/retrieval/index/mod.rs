@@ -783,7 +783,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                                             id: cid,
                                             w: 0.95,
                                             counts_len: false,
-                                            inheritable: false,
+                                            inheritable: true,
                                         });
                                     }
                                 }

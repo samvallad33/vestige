@@ -17,6 +17,7 @@ pub(in crate::retrieval) mod ppr_rwr;
 pub(in crate::retrieval) mod ranganathan_pmest;
 pub(in crate::retrieval) mod sheaf_dempster_q16;
 pub(in crate::retrieval) mod shepard_citations;
+pub(in crate::retrieval) mod signed_galois_fca_q16;
 pub(in crate::retrieval) mod state_entrenchment_dag;
 pub(in crate::retrieval) mod stn_floyd_warshall;
 pub(in crate::retrieval) mod supersession;

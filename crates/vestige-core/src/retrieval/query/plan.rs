@@ -337,6 +337,46 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
             group_of.insert(id, g);
             focal_ids.insert(id);
         }
+        // Stage-01 Vocab-Attested Compound Splitting (`len >= 6`, e.g. "roadtrip" -> "road" + "trip"):
+        // If `w` splits into two corpus-attested content words (`len >= 3` each), emit both under group `g`
+        // so BM25F, MRF, and `s_exact_mask` match at Stage 01 without waiting for downstream bridges.
+        if w.is_ascii() && w.len() >= 6 && w.bytes().all(|b| b.is_ascii_alphabetic()) {
+            let w_df = ix.vocab.get(w).map(|id| corpus_df(id)).unwrap_or(0);
+            if w_df <= 2 {
+                for split_at in 3..=(w.len() - 3) {
+                    let left = &w[..split_at];
+                    let right = &w[split_at..];
+                    if is_content(left)
+                        && is_content(right)
+                        && let (Some(lid), Some(rid)) = (ix.vocab.get(left), ix.vocab.get(right))
+                    {
+                        if corpus_df(lid) > 0 && corpus_df(rid) > 0 {
+                            terms.push(QTerm { id: lid, weight: 0.72, group: Some(g), exact_hit: true });
+                            terms.push(QTerm { id: rid, weight: 0.72, group: Some(g), exact_hit: true });
+                            group_of.entry(lid).or_insert(g);
+                            group_of.entry(rid).or_insert(g);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // Adjacent query compound join ("road" + "trip" -> "roadtrip" when attested in corpus vocab):
+        if let Some(next_w) = raw_q.get(idx + 1)
+            && is_content(next_w)
+            && w.len() >= 3
+            && next_w.len() >= 3
+            && w.is_ascii()
+            && next_w.is_ascii()
+        {
+            let joined = format!("{w}{next_w}");
+            if let Some(jid) = ix.vocab.get(&joined)
+                && corpus_df(jid) > 0
+            {
+                terms.push(QTerm { id: jid, weight: 0.78, group: Some(g), exact_hit: true });
+                group_of.entry(jid).or_insert(g);
+            }
+        }
         if let Some(full) = nick_bind.get(w) {
             if let Some(id) = ix.vocab.get(full) {
                 terms.push(QTerm { id, weight: 1.0, group: Some(g), exact_hit: true });

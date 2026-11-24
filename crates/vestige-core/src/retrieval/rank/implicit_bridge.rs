@@ -25,10 +25,17 @@
 //!    and pure user questions below declarative `field == 0` user assertions
 //!    carrying strictly stronger wrapper-stripped exact + FST concept evidence.
 
-use crate::retrieval::index::normalize::{
-    ascii_edit_dist_le_1, derivational_base_stems, split_wordnet_compound,
+use std::collections::BTreeSet;
+
+use crate::retrieval::graph::signed_galois_fca_q16::{
+    apply_signed_galois_hazard_seat_q16, score_signed_galois_candidates_q16,
 };
-use crate::retrieval::lexical::speaker_translation_q16::is_open_domain_inferential_shape;
+use crate::retrieval::index::normalize::{
+    ascii_edit_dist_le_1, derivational_base_stems, split_wordnet_compound, stem_term,
+};
+use crate::retrieval::lexical::speaker_translation_q16::{
+    is_open_domain_inferential_shape, is_strict_epistemic_inferential,
+};
 use crate::retrieval::query::tokens::is_content;
 use crate::retrieval::rank::context::RankCtx;
 use crate::retrieval::seating::c2::common::eff_summary_request;
@@ -573,6 +580,73 @@ fn is_zero_substance_greeting_with_hits(tr: &TurnIx, dh: u32, fh: u32) -> bool {
     false
 }
 
+/// Closed-class check for calendar weekday/month names excluded from co-hyponym sibling
+/// expansion so temporal words do not cross-match adjacent days or months.
+/// hardcode-scan: closed-class (calendar weekdays and months only).
+fn is_calendar_word(w: &str) -> bool {
+    matches!(
+        w,
+        "monday"
+            | "tuesday"
+            | "wednesday"
+            | "thursday"
+            | "friday"
+            | "saturday"
+            | "sunday"
+            | "january"
+            | "february"
+            | "march"
+            | "april"
+            | "may"
+            | "june"
+            | "july"
+            | "august"
+            | "september"
+            | "october"
+            | "november"
+            | "december"
+    )
+}
+
+/// Closed-class 1st-person preference, habit, affinity, or standing-goal stance detector
+/// used alongside `TurnIx::is_habitual` and `TurnIx::is_personal_constraint` to anchor
+/// B4 WordNet co-hyponym / LCS sibling resonance to the queried speaker's traits.
+/// hardcode-scan: closed-class (1st-person preference, affinity, habit, and goal stance frames).
+fn is_speaker_preference_or_habit_turn(tr: &TurnIx) -> bool {
+    if tr.is_habitual || tr.is_personal_constraint {
+        return true;
+    }
+    if tr.is_question || tr.is_backchannel {
+        return false;
+    }
+    let low = tr.body_for_headers.to_ascii_lowercase();
+    // hardcode-scan: closed-class (1st-person preference, affinity, habit, and goal markers)
+    [
+        "i'm a fan",
+        "i am a fan",
+        "i love ",
+        "i enjoy ",
+        "i prefer ",
+        "i'm keen",
+        "i'm allergic",
+        "i always ",
+        "i usually ",
+        "we always ",
+        "my favorite",
+        "my dream",
+        "my goal",
+        "i'd love",
+        "i want to ",
+        "i hope to ",
+        "i've always",
+        "i've never",
+        "i avoid ",
+        "i'm trying ",
+    ]
+    .iter()
+    .any(|p| low.contains(p))
+}
+
 #[inline]
 fn turn_idf(nt: usize, df: u32) -> f32 {
     let n = (nt as f32).max(1.0);
@@ -580,45 +654,115 @@ fn turn_idf(nt: usize, df: u32) -> f32 {
     ((n + 1.0) / (d + 0.5)).ln().max(0.5)
 }
 
-/// Build weighted FST expansion vocab map (`vocab_id -> weight`) for query concepts
-/// using pinned offline WordNet 3.1 + ConceptNet 5.7 + Wikidata CC0 + compound splitting
-/// + derivational stems + OOV typo/abbreviation rescue.
+/// Weighted FST concept maps (`vocab_id -> (weight, canonical_group_id)`) covering
+/// exact tokens and their `\u{1}stem:...` variants without double-counting.
+struct FstConceptMaps {
+    direct_weights: DetHashMap<u32, (f32, u32)>,
+    fst_weights: DetHashMap<u32, (f32, u32)>,
+    /// 1-hop WordNet `strict_co_hyponym_siblings` + `lcs_sibling_resonance` (B4),
+    /// locked strictly to `queried_speakers[0]`'s `is_habitual` / preference / declarative turns.
+    sibling_weights: DetHashMap<u32, (f32, u32)>,
+}
+
+/// Build weighted FST expansion vocab maps for query concepts using pinned offline
+/// WordNet 3.1 + ConceptNet 5.7 + Wikidata CC0 + Roget 1911 + GeoNames + corpus PPMI
+/// + compound splitting + derivational stems + OOV typo/abbreviation rescue.
 fn build_fst_concept_map(
     ctx: &RankCtx<'_>,
     speaker_vocab: &DetHashSet<String>,
-) -> (DetHashMap<u32, f32>, DetHashMap<u32, f32>) {
+) -> FstConceptMaps {
     let nt = ctx.nt;
     let max_fst_df = ((nt / 7).clamp(14, 48)) as u32;
-    let mut direct_weights: DetHashMap<u32, f32> = DetHashMap::default();
-    let mut fst_weights: DetHashMap<u32, f32> = DetHashMap::default();
+    let mut direct_weights: DetHashMap<u32, (f32, u32)> = DetHashMap::default();
+    let mut fst_weights: DetHashMap<u32, (f32, u32)> = DetHashMap::default();
+    let mut sibling_weights: DetHashMap<u32, (f32, u32)> = DetHashMap::default();
 
-    let mut add_direct = |id: u32, w: f32| {
-        direct_weights
-            .entry(id)
+    let insert_best = |map: &mut DetHashMap<u32, (f32, u32)>, id: u32, w: f32, grp: u32| {
+        map.entry(id)
             .and_modify(|cur| {
-                if w > *cur {
-                    *cur = w;
+                if w > cur.0 {
+                    cur.0 = w;
+                    cur.1 = grp;
                 }
             })
-            .or_insert(w);
+            .or_insert((w, grp));
     };
-    let mut add_fst = |tok: &str, base_w: f32| {
-        if tok.len() < 3 || !is_content(tok) || is_wrapper_or_scaffold(tok) || speaker_vocab.contains(tok)
+
+    let mut add_direct_tok = |tok: &str, mul: f32| -> bool {
+        let mut hit = false;
+        let st = stem(tok);
+        let st_id_opt = if st.len() >= 3 {
+            ctx.ix.vocab.get(&stem_term(&st))
+        } else {
+            None
+        };
+        let exact_id_opt = ctx.ix.vocab.get(tok);
+        let grp = st_id_opt.or(exact_id_opt).unwrap_or(0);
+        if let Some(id) = exact_id_opt {
+            let df = ctx.ix.t_own_stats.df.get(&id).copied().unwrap_or(0);
+            if df > 0 {
+                hit = true;
+                insert_best(&mut direct_weights, id, mul * turn_idf(nt, df), grp);
+            }
+        }
+        if let Some(sid) = st_id_opt {
+            let df = ctx.ix.t_own_stats.df.get(&sid).copied().unwrap_or(0);
+            if df > 0 {
+                hit = true;
+                insert_best(
+                    &mut direct_weights,
+                    sid,
+                    mul * 0.82 * turn_idf(nt, df),
+                    grp,
+                );
+            }
+        }
+        if st.len() >= 3
+            && st != tok
+            && let Some(plain_sid) = ctx.ix.vocab.get(&st)
+        {
+            let df = ctx.ix.t_own_stats.df.get(&plain_sid).copied().unwrap_or(0);
+            if df > 0 {
+                hit = true;
+                insert_best(
+                    &mut direct_weights,
+                    plain_sid,
+                    mul * 0.78 * turn_idf(nt, df),
+                    grp,
+                );
+            }
+        }
+        hit
+    };
+
+    let add_to_map = |map: &mut DetHashMap<u32, (f32, u32)>, tok: &str, base_w: f32| {
+        if tok.len() < 3
+            || !is_content(tok)
+            || is_wrapper_or_scaffold(tok)
+            || speaker_vocab.contains(tok)
         {
             return;
         }
-        if let Some(id) = ctx.ix.vocab.get(tok) {
+        let st = stem(tok);
+        let st_id_opt = if st.len() >= 3 {
+            ctx.ix.vocab.get(&stem_term(&st))
+        } else {
+            None
+        };
+        let exact_id_opt = ctx.ix.vocab.get(tok);
+        let grp = st_id_opt.or(exact_id_opt).unwrap_or(0);
+        if let Some(id) = exact_id_opt {
             let df = ctx.ix.t_own_stats.df.get(&id).copied().unwrap_or(0);
             if (1..=max_fst_df).contains(&df) {
                 let w = base_w * turn_idf(nt, df);
-                fst_weights
-                    .entry(id)
-                    .and_modify(|cur| {
-                        if w > *cur {
-                            *cur = w;
-                        }
-                    })
-                    .or_insert(w);
+                insert_best(map, id, w, grp);
+            }
+        }
+        if let Some(sid) = st_id_opt {
+            let df = ctx.ix.t_own_stats.df.get(&sid).copied().unwrap_or(0);
+            if (1..=max_fst_df).contains(&df) {
+                let w = base_w * 0.85 * turn_idf(nt, df);
+                insert_best(map, sid, w, grp);
             }
         }
     };
@@ -639,8 +783,8 @@ fn build_fst_concept_map(
         }
     }
 
-    // Also extract 2-word phrase/entity concepts (e.g., "dr seuss", "national park", "theme park",
-    // "four seasons", "hot pot", "energy bar", "green card") for Wikidata & ConceptNet lookups.
+    // Also extract 2-word and 3-word phrase/entity concepts (e.g., "dr seuss", "national park",
+    // "theme park", "four seasons", "hot pot", "energy bar", "green card") for Wikidata & ConceptNet.
     let mut phrases: Vec<String> = Vec::new();
     for win in q_raw.windows(2) {
         let a = win[0].to_ascii_lowercase();
@@ -657,52 +801,43 @@ fn build_fst_concept_map(
             }
         }
     }
+    for win in q_raw.windows(3) {
+        let a = win[0].to_ascii_lowercase();
+        let b = win[1].to_ascii_lowercase();
+        let c = win[2].to_ascii_lowercase();
+        if a.len() >= 2
+            && !b.is_empty()
+            && c.len() >= 3
+            && !speaker_vocab.contains(&a)
+            && !speaker_vocab.contains(&c)
+        {
+            let sp = format!("{a} {b} {c}");
+            if (crate::wikidata::has_source(&sp) || !crate::wordnet::senses(&sp).is_empty())
+                && !phrases.contains(&sp)
+            {
+                phrases.push(sp);
+            }
+        }
+    }
 
     // Expand single concepts: direct + compound split + derivational + OOV edit-1/abbr + FST graphs.
     for c in &concepts {
-        let mut grounded_here = false;
-        if let Some(id) = ctx.ix.vocab.get(c) {
-            let df = ctx.ix.t_own_stats.df.get(&id).copied().unwrap_or(0);
-            if df > 0 {
-                grounded_here = true;
-                add_direct(id, 2.2 * turn_idf(nt, df));
-            }
-        }
-        let c_st = stem(c);
-        if c_st.len() >= 3
-            && let Some(sid) = ctx.ix.vocab.get(&c_st)
-        {
-            let df = ctx.ix.t_own_stats.df.get(&sid).copied().unwrap_or(0);
-            if df > 0 {
-                grounded_here = true;
-                add_direct(sid, 1.5 * turn_idf(nt, df));
-            }
-        }
+        let grounded_here = add_direct_tok(c, 2.2);
 
         // 1. Compound splitting (`roadtrip -> road + trip`, `bookshelf -> book + shelf`).
         if let Some((left, right)) = split_wordnet_compound(c) {
             for part in [left, right] {
                 if !is_wrapper_or_scaffold(part) {
-                    if let Some(pid) = ctx.ix.vocab.get(part) {
-                        let df = ctx.ix.t_own_stats.df.get(&pid).copied().unwrap_or(0);
-                        if df > 0 {
-                            add_direct(pid, 1.65 * turn_idf(nt, df));
-                        }
-                    }
-                    add_fst(part, 0.95);
+                    add_direct_tok(part, 1.65);
+                    add_to_map(&mut fst_weights, part, 0.95);
                 }
             }
         }
 
         // 2. Derivational morphology (`educational -> education, educate`).
         for d in derivational_base_stems(c) {
-            if let Some(did) = ctx.ix.vocab.get(&d) {
-                let df = ctx.ix.t_own_stats.df.get(&did).copied().unwrap_or(0);
-                if df > 0 {
-                    add_direct(did, 1.45 * turn_idf(nt, df));
-                }
-            }
-            add_fst(&d, 0.85);
+            add_direct_tok(&d, 1.45);
+            add_to_map(&mut fst_weights, &d, 0.85);
         }
 
         // 3. OOV typo / abbreviation rescue (`educaton -> education / edu`).
@@ -717,38 +852,43 @@ fn build_fst_concept_map(
                     continue;
                 }
                 if ascii_edit_dist_le_1(c, vword) {
-                    add_direct(vid, 1.85 * turn_idf(nt, df));
+                    add_direct_tok(vword, 1.85);
                     // Also expand FST from the corrected word!
                     for (nbr, sc) in crate::conceptnet::two_hop_neighbors(vword, 14) {
-                        let w = ((sc as f32) / 200.0).clamp(0.25, 1.0) * 0.70;
+                        let w = ((sc as f32) / 200.0).clamp(0.25, 1.0) * 0.72;
                         for tok in raw_tokens(nbr) {
-                            add_fst(&tok, w);
+                            add_to_map(&mut fst_weights, &tok, w);
                         }
                     }
                     for (nbr, sc) in crate::wordnet::full_lexicon_neighbors(vword)
                         .into_iter()
                         .take(14)
                     {
-                        let w = ((sc as f32) / 100.0).clamp(0.25, 1.0) * 0.65;
+                        let w = ((sc as f32) / 100.0).clamp(0.25, 1.0) * 0.68;
                         for tok in raw_tokens(nbr) {
-                            add_fst(&tok, w);
+                            add_to_map(&mut fst_weights, &tok, w);
                         }
                     }
                 } else if vword.len() == 3 && vword == prefix3 && !is_wrapper_or_scaffold(vword) {
-                    add_direct(vid, 1.25 * turn_idf(nt, df));
+                    add_direct_tok(vword, 1.35);
                 }
             }
         }
 
-        // 4. Wikidata entity upward containers + direct typed edges (`Vivaldi -> classical, composer`).
+        // 4. Wikidata entity upward containers, direct typed edges, and class instances.
         for container in crate::wikidata::upward_containers(c, 2).into_iter().take(12) {
             for tok in raw_tokens(container) {
-                add_fst(&tok, 0.85);
+                add_to_map(&mut fst_weights, &tok, 0.85);
             }
         }
         for (target, _) in crate::wikidata::direct_typed_edges(c).into_iter().take(12) {
             for tok in raw_tokens(target) {
-                add_fst(&tok, 0.90);
+                add_to_map(&mut fst_weights, &tok, 0.90);
+            }
+        }
+        for inst in crate::wikidata::direct_instances_of(c, 12) {
+            for tok in raw_tokens(inst) {
+                add_to_map(&mut fst_weights, &tok, 0.78);
             }
         }
 
@@ -756,38 +896,104 @@ fn build_fst_concept_map(
         for (nbr, sc) in crate::conceptnet::two_hop_neighbors(c, 22) {
             let w = ((sc as f32) / 200.0).clamp(0.25, 1.0) * 0.80;
             for tok in raw_tokens(nbr) {
-                add_fst(&tok, w);
+                add_to_map(&mut fst_weights, &tok, w);
             }
         }
         for (nbr, sc) in crate::conceptnet::reciprocal_two_hop_neighbors(c, 16) {
-            let w = ((sc as f32) / 200.0).clamp(0.25, 1.0) * 0.75;
+            let w = ((sc as f32) / 200.0).clamp(0.25, 1.0) * 0.78;
             for tok in raw_tokens(nbr) {
-                add_fst(&tok, w);
+                add_to_map(&mut fst_weights, &tok, w);
             }
         }
 
-        // 6. WordNet full lexicon neighbors + dual gloss hypernym bridge (`sc` in `0..=100`) + gloss concepts.
+        // 6. WordNet full lexicon neighbors (Heyting asymmetric subsumption weighted)
+        //    + dual gloss hypernym bridge + gloss concepts + class-to-instances.
         for (nbr, sc) in crate::wordnet::full_lexicon_neighbors(c)
             .into_iter()
             .take(18)
         {
-            let w = ((sc as f32) / 100.0).clamp(0.25, 1.0) * 0.72;
+            let heyt = crate::wordnet::heyting_implication_ic_q16(nbr, c);
+            let eff_sc = if heyt >= 76 {
+                sc.max(heyt)
+            } else if heyt == 38 {
+                (sc * 3) / 4
+            } else {
+                sc
+            };
+            let w = ((eff_sc as f32) / 100.0).clamp(0.25, 1.0) * 0.76;
             for tok in raw_tokens(nbr) {
-                add_fst(&tok, w);
+                add_to_map(&mut fst_weights, &tok, w);
             }
         }
         for (nbr, sc) in crate::wordnet::dual_gloss_hypernym_bridge(c, 14) {
-            let w = ((sc as f32) / 100.0).clamp(0.25, 1.0) * 0.65;
+            let w = ((sc as f32) / 100.0).clamp(0.25, 1.0) * 0.68;
             for tok in raw_tokens(nbr) {
-                add_fst(&tok, w);
+                add_to_map(&mut fst_weights, &tok, w);
             }
         }
         for gc in crate::wordnet::gloss_and_compound_concepts(c)
             .into_iter()
-            .take(10)
+            .take(12)
         {
             for tok in raw_tokens(gc) {
-                add_fst(&tok, 0.50);
+                add_to_map(&mut fst_weights, &tok, 0.54);
+            }
+        }
+        if (1..=4).contains(&crate::wordnet::senses(c).len()) {
+            for inst in crate::wordnet::class_to_instances(c, 1).into_iter().take(24) {
+                for tok in raw_tokens(inst) {
+                    add_to_map(&mut fst_weights, &tok, 0.72);
+                }
+            }
+        }
+
+        // 7. B4 1-hop WordNet `strict_co_hyponym_siblings` + `lcs_sibling_resonance`
+        //    (stored separately and locked strictly to `queried_speakers[0]`'s
+        //    `is_habitual` / preference / declarative turns in Regime B!).
+        if !is_calendar_word(c) {
+            for sib in crate::wordnet::strict_co_hyponym_siblings(c)
+                .into_iter()
+                .take(16)
+            {
+                if !is_calendar_word(sib) {
+                    add_to_map(&mut sibling_weights, sib, 0.78);
+                }
+            }
+            for (lcs_sib, lcs_sc) in crate::wordnet::lcs_sibling_resonance(c, 16) {
+                if !is_calendar_word(lcs_sib) {
+                    let w = ((lcs_sc as f32) / 100.0).clamp(0.35, 1.0) * 0.88;
+                    add_to_map(&mut sibling_weights, lcs_sib, w);
+                }
+            }
+        }
+
+        // 8. Roget 1911 conceptual neighbors + GeoNames gazetteer neighbors & class instances
+        //    + 1-hop corpus PPMI associative translation.
+        for (r_nbr, r_sc) in crate::roget::conceptual_neighbors(c, 28) {
+            let w = ((r_sc as f32) / 100.0).clamp(0.25, 1.0) * 0.56;
+            add_to_map(&mut fst_weights, r_nbr, w);
+        }
+        for (g_nbr, g_sc) in crate::geonames::geo_neighbors(c).into_iter().take(12) {
+            let w = ((g_sc as f32) / 100.0).clamp(0.30, 1.0) * 0.85;
+            add_to_map(&mut fst_weights, g_nbr, w);
+        }
+        for geo_inst in crate::geonames::geo_class_instances(c) {
+            if let Some(gid) = ctx.ix.vocab.get(geo_inst) {
+                let df = ctx.ix.t_own_stats.df.get(&gid).copied().unwrap_or(0);
+                if (1..=max_fst_df).contains(&df) {
+                    add_to_map(&mut fst_weights, geo_inst, 0.76);
+                }
+            }
+        }
+        if let Some(qid_v) = ctx.ix.vocab.get(c)
+            && let Some(ppmi_list) = ctx.ix.ppmi_neighbors.get(&qid_v)
+        {
+            for &(pid, pw) in ppmi_list.iter().take(6) {
+                let df = ctx.ix.t_own_stats.df.get(&pid).copied().unwrap_or(0);
+                if (1..=max_fst_df).contains(&df) {
+                    let w = (pw.clamp(0.1, 2.0) * 0.36) * turn_idf(nt, df);
+                    insert_best(&mut fst_weights, pid, w, pid);
+                }
             }
         }
     }
@@ -797,51 +1003,112 @@ fn build_fst_concept_map(
         if crate::wikidata::has_source(ph) {
             for container in crate::wikidata::upward_containers(ph, 2).into_iter().take(12) {
                 for tok in raw_tokens(container) {
-                    add_fst(&tok, 1.05);
+                    add_to_map(&mut fst_weights, &tok, 1.05);
                 }
             }
             for (target, _) in crate::wikidata::direct_typed_edges(ph).into_iter().take(12) {
                 for tok in raw_tokens(target) {
-                    add_fst(&tok, 1.10);
+                    add_to_map(&mut fst_weights, &tok, 1.10);
                 }
             }
         }
         for (nbr, sc) in crate::conceptnet::two_hop_neighbors(ph, 16) {
             let w = ((sc as f32) / 200.0).clamp(0.25, 1.0) * 0.95;
             for tok in raw_tokens(nbr) {
-                add_fst(&tok, w);
+                add_to_map(&mut fst_weights, &tok, w);
             }
         }
     }
 
-    (direct_weights, fst_weights)
+    FstConceptMaps {
+        direct_weights,
+        fst_weights,
+        sibling_weights,
+    }
 }
 
-/// Score a turn's `content` against `(direct_weights, fst_weights)` over distinct vocab IDs.
-fn score_turn_concepts(
+/// Score a turn's `content` + `\u{1}stem:...` `feats` against `FstConceptMaps`,
+/// deduplicating exact and stemmed forms per canonical group key.
+/// `allow_siblings` MUST be true ONLY for `queried_speakers[0]`'s declarative turns (B4).
+/// `skip_other_speaker` excludes 2nd-person `tr.other_speaker_terms` on single-speaker queries.
+fn score_turn_concepts_full(
     tr: &TurnIx,
-    direct_weights: &DetHashMap<u32, f32>,
-    fst_weights: &DetHashMap<u32, f32>,
-) -> (f32, f32, u32, u32) {
-    let mut direct = 0.0f32;
-    let mut fst = 0.0f32;
-    let mut d_hits = 0u32;
-    let mut f_hits = 0u32;
-    let mut seen: DetHashSet<u32> = DetHashSet::default();
+    maps: &FstConceptMaps,
+    allow_siblings: bool,
+    skip_other_speaker: bool,
+) -> (f32, f32, f32, u32, u32, u32) {
+    let mut best_d: DetHashMap<u32, f32> = DetHashMap::default();
+    let mut best_f: DetHashMap<u32, f32> = DetHashMap::default();
+    let mut best_s: DetHashMap<u32, f32> = DetHashMap::default();
+
+    let mut visit_id = |cid: u32| {
+        if skip_other_speaker && tr.other_speaker_terms.contains(&cid) {
+            return;
+        }
+        if let Some(&(w, grp)) = maps.direct_weights.get(&cid) {
+            best_d
+                .entry(grp)
+                .and_modify(|cur| {
+                    if w > *cur {
+                        *cur = w;
+                    }
+                })
+                .or_insert(w);
+        } else if let Some(&(w, grp)) = maps.fst_weights.get(&cid) {
+            best_f
+                .entry(grp)
+                .and_modify(|cur| {
+                    if w > *cur {
+                        *cur = w;
+                    }
+                })
+                .or_insert(w);
+        }
+        if allow_siblings
+            && !maps.direct_weights.contains_key(&cid)
+            && !maps.fst_weights.contains_key(&cid)
+            && let Some(&(w, grp)) = maps.sibling_weights.get(&cid)
+        {
+            best_s
+                .entry(grp)
+                .and_modify(|cur| {
+                    if w > *cur {
+                        *cur = w;
+                    }
+                })
+                .or_insert(w);
+        }
+    };
+
     for &cid in &tr.content {
-        if !seen.insert(cid) {
-            continue;
-        }
-        if let Some(&w) = direct_weights.get(&cid) {
-            direct += w;
-            d_hits += 1;
-        }
-        if let Some(&w) = fst_weights.get(&cid) {
-            fst += w;
-            f_hits += 1;
+        visit_id(cid);
+    }
+    for f in &tr.feats {
+        if maps.direct_weights.contains_key(&f.id)
+            || maps.fst_weights.contains_key(&f.id)
+            || (allow_siblings && maps.sibling_weights.contains_key(&f.id))
+        {
+            visit_id(f.id);
         }
     }
-    (direct, fst, d_hits, f_hits)
+
+    let direct: f32 = best_d.values().sum();
+    let fst: f32 = best_f.values().sum();
+    let sib: f32 = best_s.values().sum();
+    (
+        direct,
+        fst,
+        sib,
+        best_d.len() as u32,
+        best_f.len() as u32,
+        best_s.len() as u32,
+    )
+}
+
+/// Convenience wrapper for advice/disclosure regimes without B4 sibling expansion.
+fn score_turn_concepts(tr: &TurnIx, maps: &FstConceptMaps) -> (f32, f32, u32, u32) {
+    let (d, f, _, dh, fh, _) = score_turn_concepts_full(tr, maps, false, false);
+    (d, f, dh, fh)
 }
 
 /// Check whether turn is a concise declarative 1st-person disclosure paired with a
@@ -932,15 +1199,35 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     }
 
     let empty_sp = DetHashSet::default();
-    let (direct_w, fst_w) = build_fst_concept_map(ctx, &empty_sp);
+    let maps = build_fst_concept_map(ctx, &empty_sp);
+    let mut pair_turns: Vec<usize> = Vec::with_capacity(pairs.len() * 2);
+    for &(u_idx, a_idx, _) in &pairs {
+        pair_turns.push(u_idx);
+        pair_turns.push(a_idx);
+    }
+    let galois_scores =
+        score_signed_galois_candidates_q16(ctx.ix, &ctx.q.text, &pair_turns, &BTreeSet::new());
 
     let mut scored_pairs: Vec<(usize, usize, f32, bool, f32, f32, f32, f32)> =
         Vec::with_capacity(pairs.len());
     for &(u_idx, a_idx, mem_ack) in &pairs {
-        let (ud, uf, _, _) = score_turn_concepts(&ctx.ix.turns[u_idx], &direct_w, &fst_w);
-        let (ad, af, _, _) = score_turn_concepts(&ctx.ix.turns[a_idx], &direct_w, &fst_w);
+        let (ud, uf, _, _) = score_turn_concepts(&ctx.ix.turns[u_idx], &maps);
+        let (ad, af, _, _) = score_turn_concepts(&ctx.ix.turns[a_idx], &maps);
+        let ug = galois_scores.get(&u_idx).copied().unwrap_or_default();
+        let ag = galois_scores.get(&a_idx).copied().unwrap_or_default();
+        let haz = ((ug.hazard_resonance_q16.max(ag.hazard_resonance_q16) as f32) / 65_536.0)
+            .min(4.0)
+            * 4.5;
+        let g_meet = ((ug.galois_meet_q16.saturating_add(ag.galois_meet_q16) as f32) / 65_536.0)
+            .min(6.0)
+            * 1.4;
         let ack_bonus = if mem_ack { 18.0 } else { 1.5 };
-        let sc = (ud + ad) * 2.0 + (uf + af) * 1.15 + ack_bonus + 0.10 * ctx.t_scene[u_idx].max(0.0);
+        let sc = (ud + ad) * 2.0
+            + (uf + af) * 1.15
+            + haz
+            + g_meet
+            + ack_bonus
+            + 0.10 * ctx.t_scene[u_idx].max(0.0);
         scored_pairs.push((u_idx, a_idx, sc, mem_ack, ud, uf, ad, af));
     }
     scored_pairs.sort_by(|a, b| {
@@ -998,8 +1285,9 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     true
 }
 
-/// Regime B: Named-speaker Open-Domain FST ConceptNet + WordNet + Wikidata bridge
-/// + zero-substance greeting/filler lockout.
+/// Regime B: Named-speaker Open-Domain FST ConceptNet + WordNet + Wikidata + Roget + GeoNames
+/// + B4 WordNet co-hyponym/LCS sibling bridge + Engine #6 Signed Galois Lattice
+/// + zero-substance greeting/filler lockout + mandatory Regime B session sync.
 fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
     if !ctx.has_named_speakers_eff
         || ctx.ix.has_tool_calls
@@ -1017,6 +1305,7 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
     if !is_open_domain_inferential_shape(&q_toks_ref) {
         return;
     }
+    let strict_epistemic = is_strict_epistemic_inferential(&q_toks_ref);
 
     let mut speaker_vocab: DetHashSet<String> = DetHashSet::default();
     for tr in &ctx.ix.turns {
@@ -1033,83 +1322,313 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
             queried_speakers.push(canon);
         }
     }
+    let single_sp = (queried_speakers.len() == 1).then(|| queried_speakers[0].as_str());
 
-    let (direct_w, fst_w) = build_fst_concept_map(ctx, &speaker_vocab);
-    if direct_w.is_empty() && fst_w.is_empty() {
+    let maps = build_fst_concept_map(ctx, &speaker_vocab);
+    if maps.direct_weights.is_empty()
+        && maps.fst_weights.is_empty()
+        && maps.sibling_weights.is_empty()
+    {
         return;
     }
 
     let t0 = ctx.final_turn_indices[0];
-    let tr0 = &ctx.ix.turns[t0];
-    let (d0, f0, dh0, fh0) = score_turn_concepts(tr0, &direct_w, &fst_w);
-    let raw0 = d0 + f0;
-    let t0_greeting = is_zero_substance_greeting_with_hits(tr0, dh0, fh0);
-    let t0_sp_ok = queried_speakers.len() != 1
-        || tr0.speaker.eq_ignore_ascii_case(&queried_speakers[0]);
 
-    let mut cands: Vec<(usize, usize, f32, f32, u32, u32)> = Vec::new();
+    // Pass 1: score FST + B4 sibling channels across turns to select Engine #6 Galois pool.
+    struct PrelimTurn {
+        ti: usize,
+        si: usize,
+        sp_ok: bool,
+        is_pref_hab: bool,
+        d: f32,
+        f: f32,
+        sib_w: f32,
+        dh: u32,
+        fh: u32,
+        sh: u32,
+        prelim_raw: f32,
+    }
+    let mut prelim: Vec<PrelimTurn> = Vec::with_capacity(ctx.nt);
+    let mut t0_prelim: Option<(f32, f32, f32, u32, u32, u32, bool, bool)> = None;
     for ti in 0..ctx.nt {
         let tr = &ctx.ix.turns[ti];
+        let sp_ok = single_sp.is_none_or(|sp| tr.speaker.eq_ignore_ascii_case(sp));
+        let is_pref_hab = is_speaker_preference_or_habit_turn(tr);
+        let allow_sib = single_sp.is_some() && sp_ok && !tr.is_question && !tr.is_backchannel;
+        let skip_other = single_sp.is_some() && sp_ok;
+        let (d, f, sib, dh, fh, sh) =
+            score_turn_concepts_full(tr, &maps, allow_sib, skip_other);
+        let sib_w = if is_pref_hab { sib * 1.35 } else { sib * 0.78 };
+        if ti == t0 {
+            t0_prelim = Some((d, f, sib_w, dh, fh, sh, sp_ok, is_pref_hab));
+        }
         if tr.is_standing_policy {
             continue;
         }
-        let (d, f, dh, fh) = score_turn_concepts(tr, &direct_w, &fst_w);
-        if is_zero_substance_greeting_with_hits(tr, dh, fh) || (dh == 0 && fh == 0) {
-            continue;
+        let prelim_raw = d + f + sib_w;
+        if prelim_raw > 0.0 || (sp_ok && is_pref_hab) {
+            prelim.push(PrelimTurn {
+                ti,
+                si: tr.session,
+                sp_ok,
+                is_pref_hab,
+                d,
+                f,
+                sib_w,
+                dh,
+                fh,
+                sh,
+                prelim_raw,
+            });
         }
-        let raw_concept = d + f;
-        // Speaker alignment: on single-speaker inferential questions ("Would Melanie..."),
-        // strongly prefer the queried speaker's own declarative utterances.
-        let sp_mul = if queried_speakers.len() == 1 {
-            if tr.speaker.eq_ignore_ascii_case(&queried_speakers[0]) {
-                1.45
-            } else {
-                0.70
-            }
+    }
+
+    // Build bounded candidate pool for Engine #6 (Signed Galois Lattice & Exclusion-Cone Resonance).
+    let mut galois_pool: Vec<usize> = Vec::with_capacity(96);
+    let mut galois_seen: DetHashSet<usize> = DetHashSet::default();
+    for &ti in ctx.final_turn_indices.iter().take(20) {
+        if galois_seen.insert(ti) {
+            galois_pool.push(ti);
+        }
+    }
+    let mut top_prelim_idx: Vec<usize> = (0..prelim.len()).collect();
+    top_prelim_idx.sort_by(|&a, &b| {
+        prelim[b]
+            .prelim_raw
+            .partial_cmp(&prelim[a].prelim_raw)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| prelim[a].ti.cmp(&prelim[b].ti))
+    });
+    for &idx in top_prelim_idx.iter().take(48) {
+        let ti = prelim[idx].ti;
+        if galois_seen.insert(ti) {
+            galois_pool.push(ti);
+        }
+    }
+    let mut hab_added = 0usize;
+    for pt in &prelim {
+        if hab_added >= 32 {
+            break;
+        }
+        if pt.sp_ok && pt.is_pref_hab && galois_seen.insert(pt.ti) {
+            galois_pool.push(pt.ti);
+            hab_added += 1;
+        }
+    }
+    let exclude_sp_set: BTreeSet<String> = speaker_vocab.iter().cloned().collect();
+    let galois_scores =
+        score_signed_galois_candidates_q16(ctx.ix, &ctx.q.text, &galois_pool, &exclude_sp_set);
+
+    let compute_turn_score = |ti: usize,
+                              d: f32,
+                              f: f32,
+                              sib_w: f32,
+                              dh: u32,
+                              fh: u32,
+                              sh: u32,
+                              sp_ok: bool,
+                              is_pref_hab: bool|
+     -> (f32, f32, f32, f32, u32) {
+        let tr = &ctx.ix.turns[ti];
+        let g_sc = galois_scores.get(&ti).copied().unwrap_or_default();
+        let galois_meet = ((g_sc.galois_meet_q16 as f32) / 65_536.0).min(6.0) * 0.95;
+        let hazard = if sp_ok && !tr.is_question {
+            ((g_sc.hazard_resonance_q16 as f32) / 65_536.0).min(4.0) * 1.35
+        } else {
+            0.0
+        };
+        let raw_concept = d + f + sib_w + galois_meet + hazard;
+        let sp_mul = if single_sp.is_some() {
+            if sp_ok { 1.55 } else { 0.55 }
         } else {
             1.0
         };
-        let decl_mul = if tr.is_pure_info_question { 0.72 } else { 1.10 };
-        let multi_hit_bonus = if dh + fh >= 2 { 1.25 } else { 1.0 };
-        let total = raw_concept * sp_mul * decl_mul * multi_hit_bonus
+        let hab_mul = if sp_ok && is_pref_hab { 1.28 } else { 1.0 };
+        let decl_mul = if tr.is_pure_info_question {
+            0.65
+        } else if tr.is_question {
+            0.88
+        } else {
+            1.12
+        };
+        let total_hits = dh
+            + fh
+            + sh
+            + u32::from(g_sc.galois_meet_q16 > 0)
+            + u32::from(hazard > 0.0);
+        let multi_hit_bonus = if total_hits >= 3 {
+            1.35
+        } else if total_hits >= 2 {
+            1.20
+        } else {
+            1.0
+        };
+        let total = raw_concept * sp_mul * hab_mul * decl_mul * multi_hit_bonus
             + 0.10 * ctx.t_scene[ti].max(0.0);
-        cands.push((ti, tr.session, total, raw_concept, dh, fh));
+        (total, raw_concept, galois_meet, hazard, total_hits)
+    };
+
+    let (d0, f0, sib0, dh0, fh0, sh0, t0_sp_ok, t0_pref_hab) =
+        t0_prelim.unwrap_or((0.0, 0.0, 0.0, 0, 0, 0, true, false));
+    let tr0 = &ctx.ix.turns[t0];
+    let t0_greeting = is_zero_substance_greeting_with_hits(tr0, dh0, fh0 + sh0);
+    let (mut t0_total, raw0, galois0, hazard0, _t0_hits) =
+        compute_turn_score(t0, d0, f0, sib0, dh0, fh0, sh0, t0_sp_ok, t0_pref_hab);
+
+    struct ScoredCand {
+        ti: usize,
+        si: usize,
+        sp_ok: bool,
+        total: f32,
+        raw_concept: f32,
+        dh: u32,
+        fh: u32,
+        sh: u32,
+        galois_meet: f32,
+        hazard: f32,
+        total_hits: u32,
+    }
+    let mut cands: Vec<ScoredCand> = Vec::with_capacity(prelim.len());
+    // Track top-2 declarative speaker turn base scores per session for multi-turn coherence.
+    let mut sess_top2: DetHashMap<usize, (f32, f32)> = DetHashMap::default();
+    for pt in &prelim {
+        let tr = &ctx.ix.turns[pt.ti];
+        let (total, raw_concept, galois_meet, hazard, total_hits) = compute_turn_score(
+            pt.ti,
+            pt.d,
+            pt.f,
+            pt.sib_w,
+            pt.dh,
+            pt.fh,
+            pt.sh,
+            pt.sp_ok,
+            pt.is_pref_hab,
+        );
+        if total_hits == 0
+            || is_zero_substance_greeting_with_hits(tr, pt.dh, pt.fh + pt.sh)
+        {
+            continue;
+        }
+        if pt.sp_ok && !tr.is_question {
+            let e = sess_top2.entry(pt.si).or_insert((0.0, 0.0));
+            if total > e.0 {
+                e.1 = e.0;
+                e.0 = total;
+            } else if total > e.1 {
+                e.1 = total;
+            }
+        }
+        cands.push(ScoredCand {
+            ti: pt.ti,
+            si: pt.si,
+            sp_ok: pt.sp_ok,
+            total,
+            raw_concept,
+            dh: pt.dh,
+            fh: pt.fh,
+            sh: pt.sh,
+            galois_meet,
+            hazard,
+            total_hits,
+        });
     }
 
     if cands.is_empty() {
         return;
     }
+
+    // Apply bounded multi-turn session coherence bonus to both candidates and t0.
+    for c in &mut cands {
+        if c.sp_ok
+            && let Some(&(s1, s2)) = sess_top2.get(&c.si)
+        {
+            let companion = if (c.total - s1).abs() < 1e-4 { s2 } else { s1 };
+            if companion > 0.0 {
+                c.total += 0.14 * companion.min(5.0);
+            }
+        }
+    }
+    if t0_sp_ok
+        && let Some(&(s1, s2)) = sess_top2.get(&tr0.session)
+    {
+        let companion = if (t0_total - s1).abs() < 1e-4 { s2 } else { s1 };
+        if companion > 0.0 {
+            t0_total += 0.14 * companion.min(5.0);
+        }
+    }
+
     cands.sort_by(|a, b| {
-        b.2.partial_cmp(&a.2)
+        b.total
+            .partial_cmp(&a.total)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.0.cmp(&b.0))
+            .then_with(|| a.ti.cmp(&b.ti))
     });
 
-    let (best_ti, _best_si, _best_total, best_raw, best_dh, best_fh) = cands[0];
-    let best_sp_ok = queried_speakers.len() != 1
-        || ctx.ix.turns[best_ti]
-            .speaker
-            .eq_ignore_ascii_case(&queried_speakers[0]);
-    let should_promote_head = best_ti != t0
+    let best = &cands[0];
+    let best_tr = &ctx.ix.turns[best.ti];
+    let should_promote_head = best.ti != t0
         && (t0_greeting
             || (dh0 == 0
                 && fh0 == 0
-                && best_sp_ok
-                && (best_dh > 0 || best_fh >= 2)
-                && best_raw >= 2.2)
-            || (!t0_sp_ok && best_sp_ok && best_raw >= 1.4 * raw0));
+                && sh0 == 0
+                && galois0 == 0.0
+                && hazard0 == 0.0
+                && best.sp_ok
+                && (best.dh > 0
+                    || best.fh + best.sh >= 2
+                    || best.galois_meet > 0.0
+                    || best.hazard > 0.0)
+                && best.raw_concept >= 2.0)
+            || (!t0_sp_ok
+                && best.sp_ok
+                && (dh0 == 0 || best.dh >= dh0)
+                && best.total >= 1.15 * t0_total
+                && best.raw_concept >= 1.6)
+            || (strict_epistemic
+                && best.sp_ok
+                && !best_tr.is_pure_info_question
+                && best.total >= 1.32 * t0_total
+                && (best.raw_concept >= 2.2 || best.galois_meet > 0.0 || best.hazard > 0.0)
+                && (best.total_hits >= 2 || best.raw_concept >= 1.45 * raw0))
+            || (!strict_epistemic
+                && best.sp_ok
+                && !best_tr.is_pure_info_question
+                && best.total >= 1.65 * t0_total
+                && best.total_hits >= 2
+                && (best.fh + best.sh >= 2 || best.galois_meet > 0.0 || best.hazard > 0.0)
+                && best.raw_concept >= 3.0));
 
     let mut mutated_top5 = false;
+    let mut head_synced_si: Option<usize> = None;
     if should_promote_head {
-        if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == best_ti) {
+        if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == best.ti) {
             ctx.final_turn_indices.remove(pos);
         }
-        ctx.final_turn_indices.insert(0, best_ti);
+        ctx.final_turn_indices.insert(0, best.ti);
         mutated_top5 = true;
+        // Regime B session sync: sync `best.si` to `final_session_indices[0]` unless the
+        // incumbent Stage-12 session head strictly dominates `best.si` on proven `s_score + bridge_boost`.
+        let inc_s0 = ctx.final_session_indices.first().copied();
+        let inc_dom = inc_s0.is_some_and(|s0| {
+            s0 != best.si
+                && (ctx.s_score[s0] + ctx.bridge_boost[s0])
+                    > 1.25 * (ctx.s_score[best.si] + ctx.bridge_boost[best.si])
+        });
+        if !inc_dom {
+            head_synced_si = Some(best.si);
+        }
+    } else if best.ti == t0
+        && strict_epistemic
+        && best.sp_ok
+        && best.raw_concept >= 2.0
+        && !ctx.final_session_indices.is_empty()
+        && ctx.final_session_indices[0] != best.si
+    {
+        head_synced_si = Some(best.si);
     }
 
-    // Seat up to 2 strong distinct-session FST bridged turns into greeting/courtesy or
-    // zero-concept question tail slots inside Top-5, and sync `final_session_indices[0..5]`.
+    // Seat up to 2 strong distinct-session FST/Galois bridged turns into greeting/courtesy,
+    // wrong-speaker, or zero-concept question tail slots inside Top-5.
     let mut seated = 0usize;
     let mut seen_s: DetHashSet<usize> = ctx
         .final_turn_indices
@@ -1117,41 +1636,48 @@ fn apply_named_open_domain_fst_bridge(ctx: &mut RankCtx<'_>) {
         .take(3)
         .map(|&ti| ctx.ix.turns[ti].session)
         .collect();
-    for &(ti, si, total, raw_c, _, _) in cands.iter().take(8) {
-        if seated >= 2 || raw_c < 2.2 || total < 2.8 {
+    for cand in cands.iter().take(10) {
+        if seated >= 2 || cand.raw_concept < 2.0 || cand.total < 2.6 {
             break;
         }
         let top5 = ctx.final_turn_indices.len().min(5);
-        if ctx.final_turn_indices[..top5].contains(&ti) || !seen_s.insert(si) {
+        if ctx.final_turn_indices[..top5].contains(&cand.ti) || !seen_s.insert(cand.si) {
             continue;
         }
         let mut repl: Option<usize> = None;
         for pos in (1..top5).rev() {
             let cur = ctx.final_turn_indices[pos];
             let cur_tr = &ctx.ix.turns[cur];
-            let (_, _, cdh, cfh) = score_turn_concepts(cur_tr, &direct_w, &fst_w);
+            let (_, _, cdh, cfh) = score_turn_concepts(cur_tr, &maps);
+            let cur_wrong_sp = single_sp
+                .is_some_and(|sp| !cur_tr.speaker.eq_ignore_ascii_case(sp));
             if is_zero_substance_greeting_with_hits(cur_tr, cdh, cfh)
-                || (cdh == 0 && cfh == 0 && cur_tr.is_question)
+                || (cdh == 0 && cfh == 0 && (cur_tr.is_question || (strict_epistemic && cur_wrong_sp)))
             {
                 repl = Some(pos);
                 break;
             }
         }
         if let Some(pos) = repl {
-            if let Some(old) = ctx.final_turn_indices.iter().position(|&x| x == ti) {
+            if let Some(old) = ctx.final_turn_indices.iter().position(|&x| x == cand.ti) {
                 ctx.final_turn_indices.remove(old);
             }
             let ins = pos.min(ctx.final_turn_indices.len());
-            ctx.final_turn_indices.insert(ins, ti);
+            ctx.final_turn_indices.insert(ins, cand.ti);
             mutated_top5 = true;
             seated += 1;
         }
     }
 
-    if mutated_top5 && !ctx.final_session_indices.is_empty() {
+    if (mutated_top5 || head_synced_si.is_some()) && !ctx.final_session_indices.is_empty() {
         let top5 = ctx.final_turn_indices.len().min(5);
         let mut synced_sess: Vec<usize> = Vec::with_capacity(ctx.final_session_indices.len() + top5);
         let mut seen_sync: DetHashSet<usize> = DetHashSet::default();
+        if let Some(win_si) = head_synced_si
+            && seen_sync.insert(win_si)
+        {
+            synced_sess.push(win_si);
+        }
         for &ti in &ctx.final_turn_indices[..top5] {
             let si = ctx.ix.turns[ti].session;
             if seen_sync.insert(si) {
@@ -1200,12 +1726,12 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
     }
 
     let empty_sp = DetHashSet::default();
-    let (direct_w, fst_w) = build_fst_concept_map(ctx, &empty_sp);
-    if direct_w.is_empty() && fst_w.is_empty() {
+    let maps = build_fst_concept_map(ctx, &empty_sp);
+    if maps.direct_weights.is_empty() && maps.fst_weights.is_empty() {
         return;
     }
 
-    let (d0, f0, _, _) = score_turn_concepts(tr0, &direct_w, &fst_w);
+    let (d0, f0, _, _) = score_turn_concepts(tr0, &maps);
     let t0_weak = tr0.field == 1
         || tr0.is_question
         || tr0.body_for_headers.contains('?')
@@ -1236,6 +1762,11 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
         }
     }
 
+    let mut galois_pool = pool.clone();
+    galois_pool.push(t0);
+    let galois_scores =
+        score_signed_galois_candidates_q16(ctx.ix, &ctx.q.text, &galois_pool, &BTreeSet::new());
+
     let mut best_ti: Option<usize> = None;
     let mut best_sc = if tr0.field == 1 {
         0.45 * d0 + 0.50 * f0
@@ -1259,8 +1790,10 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
         if !(6..=95).contains(&toks.len()) {
             continue;
         }
-        let (d, f, dh, fh) = score_turn_concepts(tr, &direct_w, &fst_w);
-        if dh == 0 && fh < 2 {
+        let (d, f, dh, fh) = score_turn_concepts(tr, &maps);
+        let g_sc = galois_scores.get(&ti).copied().unwrap_or_default();
+        let g_meet = ((g_sc.galois_meet_q16 as f32) / 65_536.0).min(4.0) * 0.85;
+        if dh == 0 && fh < 2 && g_sc.galois_meet_q16 == 0 {
             continue;
         }
         // hardcode-scan: closed-class (1st-person personal pronouns and contractions)
@@ -1294,7 +1827,7 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
             .iter()
             .any(|p| low.contains(p));
         let deontic_bonus = if has_stance { 1.25 } else { 0.0 };
-        let sc = d * 1.45 + f * 1.15 + deontic_bonus + 0.10 * ctx.t_scene[ti].max(0.0);
+        let sc = d * 1.45 + f * 1.15 + g_meet + deontic_bonus + 0.10 * ctx.t_scene[ti].max(0.0);
         if sc > best_sc + 0.25 {
             best_sc = sc;
             best_ti = Some(ti);
@@ -1325,6 +1858,23 @@ pub(in crate::retrieval) fn apply_unified_implicit_bridge(ctx: &mut RankCtx<'_>)
         return;
     }
     apply_named_open_domain_fst_bridge(ctx);
+    let galois_advice_eligible = !ctx.has_named_speakers_eff
+        && !ctx.ix.has_tool_calls
+        && !ctx.implicit_disclosure_locked
+        && !ctx.eff_it.is_event_sequence
+        && !ctx.eff_it.assistant_attribution
+        && !ctx.eff_it.multi_hop
+        && !ctx.eff_it.sniper_when
+        && !eff_summary_request(&ctx.q.text)
+        && !ctx.torrens_locked_head
+        && is_implicit_advice_frame(&ctx.q.text);
+    apply_signed_galois_hazard_seat_q16(
+        ctx.ix,
+        &ctx.q.text,
+        galois_advice_eligible,
+        &mut ctx.final_turn_indices,
+        &mut ctx.final_session_indices,
+    );
     apply_dense_advice_user_rescue(ctx);
 }
 
@@ -1463,5 +2013,49 @@ mod tests {
         let res = rank(&req);
         assert_eq!(res.results[0].turns[0].id, "t1");
         assert_eq!(res.results[1].turns[0].id, "m1");
+        assert_eq!(res.results[1].sessions[0].id, "s_music");
+    }
+
+    #[test]
+    fn open_domain_b4_sibling_and_galois_beats_lexical_decoy_and_syncs_session() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "s_decoy".into(),
+                    date: "2024/03/01 (Fri) 10:00".into(),
+                    timestamp: 1,
+                    turns: vec![
+                        mk_turn(
+                            "decoy1",
+                            "Melanie",
+                            "The radio played a loud pop song yesterday at the cafe.",
+                        ),
+                        mk_turn("decoy2", "Caroline", "Nice!"),
+                    ],
+                },
+                Session {
+                    id: "s_classical".into(),
+                    date: "2024/03/10 (Sun) 10:00".into(),
+                    timestamp: 2,
+                    turns: vec![
+                        mk_turn(
+                            "gold1",
+                            "Melanie",
+                            "I'm a fan of classical music like Bach and Mozart whenever I relax.",
+                        ),
+                        mk_turn("gold2", "Caroline", "Lovely taste!"),
+                    ],
+                },
+            ],
+            queries: vec![Query {
+                text: "Would Melanie likely enjoy the song The Four Seasons by Vivaldi?".into(),
+                date: String::new(),
+            }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let res = rank(&req);
+        assert_eq!(res.results[0].turns[0].id, "gold1");
+        assert_eq!(res.results[0].sessions[0].id, "s_classical");
     }
 }

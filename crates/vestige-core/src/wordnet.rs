@@ -75,6 +75,8 @@ struct Tables {
     instance_surnames: HashMap<String, Vec<u32>>,
     /// Rare gloss word -> synsets whose WordNet definition contains that word (`married` -> `[husband, wife, ...]`).
     gloss_to_synsets: HashMap<String, Vec<u32>>,
+    /// Synset offset -> WordNet 3.1 `lex_filenum` (`0..=44`, 41 lexicographer supersenses).
+    synset_lex_filenum: HashMap<u32, u8>,
 }
 
 fn push_unique<T: PartialEq>(v: &mut Vec<T>, x: T) {
@@ -103,6 +105,11 @@ fn parse(data: &str) -> Tables {
         let Some(own) = f.first().and_then(|s| s.parse::<u32>().ok()) else {
             continue;
         };
+        if let Some(lf) = f.get(1).and_then(|s| s.parse::<u8>().ok())
+            && lf < 64
+        {
+            out.synset_lex_filenum.insert(own, lf);
+        }
         let Some(w_cnt) = f.get(3).and_then(|s| usize::from_str_radix(s, 16).ok()) else {
             continue;
         };
@@ -704,6 +711,21 @@ const NOUN_DETACH: &[(&str, &str)] = &[
     ("ies", "y"),
     ("s", ""),
 ];
+
+/// Bitmask of WordNet 3.1 `lex_filenum` supersenses (`0..=44`) attested by `word`'s noun synsets.
+/// Enables `O(1)` bitwise semantic-class intersection (`(q_ss & doc_ss) != 0`) at zero lexical overlap.
+pub fn supersense_mask(word: &str) -> u64 {
+    let tbl = table();
+    let mut mask = 0u64;
+    for &syn in senses(word) {
+        if let Some(&lf) = tbl.synset_lex_filenum.get(&syn)
+            && lf < 64
+        {
+            mask |= 1u64 << lf;
+        }
+    }
+    mask
+}
 
 /// The noun synsets `word` (or normalized space-separated multi-word phrase) belongs to,
 /// after morphy's detachment rules.
