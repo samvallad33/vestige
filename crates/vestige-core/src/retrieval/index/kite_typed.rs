@@ -117,7 +117,7 @@ pub(in crate::retrieval) fn score_kite_typed_facet_meet_q16(
 ) -> (Vec<u64>, Vec<u64>) {
     let ns = ix.session_turns.len();
     let nt = ix.turns.len();
-    let mut sess_out = vec![0u64; ns];
+    let sess_out = vec![0u64; ns];
     let mut turn_out = vec![0u64; nt];
     if ns == 0 || nt == 0 || (sess_cap_q16 == 0 && turn_cap_q16 == 0) {
         return (sess_out, turn_out);
@@ -259,21 +259,25 @@ pub(in crate::retrieval) fn score_kite_typed_facet_meet_q16(
         }
     }
 
-    if max_turn > 0 && turn_cap_q16 > 0 {
-        for v in &mut turn_out {
-            if *v > 0 {
-                *v = ((*v as u128).saturating_mul(turn_cap_q16 as u128) / (max_turn as u128)) as u64;
-            }
-        }
+    let turn_out = if max_turn > 0 && turn_cap_q16 > 0 {
+        crate::retrieval::fusion::pit_commensuration_q16::fuse_channels_pit_nqc_q16(
+            turn_out.len(),
+            &[(&turn_out, crate::retrieval::fusion::aspect_coverage_q16::Q16_ONE)],
+            10,
+            turn_cap_q16,
+        )
     } else {
-        turn_out.fill(0);
-    }
-    if max_sess > 0 && sess_cap_q16 > 0 {
-        for (si, &v) in sess_raw.iter().enumerate() {
-            if v > 0 {
-                sess_out[si] = ((v as u128).saturating_mul(sess_cap_q16 as u128) / (max_sess as u128)) as u64;
-            }
-        }
-    }
+        vec![0u64; turn_out.len()]
+    };
+    let sess_out = if max_sess > 0 && sess_cap_q16 > 0 {
+        crate::retrieval::fusion::pit_commensuration_q16::fuse_channels_pit_nqc_q16(
+            ns,
+            &[(&sess_raw, crate::retrieval::fusion::aspect_coverage_q16::Q16_ONE)],
+            10,
+            sess_cap_q16,
+        )
+    } else {
+        sess_out
+    };
     (sess_out, turn_out)
 }

@@ -697,16 +697,17 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     }
                 }
             }
-            let mut lifts = vec![0u64; ns];
             if max_raw > 0 {
                 let cap_rm3 = ((smax_q16 as u128).saturating_mul(Q16_ONE as u128 / 4) >> 16) as u64;
-                for si in 0..ns {
-                    if raw[si] > 0 {
-                        lifts[si] = ((raw[si] as u128).saturating_mul(cap_rm3 as u128) / (max_raw as u128)) as u64;
-                    }
-                }
+                crate::retrieval::fusion::pit_commensuration_q16::fuse_channels_pit_nqc_q16(
+                    ns,
+                    &[(&raw, Q16_ONE)],
+                    10,
+                    cap_rm3,
+                )
+            } else {
+                vec![0u64; ns]
             }
-            lifts
         };
 
         // Co-Witness Cross-Lexical & Bounded Downward Hyponym Voter (`Q16.16`):
@@ -1219,9 +1220,13 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     &speaker_session_terms,
                     od_cap_q16,
                 );
+                let mut od_lifts_vec = vec![0u64; ns];
                 for (si, lift_q16) in od_lifts {
                     if lift_q16 > 0 {
                         od_translation_fired = true;
+                        if si < ns {
+                            od_lifts_vec[si] = lift_q16;
+                        }
                         let lift_f32 = (lift_q16 as f32) / 65_536.0;
                         bridge_boost[si] += lift_f32;
                     }
@@ -1341,8 +1346,19 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                             kite_sess_cap_q16,
                             kite_turn_cap_q16,
                         );
-                    for (si, &sl_q16) in kite_s.iter().enumerate() {
-                        if sl_q16 > 0 {
+                    let kite_pit_s =
+                        crate::retrieval::fusion::pit_commensuration_q16::fuse_channels_pit_nqc_q16(
+                            ns,
+                            &[
+                                (&kite_s, Q16_ONE),
+                                (&od_lifts_vec, Q16_ONE >> 1),
+                                (&rm3_lifts, Q16_ONE >> 2),
+                            ],
+                            10,
+                            kite_sess_cap_q16,
+                        );
+                    for (si, &sl_q16) in kite_pit_s.iter().enumerate() {
+                        if sl_q16 > 0 && kite_s[si] > 0 {
                             od_translation_fired = true;
                             bridge_boost[si] += (sl_q16 as f32) / 65_536.0;
                         }

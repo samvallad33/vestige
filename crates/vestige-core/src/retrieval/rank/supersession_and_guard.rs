@@ -574,6 +574,9 @@ fn apply_forward_supersession_chain(
         if !is_later {
             continue;
         }
+        if !crate::retrieval::graph::state_entrenchment_dag::agm_may_supersede(ctx.ix, cand, t0) {
+            continue;
+        }
         if !shares_provenance(ctx, t0, cand, topical_mask, star_bit) {
             continue;
         }
@@ -655,6 +658,12 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
     let (topical_mask, star_bit, queried_speakers) = compute_topical_and_star(ctx);
     rescue_zero_exact_entity_head(ctx, topical_mask, star_bit, &queried_speakers);
     apply_forward_supersession_chain(ctx, topical_mask, star_bit);
+    crate::retrieval::graph::state_entrenchment_dag::apply_agm_entrenchment_demotion(
+        ctx.ix,
+        ctx.eff_it.current_state,
+        ctx.eff_it.is_event_sequence || is_historical_or_order_query(&ctx.q.text),
+        &mut ctx.final_turn_indices,
+    );
 }
 
 #[cfg(test)]

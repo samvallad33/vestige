@@ -16,6 +16,7 @@ pub(in crate::retrieval) mod ppr_rwr;
 pub(in crate::retrieval) mod ranganathan_pmest;
 pub(in crate::retrieval) mod sheaf_dempster_q16;
 pub(in crate::retrieval) mod shepard_citations;
+pub(in crate::retrieval) mod state_entrenchment_dag;
 pub(in crate::retrieval) mod supersession;
 pub(in crate::retrieval) mod swanson_abc;
 pub(in crate::retrieval) mod synapse_activation_q16;
