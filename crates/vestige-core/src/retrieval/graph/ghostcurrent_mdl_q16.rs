@@ -161,6 +161,8 @@ pub(in crate::retrieval) struct GhostCurrentSlot0Ctx<'a> {
     pub(in crate::retrieval) pref_on: bool,
     pub(in crate::retrieval) deficit_a: bool,
     pub(in crate::retrieval) res: &'a GhostCurrentResult,
+    pub(in crate::retrieval) t_own: &'a [f32],
+    pub(in crate::retrieval) t_mask: &'a [u64],
     pub(in crate::retrieval) t_exact_mask: &'a [u64],
     pub(in crate::retrieval) q_group_mask: u64,
     pub(in crate::retrieval) k: usize,
@@ -519,68 +521,10 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         });
     }
 
-    // Dual Source B: Virtual Query Node `Q` injecting via KITE/WordNet/GeoNames/Wikidata bridge IDs
-    let mut virt_ids = spec.virtual_query_vocab_ids();
-    if inp.deficit_a {
-        let sp_single = crate::retrieval::lexical::tier_bridge_q16::detect_single_subject_speaker(
-            inp.ix,
-            inp.plan,
-            &inp.q.text,
-        );
-        let push_lex = |virt_ids: &mut Vec<u32>, lemma: &str| {
-            for part in lemma.split_ascii_whitespace() {
-                if part.len() < 3 || virt_ids.len() >= 48 {
-                    continue;
-                }
-                let st = crate::retrieval::stem(part);
-                for cid in [
-                    inp.ix.vocab.get(part),
-                    inp.ix.vocab.get(&crate::retrieval::stem_term(&st)),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if !inp.plan.excluded_ids.contains(&cid) && !virt_ids.contains(&cid) {
-                        virt_ids.push(cid);
-                    }
-                }
-            }
-        };
-        for g_word in &inp.plan.groups {
-            if g_word.starts_with('\u{1}')
-                || g_word.len() < 3
-                || !crate::retrieval::is_content(g_word)
-                || sp_single
-                    .as_deref()
-                    .is_some_and(|sp| g_word.eq_ignore_ascii_case(sp))
-            {
-                continue;
-            }
-            for g_inst in crate::geonames::geo_class_instances(g_word).into_iter().take(8) {
-                push_lex(&mut virt_ids, &g_inst);
-            }
-            for (g_nb, _) in crate::geonames::geo_neighbors(g_word).into_iter().take(6) {
-                push_lex(&mut virt_ids, g_nb);
-            }
-            for w_inst in crate::wordnet::class_to_instances(g_word, 2).into_iter().take(8) {
-                push_lex(&mut virt_ids, w_inst);
-            }
-            for (w_nb, _) in crate::wordnet::full_lexicon_neighbors(g_word).into_iter().take(8) {
-                push_lex(&mut virt_ids, w_nb);
-            }
-            for wd_inst in crate::wikidata::direct_instances_of(g_word, 12)
-                .into_iter()
-                .chain(crate::wikidata::upward_containers(g_word, 2))
-            {
-                push_lex(&mut virt_ids, &wd_inst);
-            }
-            if virt_ids.len() >= 48 {
-                break;
-            }
-        }
-    }
+    // Dual Source B: Virtual Query Node `Q` injecting via KITE/WordNet/GeoNames bridge IDs
+    let virt_ids = spec.virtual_query_vocab_ids();
     let mut virt_seeded = 0usize;
-    for &vid in virt_ids.iter().take(32) {
+    for &vid in virt_ids.iter().take(24) {
         if inp.plan.excluded_ids.contains(&vid) {
             continue;
         }
@@ -624,12 +568,12 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                     phase: ti_phase,
                 });
                 virt_seeded += 1;
-                if virt_seeded >= 32 {
+                if virt_seeded >= 24 {
                     break;
                 }
             }
         }
-        if virt_seeded >= 32 {
+        if virt_seeded >= 24 {
             break;
         }
     }
@@ -1331,12 +1275,7 @@ pub(in crate::retrieval) fn apply_ghostcurrent_stage11_injection(
             }
             continue;
         }
-        let min_victim_slot = if (ctx.deficit_a || ctx.eff_it.multi_hop) && !pref_guard {
-            1usize
-        } else {
-            2usize
-        };
-        let victim = (min_victim_slot..top5_len).rev().find(|&s| {
+        let victim = (2..top5_len).rev().find(|&s| {
             let inc_ti = ctx.final_turn_indices[s];
             let inc_sess = ctx.ix.turns[inc_ti].session;
             let dup_sess = ctx.final_turn_indices[..s]
@@ -1366,11 +1305,12 @@ pub(in crate::retrieval) fn apply_ghostcurrent_stage11_injection(
 /// Stage-12 post-AT1 Slot-0 & witness-spine co-seating (strict zero-regression Epistemic Deficit law).
 ///
 /// Only overrides Slot 0 when EITHER:
+///   0. `#853` Belnap `Both` dual-witness co-seating on explicit contradiction/audit queries, OR
 ///   1. `h0` is directly superseded AND GhostCurrent proved `sup_live_leaf_of_h0` along `h0`'s own
 ///      forward revision chain (never a random unrelated hop!), OR
-///   2. `h0` exhibits a verified structural epistemic deficit (`h0_non_sp_cov == 0` under `deficit_a`,
-///      meta-echo/sign-off closure, or excluded-only match) AND `best_ti` is a declarative,
-///      speaker-aligned witness beating `h0` by `>= 1.25x` integer Kirchhoff current.
+///   2. `h0` has TRUE zero-signal deficit (`h0_cov == 0 && h0_any_mask == 0 && t_own[h0] <= 0.0`),
+///      is a meta-echo/sign-off closure, only matches excluded terms, or is overridden by a proven
+///      `#854` Strata outcome receipt spine.
 pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
     ctx: &mut GhostCurrentSlot0Ctx<'_>,
 ) {
@@ -1418,6 +1358,9 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
     }
 
     let h0_sup = turn_is_superseded(ctx.ix, h0);
+    let h0_cov = (ctx.t_exact_mask.get(h0).copied().unwrap_or(0) & ctx.q_group_mask).count_ones();
+    let h0_any_mask = (ctx.t_mask.get(h0).copied().unwrap_or(0) & ctx.q_group_mask).count_ones();
+    let h0_own_zero = ctx.t_own.get(h0).copied().unwrap_or(0.0) <= 0.0;
     let sp_single = crate::retrieval::lexical::tier_bridge_q16::detect_single_subject_speaker(
         ctx.ix,
         ctx.plan,
@@ -1448,7 +1391,11 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
             .iter()
             .any(|id| ctx.plan.excluded_ids.contains(id))
         && h0_non_sp_cov == 0;
-    let h0_deficit = (ctx.deficit_a && h0_non_sp_cov == 0) || h0_is_meta_echo || h0_only_excluded;
+    let h0_true_zero_signal = ctx.deficit_a && h0_cov == 0 && h0_any_mask == 0 && h0_own_zero;
+    let h0_deficit = h0_true_zero_signal
+        || h0_is_meta_echo
+        || h0_only_excluded
+        || (ctx.deficit_a && !ctx.res.witness_receipt_ids.is_empty());
     let h0_protected = ctx.ix.turns[h0].is_standing_policy
         || ctx.ix.turns[h0].is_personal_constraint
         || ctx.ix.turns[h0].has_tool_call

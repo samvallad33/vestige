@@ -108,11 +108,6 @@ pub(in crate::retrieval) fn apply_w2_standing_register_seat(
                     q_lex_nbr_ids.insert(id);
                 }
             }
-            for (nb, _) in crate::conceptnet::two_hop_neighbors(gw, 8) {
-                if let Some(id) = ix.vocab.get(nb) {
-                    q_lex_nbr_ids.insert(id);
-                }
-            }
         }
     }
     let check_already_seated = |dti: usize| -> bool {

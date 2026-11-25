@@ -611,6 +611,8 @@ fn issue_853_belnap_both_dual_witness_coseats_thesis_and_antithesis_slots_0_and_
         pref_on: false,
         deficit_a: false,
         res: &res,
+        t_own: &t_own,
+        t_mask: &t_exact_mask,
         t_exact_mask: &t_exact_mask,
         q_group_mask: q_mask,
         k: 4,

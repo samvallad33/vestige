@@ -534,7 +534,6 @@ pub(in crate::retrieval) fn rule_condition_matches(
     let q_content: Vec<&str> = q_toks.iter().map(String::as_str).filter(|w| is_content(w)).collect();
     let allow_onto_cond = ix.turns.len() >= 24;
     r.condition_words.iter().any(|cw| {
-        let cw_st = stem(cw);
         q_content.iter().any(|&qw| {
             rule_condition_word_matches(cw, qw)
                 || (cw.is_ascii()
@@ -545,15 +544,6 @@ pub(in crate::retrieval) fn rule_condition_matches(
                     && cw.len().abs_diff(qw.len()) <= 6)
                 || (allow_onto_cond
                     && (crate::wordnet::heyting_implication_ic_q16(qw, cw) >= 72
-                        || crate::wordnet::full_lexicon_neighbors(qw)
-                            .into_iter()
-                            .filter(|&(_, rw)| rw >= 85)
-                            .take(10)
-                            .any(|(nb, _)| nb == cw || stem(nb) == cw_st)
-                        || crate::conceptnet::two_hop_neighbors(qw, 6)
-                            .into_iter()
-                            .filter(|&(_, cnw)| cnw >= 140)
-                            .any(|(nb, _)| nb == cw || stem(nb) == cw_st)
                         || crate::wikidata::upward_containers(qw, 1)
                             .into_iter()
                             .any(|cont| cont.split_ascii_whitespace().any(|p| p == cw))))

@@ -90,31 +90,15 @@ pub(in crate::retrieval) fn is_pref_framing_word(w: &str) -> bool {
     )
 }
 
-// hardcode-scan: closed-class (explicit stance, optative/bouletic, and comparative preference frames)
+// hardcode-scan: closed-class (explicit stance and comparative preference frames)
 pub(in crate::retrieval) fn is_explicit_stance_directive(body_low: &str, is_pers: bool) -> bool {
     if is_pers || crate::retrieval::has_comparative_choice_frame(body_low) {
-        return true;
-    }
-    let has_without_gerund = body_low.contains(" without ")
-        && body_low
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|w| w.len() >= 5 && w.ends_with("ing"));
-    if has_without_gerund {
         return true;
     }
     [
         "i prefer",
         "i'd prefer",
         "i\u{2019}d prefer",
-        "so i'd like to",
-        "so i\u{2019}d like to",
-        "i'd like to",
-        "i\u{2019}d like to",
-        "i would like to",
-        "keep my ",
-        "i wanna ",
-        "i aim for ",
-        "i aim to ",
         "i tend to ",
         "my favorite",
         "i really like",
@@ -265,9 +249,6 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
             add_lem(lem);
         }
         for (lem, _) in crate::roget::conceptual_neighbors(g_word, 24) {
-            add_lem(lem);
-        }
-        for (lem, _) in crate::conceptnet::two_hop_neighbors(g_word, 10) {
             add_lem(lem);
         }
     }
@@ -428,7 +409,7 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
     // - Tier 2 (Slot 1): co-seat universal / zero-exact-overlap stance preferences into Slot 1
     //   when Slot 0 already holds high episodic IC (protecting `LongMemEval_S` & `InMind`).
     let mut seats_filled = 0usize;
-    let allow_zero_overlap_floor = ix.preference_directive_turns.len() <= 6 && k >= 5;
+    let allow_zero_overlap_floor = ix.preference_directive_turns.len() <= 4 && k >= 5;
     for (pref_ti, _rank_key, topic_ic_q16, lex_ic, is_stance, _score_w) in active_prefs {
         if seats_filled >= 2 {
             break;
@@ -447,42 +428,44 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
                 ix, t0, query,
             )
         });
-        let inc_is_pref = t0_opt.is_some_and(|t0| {
-            ix.preference_directive_turns.contains(&t0) && !turn_is_superseded(ix, t0)
-        });
 
         let mut target_slot = if has_signal {
             seats_filled
         } else {
-            1usize.min(final_turn_indices.len())
+            3usize.min(final_turn_indices.len())
         };
         let mut s_target = if has_signal {
             seats_filled
         } else {
-            1usize.min(final_session_indices.len())
+            3usize.min(final_session_indices.len())
         };
 
-        if target_slot == 0 && !final_session_indices.is_empty() {
-            let inc_si = final_session_indices[0];
+        if s_target < final_session_indices.len() {
+            let inc_si = final_session_indices[s_target];
             let inc_topic_ic = sess_topic_ic(inc_si);
             let q_toks_pl = raw_tokens(query);
-            let inc_cond_policy = inc_is_policy
+            let inc_cond_policy = s_target == 0
+                && inc_is_policy
                 && t0_opt.is_some_and(|t0| {
                     ix.standing_rules
                         .iter()
                         .any(|r| r.turn == t0 && rule_condition_matches(ix, r, plan, &q_toks_pl))
                 });
-            let strong_episodic_shield = inc_si != pref_si
-                && (inc_cond_policy
-                    || (!inc_is_asst
-                        && !inc_is_policy
-                        && !inc_is_echo
-                        && (inc_is_pref
-                            || (topic_ic_q16 == 0 && inc_topic_ic >= Q16_ONE.saturating_mul(6)))));
-            if strong_episodic_shield {
-                // Tier 2: preserve strong episodic or condition-matched rule Slot 0, co-seat preference at Slot 1!
+            if inc_cond_policy {
                 target_slot = 1usize.min(final_turn_indices.len());
                 s_target = 1usize.min(final_session_indices.len());
+            } else if inc_si != pref_si
+                && !(s_target == 0
+                    && (inc_is_asst || inc_is_echo)
+                    && is_stance
+                    && (topic_ic_q16 > 0 || lex_ic >= (Q16_ONE >> 1)))
+            {
+                if inc_topic_ic > topic_ic_q16.saturating_mul(2)
+                    || (inc_topic_ic > topic_ic_q16
+                        && !(is_stance && (topic_ic_q16 > 0 || lex_ic >= (Q16_ONE >> 1))))
+                {
+                    continue;
+                }
             }
         }
         // Avoid replacing an already higher-ranked session-0 preference turn with an identical session duplicate
