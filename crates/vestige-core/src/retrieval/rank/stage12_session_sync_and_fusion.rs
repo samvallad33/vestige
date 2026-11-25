@@ -4510,6 +4510,45 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             ctx.k,
         );
     }
+    // Wave 5 (Lambek QUD Categorical Elimination + 2-Hop Bridge Transfer Slot-0 Tie-Break):
+    if !ctx.torrens_locked_head && !ctx.implicit_disclosure_locked {
+        let l_ctx = crate::retrieval::lexical::lambek_qud_q16::LambekSlot0Ctx {
+            ix: ctx.ix,
+            q: ctx.q,
+            plan: &ctx.plan,
+            eff_it: &ctx.eff_it,
+            t_exact_mask: &ctx.t_exact_mask,
+            t_scene: &ctx.t_scene,
+            t_bridge: &ctx.t_bridge,
+            k: ctx.k,
+        };
+        crate::retrieval::lexical::lambek_qud_q16::apply_lambek_qud_slot0_tiebreak(
+            &l_ctx,
+            &mut ctx.final_turn_indices,
+            &mut ctx.final_session_indices,
+        );
+    }
+    // Wave 6 (Chronological Genesis Spine Stratification + Knowledge-Update Mutation Polarity):
+    crate::retrieval::rank::genesis_spine_q16::apply_genesis_spine_and_ku_polarity(ctx);
+    // Breakthroughs #2, #3, #5, #6 (respect locked Torrens & implicit-disclosure heads):
+    if !ctx.torrens_locked_head && !ctx.implicit_disclosure_locked {
+        // Breakthrough #2 (Revealed-Preference Interrogative Immunity + Polysemy-Attenuated Cone):
+        crate::retrieval::seating::revealed_preference_cone_q16::apply_revealed_preference_cone_seating(
+            ctx,
+        );
+        // Breakthrough #3 (Gricean Maxim-of-Quantity Conditional Information-Gain Intra-Session Turn Selector):
+        crate::retrieval::seating::gricean_constraint_turn_q16::apply_gricean_constraint_turn_seating(
+            ctx,
+        );
+        // Breakthrough #5 (Counterfactual/Epistemic Modal x Named Speaker Dispositional Cone):
+        crate::retrieval::rank::speaker_disposition_cone_q16::apply_speaker_disposition_cone_seating(
+            ctx,
+        );
+        // Breakthrough #6 (#855 Open-Circuit Residual Peeling + Counting Cover + Max-Entropy Spine):
+        let _ = crate::retrieval::fusion::submodular_residual_cover_q16::apply_submodular_residual_cover(
+            ctx,
+        );
+    }
     // Breakthrough #4A: Post-Gatekeeper Official Top-5 Standing-Rule Co-Seating.
     // Protects Slots 0..2 unconditionally (and Slot 3 for single-rule seating) while ensuring
     // the highest-confidence condition/scope-matched active standing rule from `ctx.standing_rules[0..2]`

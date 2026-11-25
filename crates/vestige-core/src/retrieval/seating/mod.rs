@@ -16,6 +16,8 @@ pub(in crate::retrieval) mod rst_and_milestones;
 pub(in crate::retrieval) mod w2_standing_register;
 pub(in crate::retrieval) mod slot_promotions;
 pub(in crate::retrieval) mod preference_lattice;
+pub(in crate::retrieval) mod revealed_preference_cone_q16;
+pub(in crate::retrieval) mod gricean_constraint_turn_q16;
 pub(in crate::retrieval) mod standing_constraint_q16;
 pub(in crate::retrieval) mod c2;
 

@@ -4,6 +4,7 @@ pub(in crate::retrieval) mod bm25f;
 pub(in crate::retrieval) mod bm25l_dfr;
 pub(in crate::retrieval) mod bm25tp;
 pub(in crate::retrieval) mod dph;
+pub(in crate::retrieval) mod lambek_qud_q16;
 pub(in crate::retrieval) mod lgd_q16;
 pub(in crate::retrieval) mod ppm_surprisal;
 pub(in crate::retrieval) mod qld;
