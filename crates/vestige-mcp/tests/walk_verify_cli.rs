@@ -1234,11 +1234,17 @@ fn walk_verify_prove_says_when_the_recorded_verdicts_contradict_each_other() {
     );
     let confirmed = rung(&report, "CONFIRMED");
     assert_eq!(confirmed["holds"], false);
+    let plural = if contradictions.len() == 1 {
+        "verdict"
+    } else {
+        "verdicts"
+    };
     assert_eq!(
         confirmed["statement"],
         format!(
-            "git bisect names it, but {} recorded verdict contradict it",
-            contradictions.len()
+            "git bisect names it, but {} recorded {} contradict it",
+            contradictions.len(),
+            plural
         )
     );
     // The boundary itself was tested and stands.
