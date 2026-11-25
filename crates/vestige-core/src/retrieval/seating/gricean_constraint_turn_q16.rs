@@ -494,13 +494,16 @@ pub(in crate::retrieval) fn apply_gricean_constraint_turn_seating(ctx: &mut Rank
         || h0_low.starts_with("it really does.")
         || (h0_cf == 0 && h0_tr.content.len() < 12);
 
-    // 1. Same-session Slot-0 rescue over a weak/wrapper/zero-constraint head (zero session change).
-    if let Some(s0_cand) = cands.iter().copied().find(|c| {
-        c.turn_idx != h0
-            && c.session_idx == h0_tr.session
-            && c.constraint_frame_q16 >= Q16_ONE
-            && (h0_is_wrapper || (h0_cf == 0 && c.entity_bind_q16 >= Q16_ONE))
-    }) {
+    // 1. Same-session Slot-0 rescue over a weak/wrapper/zero-constraint head (zero session change;
+    //    strictly skipped when `implicit_disclosure_locked` protects a Galois/disclosure Slot 0).
+    if !ctx.implicit_disclosure_locked
+        && let Some(s0_cand) = cands.iter().copied().find(|c| {
+            c.turn_idx != h0
+                && c.session_idx == h0_tr.session
+                && c.constraint_frame_q16 >= Q16_ONE
+                && (h0_is_wrapper || (h0_cf == 0 && c.entity_bind_q16 >= Q16_ONE))
+        })
+    {
         if let Some(pos) = ctx
             .final_turn_indices
             .iter()

@@ -4530,22 +4530,25 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     }
     // Wave 6 (Chronological Genesis Spine Stratification + Knowledge-Update Mutation Polarity):
     crate::retrieval::rank::genesis_spine_q16::apply_genesis_spine_and_ku_polarity(ctx);
-    // Breakthroughs #2, #5, #6, #3 (respect locked Torrens & implicit-disclosure heads;
-    // run submodular residual cover before Gricean intra-session turn seating so Gricean
-    // novel-constraint turns stay in Top-5 without being pushed to Slots 6..10):
-    if !ctx.torrens_locked_head && !ctx.implicit_disclosure_locked {
+    // Breakthroughs #5 & #6 respect both Torrens & implicit-disclosure head locks;
+    // Breakthroughs #2 (Slots 3..4 stranded preference rescue) & #3 (Slot-0 lock-aware Gricean
+    // Slots 3..4 novel-constraint packing) protect Slots 0..2 unconditionally so they safely run
+    // even when Slot 0 carries an implicit-disclosure / Galois lock.
+    if !ctx.torrens_locked_head {
         // Breakthrough #2 (Revealed-Preference Interrogative Immunity + Polysemy-Attenuated Cone):
         crate::retrieval::seating::revealed_preference_cone_q16::apply_revealed_preference_cone_seating(
             ctx,
         );
-        // Breakthrough #5 (Counterfactual/Epistemic Modal x Named Speaker Dispositional Cone):
-        crate::retrieval::rank::speaker_disposition_cone_q16::apply_speaker_disposition_cone_seating(
-            ctx,
-        );
-        // Breakthrough #6 (#855 Open-Circuit Residual Peeling + Counting Cover + Max-Entropy Spine):
-        let _ = crate::retrieval::fusion::submodular_residual_cover_q16::apply_submodular_residual_cover(
-            ctx,
-        );
+        if !ctx.implicit_disclosure_locked {
+            // Breakthrough #5 (Counterfactual/Epistemic Modal x Named Speaker Dispositional Cone):
+            crate::retrieval::rank::speaker_disposition_cone_q16::apply_speaker_disposition_cone_seating(
+                ctx,
+            );
+            // Breakthrough #6 (#855 Open-Circuit Residual Peeling + Counting Cover + Max-Entropy Spine):
+            let _ = crate::retrieval::fusion::submodular_residual_cover_q16::apply_submodular_residual_cover(
+                ctx,
+            );
+        }
         // Breakthrough #3 (Gricean Maxim-of-Quantity Conditional Information-Gain Intra-Session Turn Selector):
         crate::retrieval::seating::gricean_constraint_turn_q16::apply_gricean_constraint_turn_seating(
             ctx,

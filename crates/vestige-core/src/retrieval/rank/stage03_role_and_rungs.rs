@@ -897,9 +897,15 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             || q_trim_low.contains("remind me of the date")
             || q_trim_low.starts_with("what is the date")
             || q_trim_low.starts_with("what date"));
+    // hardcode-scan: closed-class (near-future temporal deictics paired with explicit recommendation requests)
+    let is_near_future_rec_q = !it.sniper_when
+        && (q_trim_low.contains("tonight")
+            || q_trim_low.contains("this weekend")
+            || q_trim_low.contains("next week"))
+        && crate::retrieval::step14_is_rec_request(&q.text);
     let pref_live_eff = ix.turns.len() >= 24
         && !past_cue_eff
-        && !it.sniper_when
+        && (!it.temporal || is_near_future_rec_q)
         && !seq_mode_eff
         && !eff_summary_request(&q.text)
         && !is_factual_retro_query

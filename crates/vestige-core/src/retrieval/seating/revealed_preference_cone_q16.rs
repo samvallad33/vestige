@@ -502,20 +502,28 @@ pub(in crate::retrieval) fn score_revealed_preference_turns_q16(
             continue;
         }
 
-        // Exact/stemmed direct query-head hits dominate loose 2-hop conceptual neighbors so
-        // concrete revealed preferences ("slow cooker", "meal prep", "cocktail") rank first.
-        let mut exact_head_hits: u64 = 0;
-        for h in heads.iter().take(6) {
-            let hit = ix.vocab.get(h).is_some_and(|id| tr.content.contains(&id))
-                || ix
-                    .vocab
-                    .get(&stem(h))
-                    .is_some_and(|id| tr.content.contains(&id));
-            if hit {
-                exact_head_hits += 1;
+        // Exact/stemmed direct query-head hits weighted by Shannon Information Content (IC)
+        // dominate loose 2-hop conceptual neighbors and ambient high-DF query words so concrete
+        // revealed preferences ("slow cooker", "meal prep", "cocktail", "kitchen") rank first.
+        let mut exact_head_bonus: u64 = 0;
+        let max_rare_df = ((ns_total / 4) as u32).max(4);
+        for h in heads.iter().take(8) {
+            let mut best_h_ic: u64 = 0;
+            for cand_id in [ix.vocab.get(h), ix.vocab.get(&stem(h))]
+                .into_iter()
+                .flatten()
+            {
+                if tr.content.contains(&cand_id) {
+                    let df = ix.s_stats.df.get(&cand_id).copied().unwrap_or(1);
+                    if df <= max_rare_df {
+                        let ic = aspect_ic_q16(df, ns_total as u32).max(Q16_ONE >> 1);
+                        best_h_ic = best_h_ic.max(ic);
+                    }
+                }
             }
+            exact_head_bonus = exact_head_bonus.saturating_add(best_h_ic);
         }
-        let exact_head_bonus = exact_head_hits.min(3).saturating_mul(Q16_ONE.saturating_mul(2));
+        let exact_head_bonus = exact_head_bonus.min(Q16_ONE.saturating_mul(6));
 
         // Combine exact head bonus + cone resonance + self-disclosure strength + question-immunity badge.
         let is_q_immune = tr.is_question && disc_q16 >= Q16_ONE;
@@ -673,15 +681,21 @@ pub(in crate::retrieval) fn apply_revealed_preference_cone_seating(ctx: &mut Ran
         return;
     }
 
-    // Check whether calibrated Top-4 sessions already contain any substantive query head token.
+    // Check whether calibrated Top-4 sessions already contain any corpus-selective (low-DF)
+    // substantive query head token (rejecting ambient high-DF words like "getting"/"better").
+    let max_rare_df = ((ctx.ix.session_turns.len() / 5) as u32).max(3);
     let head_ids: Vec<u32> = extract_pref_head_words(&ctx.q.text)
         .into_iter()
-        .take(6)
+        .take(8)
         .flat_map(|h| {
             let s = stem(&h);
             [ctx.ix.vocab.get(&h), ctx.ix.vocab.get(&s)]
                 .into_iter()
                 .flatten()
+        })
+        .filter(|&id| {
+            let df = ctx.ix.s_stats.df.get(&id).copied().unwrap_or(0);
+            (1..=max_rare_df).contains(&df)
         })
         .collect();
     let sess_hits_head = |si: usize| -> bool {

@@ -1240,11 +1240,9 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
         let g_meet = ((ug.galois_meet_q16.saturating_add(ag.galois_meet_q16) as f32) / 65_536.0)
             .min(6.0)
             * 1.4;
-        let has_resonance = (ud + ad + uf + af) > 0.0
-            || haz > 0.0
-            || g_meet > 0.0
-            || ctx.t_own.get(u_idx).copied().unwrap_or(0.0) > 0.0
-            || ctx.t_exact_mask.get(u_idx).copied().unwrap_or(0) != 0;
+        // Strong conceptual / hazard / Galois alignment (never triggered by a single ambient
+        // temporal word like "week" or a loose 2-hop neighbor on dense multi-session chats).
+        let has_strong_concept_link = (ud + ad) >= 1.0 || haz > 0.0 || g_meet > 0.0;
         let ack_bonus = if mem_ack { 18.0 } else { 1.5 };
         let sc = (ud + ad) * 2.0
             + (uf + af) * 1.15
@@ -1252,7 +1250,7 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
             + g_meet
             + ack_bonus
             + 0.10 * ctx.t_scene[u_idx].max(0.0);
-        scored_pairs.push((u_idx, a_idx, sc, mem_ack, has_resonance));
+        scored_pairs.push((u_idx, a_idx, sc, mem_ack, has_strong_concept_link));
     }
     scored_pairs.sort_by(|a, b| {
         b.2.partial_cmp(&a.2)
@@ -1260,10 +1258,12 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
             .then_with(|| a.0.cmp(&b.0))
     });
 
-    // On dense real chats (`!is_sparse_haystack`), require genuine query/concept/hazard/galois
-    // resonance on the winning `ack_only` pair so unrelated `"make a note"` distractors never
-    // hijack Slots 0..1 or lock out Regime C / Revealed-Preference / Gricean rescue!
-    if !is_sparse_haystack && !scored_pairs[0].4 {
+    // On dense real chats (`!is_sparse_haystack`) for open-ended advice queries (`advice_q`),
+    // require genuine direct concept/hazard/Galois alignment on the winning `ack_only` pair so
+    // unrelated scheduling `"make a note"` distractors never hijack Slots 0..1 or lock out
+    // Regime C / Revealed-Preference / Gricean rescue. Direct `profile_q` ("What did I tell you...")
+    // remains untouched so explicit memory-ack recall works at 100%.
+    if !is_sparse_haystack && advice_q && !scored_pairs[0].4 {
         return false;
     }
 
