@@ -1052,15 +1052,56 @@ pub(in crate::retrieval) fn apply_gricean_constraint_turn_seating(ctx: &mut Rank
 
         let mut next_slot = if keep_h0 { 1usize } else { 0usize };
         let mut seated_sess: DetHashSet<usize> = DetHashSet::default();
+        let mut seated_turns: DetHashSet<usize> = DetHashSet::default();
         if keep_h0 {
             seated_sess.insert(cur_h0_tr.session);
+            seated_turns.insert(cur_h0);
         }
-        for cand in per_sess_best {
+        // Build ordered seating list: top validated winner per Top-5 session PLUS a 2nd
+        // direct-focal (`entity_bind_q16 >= 2.0x`) validated constraint turn from `s0_top`
+        // when present, so strong intra-session focal constraints are never evicted by
+        // zero-overlap (`entity_bind_q16 < 1.0x`) distractor sessions.
+        let mut stratified_picks: Vec<GriceanTurnScore> = per_sess_best;
+        if let Some(s0_second) = cands
+            .iter()
+            .copied()
+            .filter(|c| {
+                c.session_idx == s0_top
+                    && c.entity_bind_q16 >= (Q16_ONE << 1)
+                    && has_concise_anaph_next(c.turn_idx)
+                    && !seated_turns.contains(&c.turn_idx)
+                    && !stratified_picks.iter().any(|p| p.turn_idx == c.turn_idx)
+            })
+            .max_by(|a, b| {
+                a.total_q16
+                    .cmp(&b.total_q16)
+                    .then_with(|| a.constraint_frame_q16.cmp(&b.constraint_frame_q16))
+                    .then_with(|| b.turn_idx.cmp(&a.turn_idx))
+            })
+        {
+            stratified_picks.push(s0_second);
+            stratified_picks.sort_by(|a, b| {
+                b.total_q16
+                    .cmp(&a.total_q16)
+                    .then_with(|| b.constraint_frame_q16.cmp(&a.constraint_frame_q16))
+                    .then_with(|| a.turn_idx.cmp(&b.turn_idx))
+            });
+        }
+        let mut s0_count: usize = usize::from(keep_h0 && cur_h0_tr.session == s0_top);
+        for cand in stratified_picks {
             if next_slot >= 5.min(ctx.k) {
                 break;
             }
-            if !seated_sess.insert(cand.session_idx) {
+            if !seated_turns.insert(cand.turn_idx) {
                 continue;
+            }
+            let allow_second_s0 =
+                cand.session_idx == s0_top && s0_count < 2 && cand.entity_bind_q16 >= (Q16_ONE << 1);
+            if !seated_sess.insert(cand.session_idx) && !allow_second_s0 {
+                continue;
+            }
+            if cand.session_idx == s0_top {
+                s0_count += 1;
             }
             if let Some(pos) = ctx
                 .final_turn_indices

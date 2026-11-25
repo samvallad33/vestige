@@ -26,21 +26,28 @@ pub(in crate::retrieval) fn run<'a>(
     // T58 Closed-class 2nd-person past attribution ("did you ...", "have you ...") on user/assistant chats:
     // weights assistant turns (`field 1`) without mutating public `QueryIntent::assistant_attribution`.
     // hardcode-scan: closed-class (2nd-person past attribution & retrospective recall cues)
+    let explicit_you_asst = q_low_s1.contains("did you ")
+        || q_low_s1.contains("have you ")
+        || q_low_s1.contains("you recommend")
+        || q_low_s1.contains("you suggest")
+        || q_low_s1.contains("you advise")
+        || q_low_s1.contains("you outline")
+        || q_low_s1.contains("you propose")
+        || q_low_s1.contains("you help")
+        || q_low_s1.contains("you provided")
+        || q_low_s1.contains("you told me")
+        || q_low_s1.contains("you gave me")
+        || q_low_s1.contains("you mentioned")
+        || q_low_s1.contains("you shared");
+    let explicit_user_mention_s1 = (q_low_s1.contains("i mentioned")
+        || q_low_s1.contains("did i mention")
+        || q_low_s1.contains("i said ")
+        || q_low_s1.contains("did i say"))
+        && !explicit_you_asst;
     let eff_asst_attr = !has_named_s1
         && ix.turns.len() >= 4
-        && (q_low_s1.contains("did you ")
-            || q_low_s1.contains("have you ")
-            || q_low_s1.contains("you recommend")
-            || q_low_s1.contains("you suggest")
-            || q_low_s1.contains("you advise")
-            || q_low_s1.contains("you outline")
-            || q_low_s1.contains("you propose")
-            || q_low_s1.contains("you help")
-            || q_low_s1.contains("you provided")
-            || q_low_s1.contains("you told me")
-            || q_low_s1.contains("you gave me")
-            || q_low_s1.contains("you mentioned")
-            || q_low_s1.contains("you shared")
+        && !explicit_user_mention_s1
+        && (explicit_you_asst
             || q_low_s1.contains("remind me")
             || q_low_s1.contains("previous conversation")
             || q_low_s1.contains("previous chat")

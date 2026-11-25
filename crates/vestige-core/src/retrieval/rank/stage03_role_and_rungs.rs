@@ -936,10 +936,25 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     || (p[0] == "which" && p[1] != "session")
                     || (p[0] == "should" && (p[1] == "i" || p[1] == "we"))
             }));
+    let explicit_user_mention_only = (q_trim_low.contains("i mentioned")
+        || q_trim_low.contains("did i mention")
+        || q_trim_low.contains("i said ")
+        || q_trim_low.contains("did i say"))
+        && !(has_gapped_you_report
+            || q_trim_low.contains("did you ")
+            || q_trim_low.contains("have you ")
+            || q_trim_low.contains("you recommended")
+            || q_trim_low.contains("you suggested")
+            || q_trim_low.contains("you provided")
+            || q_trim_low.contains("you told me")
+            || q_trim_low.contains("you gave me")
+            || q_trim_low.contains("you mentioned")
+            || q_trim_low.contains("you shared"));
     let asst_attr_eff = !has_named_speakers_eff
         && !is_monologue_corpus
         && ix.turns.len() >= 4
-        && has_retro_asst_cue;
+        && has_retro_asst_cue
+        && !explicit_user_mention_only;
     let closed_class_mh = !is_monologue_corpus
         && ix.session_turns.len() >= 3
         && !it.temporal
