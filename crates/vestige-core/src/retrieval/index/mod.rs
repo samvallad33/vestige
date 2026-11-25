@@ -916,13 +916,41 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
             let has_causal = !t.links.is_empty();
             let is_standing_policy = field == 0 && utterance_is_standing_policy(prose_body);
             // A short turn with no date, digit, or proper name is a backchannel
-            // by shape. No discourse-word list.
+            // by shape — EXCEPT concise 1st-person declarative identity/diagnosis/status
+            // statements ("I've been diagnosed with asthma.", "I'm pregnant now.", "I am a veteran.").
+            let is_1p_state_decl = field == 0
+                && !is_question
+                && !content.is_empty()
+                && {
+                    let pl = prose_body.trim_start().to_ascii_lowercase();
+                    // hardcode-scan: closed-class (1st-person copula/perfective disclosure openings vs courtesy backchannels)
+                    let opens_1p_state = pl.starts_with("i am ")
+                        || pl.starts_with("i'm ")
+                        || pl.starts_with("i\u{2019}m ")
+                        || pl.starts_with("i've been ")
+                        || pl.starts_with("i\u{2019}ve been ")
+                        || pl.starts_with("i have ")
+                        || pl.starts_with("i recently ")
+                        || pl.starts_with("my ");
+                    let is_courtesy_short = pl.starts_with("i'm good")
+                        || pl.starts_with("i\u{2019}m good")
+                        || pl.starts_with("i am good")
+                        || pl.starts_with("i'm fine")
+                        || pl.starts_with("i\u{2019}m fine")
+                        || pl.starts_with("i am fine")
+                        || pl.starts_with("i'm ok")
+                        || pl.starts_with("i'm sorry")
+                        || pl.starts_with("i'm ready")
+                        || pl.starts_with("i'm done");
+                    opens_1p_state && !is_courtesy_short && !prose_body.contains('?')
+                };
             let is_backchannel = !is_question
                 && content.len() <= 2
                 && !has_temporal
                 && !has_numeric
                 && entities.is_empty()
-                && !is_standing_policy;
+                && !is_standing_policy
+                && !is_1p_state_decl;
             let mut role_objs: Vec<u32> = Vec::new();
             if field == 0 && !is_backchannel {
                 let (r_objs, _r_attrs) = step14_extract_role_frames(prose_body);

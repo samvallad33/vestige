@@ -768,20 +768,25 @@ pub(in crate::retrieval) fn apply_revealed_preference_cone_seating(ctx: &mut Ran
         }
     }
 
-    // Pass 3: explicit 1st-person preference turn whose session IS already in Top-4 (`in_protected`)
-    // but whose turn was stranded outside `final_turn_indices[0..5]` (e.g. long BEAM sessions where
-    // a generic discussion turn outscored the explicit `"I prefer ..."` turn). Rescues into Slot 4
-    // without touching `final_session_indices[0..4]`.
+    // Pass 3: explicit 1st-person preference turn stranded in Top-5 sessions OR in
+    // `final_turn_indices[5..10]` (`AutoViewMem` orthogonal preference rescue on long chats).
+    // Rescues cleanly into Slot 4 without disturbing Slots 0..3.
     if picks.is_empty() && ctx.ns >= 25 {
         for &c in &cands {
             let turn_in_top5 = ctx.final_turn_indices.iter().take(5).any(|&t| t == c.turn_idx);
+            let turn_in_6_10 = ctx
+                .final_turn_indices
+                .iter()
+                .skip(5)
+                .take(5)
+                .any(|&t| t == c.turn_idx);
             let in_top5_sess = ctx
                 .final_session_indices
                 .iter()
                 .take(5)
                 .any(|&s| s == c.session_idx);
             if !turn_in_top5
-                && in_top5_sess
+                && (in_top5_sess || turn_in_6_10)
                 && !ctx.ix.turns[c.turn_idx].is_standing_policy
                 && c.disclosure_q16 >= Q16_ONE
                 && c.cone_ic_q16 >= (Q16_ONE >> 1)
@@ -790,6 +795,11 @@ pub(in crate::retrieval) fn apply_revealed_preference_cone_seating(ctx: &mut Ran
                 if low_c.contains("i prefer ")
                     || low_c.contains("i'd prefer ")
                     || low_c.contains("i\u{2019}d prefer ")
+                    || low_c.contains("i'd like ")
+                    || low_c.contains("i\u{2019}d like ")
+                    || low_c.contains("without compromising")
+                    || low_c.contains("rather than ")
+                    || low_c.contains("instead of ")
                     || low_c.contains("more efficient")
                 {
                     picks.push(c);

@@ -307,8 +307,183 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
         return;
     }
     let explicit_seq_q = is_closed_class_sequence_order_query(query);
+    let is_multi_sess_summary = !explicit_seq_q
+        && !eff_it.is_event_sequence
+        && !ctx.has_named_speakers_eff
+        && !ctx.is_monologue_corpus
+        && !ctx.ix.has_tool_calls
+        && ctx.ns >= 16
+        && crate::retrieval::eff_summary_request(query);
     let gate_open = eff_it.is_event_sequence || explicit_seq_q;
-    if !gate_open {
+    if !gate_open && !is_multi_sess_summary {
+        return;
+    }
+
+    // Bysani (NAACL 2010) Query-Conditioned Future-Share + Concept Birth-Time Genesis Injection:
+    // On long multi-session dialogues (`ns >= 16`), late high-TF wrap-up sessions crowd out the
+    // earliest topical genesis sessions (`turns 4..32`). Compute each session's first-appearance
+    // birth mass over rare exact query terms (`1 <= df <= max(6, ns/3)`) weighted by
+    // `IC(t) * FutureShare(t, s)` in pure `Q16.16`, and promote up to 2 unseated early genesis
+    // sessions into Slots 3..4 (protecting Slots 0..2).
+    let ns_total = ix.session_turns.len();
+    if is_multi_sess_summary
+        && !ctx.has_named_speakers_eff
+        && !ctx.is_monologue_corpus
+        && !ctx.ix.has_tool_calls
+        && ns_total >= 16
+        && final_session_indices.len() >= 5
+    {
+        use crate::retrieval::fusion::aspect_coverage_q16::aspect_ic_q16;
+        let max_gen_df = ((ns_total as u32) / 3).max(6);
+        let mut rare_q_tids: Vec<(u32, u32, u64)> = Vec::new();
+        for qt in &ctx.plan.terms {
+            if !qt.exact_hit {
+                continue;
+            }
+            if rare_q_tids.iter().any(|&(id, _, _)| id == qt.id) {
+                continue;
+            }
+            let df = ix.s_stats.df.get(&qt.id).copied().unwrap_or(0);
+            if (1..=max_gen_df).contains(&df) {
+                rare_q_tids.push((qt.id, df, aspect_ic_q16(df, ns_total as u32)));
+            }
+        }
+        if !rare_q_tids.is_empty() {
+            // Find earliest user-bearing session `first_sess[i]` for each rare query term.
+            let mut first_sess: Vec<Option<usize>> = vec![None; rare_q_tids.len()];
+            let mut cum_hits: Vec<u32> = vec![0; rare_q_tids.len()];
+            let early_cap = ((ns_total * 45) / 100).max(6).min(ns_total);
+            let mut gen_cands: Vec<(u64, usize, usize)> = Vec::new(); // (genesis_q16, hit_cnt, si)
+            for si in 0..early_cap {
+                let mut g_mass: u64 = 0;
+                let mut hits: usize = 0;
+                for (qi, &(tid, df, ic_q16)) in rare_q_tids.iter().enumerate() {
+                    let present = ix.session_content[si].contains(&tid)
+                        || ix.session_entities[si].contains(&tid)
+                        || ix.session_bags[si].tf[0].contains_key(&tid);
+                    if !present {
+                        continue;
+                    }
+                    let prior = cum_hits[qi];
+                    cum_hits[qi] = prior.saturating_add(1);
+                    let f_sess = *first_sess[qi].get_or_insert(si);
+                    // FutureShare(q_i, s) = (df - prior) / df in Q16.16.
+                    let future_q16 = (((df.saturating_sub(prior) as u64) << 16) / (df.max(1) as u64))
+                        .min(Q16_ONE);
+                    // Birth proximity decay: 1.0x at exact birth session, 0.5x within 2 sessions, 0.25x later.
+                    let dist = si.saturating_sub(f_sess);
+                    let birth_q16 = if dist == 0 {
+                        Q16_ONE
+                    } else if dist <= 2 {
+                        Q16_ONE >> 1
+                    } else {
+                        Q16_ONE >> 2
+                    };
+                    let term_w = ((ic_q16 as u128).saturating_mul(future_q16 as u128) >> 16) as u64;
+                    let term_g = ((term_w as u128).saturating_mul(birth_q16 as u128) >> 16) as u64;
+                    g_mass = g_mass.saturating_add(term_g);
+                    hits += 1;
+                }
+                let has_user_turn = ix.session_turns[si].iter().any(|&ti| {
+                    let t = &ix.turns[ti];
+                    t.field == 0 && !t.is_backchannel && !t.is_standing_policy
+                });
+                let min_hits = if rare_q_tids.len() >= 2 { 2usize } else { 1usize };
+                if has_user_turn
+                    && hits >= min_hits
+                    && g_mass > 0
+                    && !final_session_indices[..5].contains(&si)
+                    && s_score.get(si).copied().unwrap_or(0.0) > 0.0
+                {
+                    gen_cands.push((g_mass, hits, si));
+                }
+            }
+            // Prefer highest genesis mass (tie-break: more distinct rare hits, then earliest session).
+            gen_cands.sort_by(|a, b| {
+                b.0.cmp(&a.0)
+                    .then_with(|| b.1.cmp(&a.1))
+                    .then_with(|| a.2.cmp(&b.2))
+            });
+            let slots = [3usize, 4usize];
+            for (pi, &(_, _, g_si)) in gen_cands.iter().take(2).enumerate() {
+                if final_session_indices[..5].contains(&g_si) {
+                    continue;
+                }
+                if let Some(cur_pos) = final_session_indices.iter().position(|&x| x == g_si) {
+                    final_session_indices.remove(cur_pos);
+                }
+                let slot = slots[pi].min(final_session_indices.len());
+                final_session_indices.insert(slot, g_si);
+                let cap_len = ctx.k.max(5);
+                if final_session_indices.len() > cap_len {
+                    final_session_indices.truncate(cap_len);
+                }
+            }
+        }
+    }
+
+    // Multi-session summarization (`eff_summary_request`): preserve Top-3 incumbent turns (both
+    // `field == 0` user and `field == 1` assistant summaries!), then seat the best non-echo turn
+    // (either role) from any newly promoted early-genesis Top-5 sessions into Slots 3..4 while
+    // keeping all remaining incumbent turns up to `target_k` (zero Top-10 drop).
+    if is_multi_sess_summary {
+        let target_k = ctx.k.max(ctx.final_turn_indices.len()).max(5);
+        let mut reprojected: Vec<usize> = Vec::with_capacity(target_k);
+        let mut covered_sessions: Vec<usize> = Vec::with_capacity(5);
+        for &old_ti in ctx.final_turn_indices.iter().take(3) {
+            if !reprojected.contains(&old_ti) {
+                reprojected.push(old_ti);
+                let s = ix.turns[old_ti].session;
+                if !covered_sessions.contains(&s) {
+                    covered_sessions.push(s);
+                }
+            }
+        }
+        for &si in final_session_indices.iter().take(5) {
+            if reprojected.len() >= 5 {
+                break;
+            }
+            if covered_sessions.contains(&si) {
+                continue;
+            }
+            let members = &ix.session_turns[si];
+            let best_turn = members
+                .iter()
+                .copied()
+                .filter(|&ti| {
+                    let t = &ix.turns[ti];
+                    !t.is_backchannel
+                        && !t.is_standing_policy
+                        && !crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                            ix, ti, query,
+                        )
+                })
+                .max_by(|&a, &b| {
+                    let sa = ctx.t_scene.get(a).copied().unwrap_or(0.0);
+                    let sb = ctx.t_scene.get(b).copied().unwrap_or(0.0);
+                    sa.partial_cmp(&sb)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| b.cmp(&a))
+                });
+            if let Some(chosen) = best_turn
+                && !reprojected.contains(&chosen)
+            {
+                reprojected.push(chosen);
+                covered_sessions.push(si);
+            }
+        }
+        for &old_ti in &ctx.final_turn_indices {
+            if reprojected.len() >= target_k {
+                break;
+            }
+            if !reprojected.contains(&old_ti) {
+                reprojected.push(old_ti);
+            }
+        }
+        if !reprojected.is_empty() {
+            reprojected.truncate(target_k);
+            ctx.final_turn_indices = reprojected;
+        }
         return;
     }
 

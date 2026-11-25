@@ -785,6 +785,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     | "shared"
             )
     });
+    let has_retro_user_cue = q_trim_low.contains("i told you")
+        || q_trim_low.contains("did i tell you")
+        || q_trim_low.contains("have i told you")
+        || q_trim_low.contains("have i mentioned");
     let has_retro_asst_cue = has_gapped_you_report
         || q_trim_low.contains("did you ")
         || q_trim_low.contains("have you ")
@@ -802,11 +806,19 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         || q_trim_low.contains("i gave you")
         || q_trim_low.contains("i recommended")
         || q_trim_low.contains("i suggested")
-        || q_trim_low.contains("i told you")
         || q_trim_low.contains("i provided")
         || q_trim_low.contains("we talked about")
         || q_trim_low.contains("we discussed");
+    // hardcode-scan: closed-class (cardinal enumerative WH-frames for factual multi-entity lookup)
+    let is_factual_enum_q = q_trim_low.starts_with("what two ")
+        || q_trim_low.starts_with("what three ")
+        || q_trim_low.starts_with("what are the two ")
+        || q_trim_low.starts_with("what are the three ")
+        || q_trim_low.starts_with("which two ")
+        || q_trim_low.starts_with("which three ");
     let is_factual_retro_query = has_retro_asst_cue
+        || has_retro_user_cue
+        || is_factual_enum_q
         || q_trim_low.contains("did i ")
         || q_trim_low.contains("did we ")
         || q_trim_low.contains("have i ")

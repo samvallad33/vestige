@@ -4578,8 +4578,14 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         || ql_sr.contains("were my ")
         || ql_sr.starts_with("how many ")
         || ql_sr.starts_with("how long ")
+        || ql_sr.starts_with("what two ")
+        || ql_sr.starts_with("what three ")
+        || ql_sr.starts_with("what are the two ")
+        || ql_sr.starts_with("what are the three ")
         || ql_sr.contains("between ")
         || ql_sr.contains(" across ");
+    let allow_how_much_rule =
+        !ctx.eff_it.sniper_how_many || (!ql_sr.starts_with("how many ") && !ctx.cond_rule_turns.is_empty());
     if !ctx.has_named_speakers_eff
         && !ctx.is_monologue_corpus
         && !ctx.ix.has_tool_calls
@@ -4587,7 +4593,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && !ctx.standing_rules.is_empty()
         && !ctx.eff_it.is_event_sequence
         && !eff_summary_request(&ctx.q.text)
-        && !ctx.eff_it.sniper_how_many
+        && allow_how_much_rule
         && !ctx.eff_it.multi_hop
         && ctx.ix.session_turns.len() >= 16
         && ctx.final_session_indices.len() >= 5
@@ -4617,20 +4623,37 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             if sess_in_top5 && turn_in_top5 {
                 continue;
             }
-            let slot = if seated_tail == 0 { 4usize } else { 3usize };
+            // Place into Slots 3..=4 without ever shifting an already-seated standing rule
+            // out of Top-5 (never insert at 3 while an earlier rule sits at 4!).
             if !sess_in_top5 {
                 if let Some(pos) = ctx.final_session_indices.iter().position(|&s| s == r_si) {
                     ctx.final_session_indices.remove(pos);
                 }
-                let ins = slot.min(ctx.final_session_indices.len());
-                ctx.final_session_indices.insert(ins, r_si);
+                if seated_tail == 0 {
+                    let ins = 4usize.min(ctx.final_session_indices.len());
+                    ctx.final_session_indices.insert(ins, r_si);
+                } else {
+                    if ctx.final_session_indices.len() > 3 {
+                        ctx.final_session_indices.remove(3);
+                    }
+                    let ins = 4usize.min(ctx.final_session_indices.len());
+                    ctx.final_session_indices.insert(ins, r_si);
+                }
             }
             if !turn_in_top5 {
                 if let Some(pos) = ctx.final_turn_indices.iter().position(|&t| t == r_ti) {
                     ctx.final_turn_indices.remove(pos);
                 }
-                let ins = slot.min(ctx.final_turn_indices.len());
-                ctx.final_turn_indices.insert(ins, r_ti);
+                if seated_tail == 0 {
+                    let ins = 4usize.min(ctx.final_turn_indices.len());
+                    ctx.final_turn_indices.insert(ins, r_ti);
+                } else {
+                    if ctx.final_turn_indices.len() > 3 {
+                        ctx.final_turn_indices.remove(3);
+                    }
+                    let ins = 4usize.min(ctx.final_turn_indices.len());
+                    ctx.final_turn_indices.insert(ins, r_ti);
+                }
                 if ctx.final_turn_indices.len() > ctx.k {
                     ctx.final_turn_indices.truncate(ctx.k);
                 }

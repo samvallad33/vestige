@@ -306,11 +306,17 @@ fn is_implicit_advice_frame(q_text: &str) -> bool {
         "advice",
         "tips",
         "should i",
+        "should we",
         "can i ",
         "is this safe",
         "is it safe",
         "is it necessary",
         "worth learning",
+        "worth buying",
+        "will be an issue",
+        "what's the best",
+        "what\u{2019}s the best",
+        "what is the best",
         "keep in mind",
         "anything i need",
         "anything i should",
@@ -362,10 +368,11 @@ fn is_implicit_advice_frame(q_text: &str) -> bool {
         "experiencing ",
         "getting frequent",
         "has been hurting",
-        "craving ",
+        "craving",
         "invited me to",
         "lately, i",
         "tight on cash",
+        "tight on money",
         "look quite interesting",
         "offer temporary",
         "help prevent",
@@ -404,6 +411,12 @@ fn is_implicit_advice_frame(q_text: &str) -> bool {
 /// hardcode-scan: closed-class (1st-person interrogative memory-recall frames).
 fn is_personal_profile_recall_query(q_text: &str) -> bool {
     let ql = q_text.to_ascii_lowercase();
+    let explicit_told_you = ql.contains("did i tell")
+        || ql.contains("did i ever tell")
+        || ql.contains("have i told")
+        || ql.contains("have i mentioned")
+        || ql.contains("did i mention")
+        || ql.contains("told you about");
     if [
         "when did",
         "how many",
@@ -412,7 +425,6 @@ fn is_personal_profile_recall_query(q_text: &str) -> bool {
         "before we ",
         "before the ",
         "after ",
-        "earlier",
         "first ",
         "last ",
         "recently changed",
@@ -421,6 +433,7 @@ fn is_personal_profile_recall_query(q_text: &str) -> bool {
     ]
     .iter()
     .any(|p| ql.contains(p))
+        || (ql.contains("earlier") && !explicit_told_you)
     {
         return false;
     }
@@ -469,11 +482,15 @@ fn is_explicit_memory_ack(text: &str) -> bool {
         "noted your ",
         "keep that information",
         "keep this information",
+        "i'll keep that",
+        "will keep that",
         "i understand your ",
         "i understand you ",
+        "i understand the ",
     ]
     .iter()
     .any(|p| low.contains(p))
+        || (low.contains("keep ") && low.contains(" in mind"))
 }
 
 /// Closed-class check for user imperative task prompts or request/gratitude wrappers
@@ -517,7 +534,7 @@ fn is_request_or_gratitude_wrapper(text: &str) -> bool {
         "suggest",
         "tips",
         "advice",
-        "looking for",
+        "looking for ",
         "gift ideas",
         "can you",
         "could you",
@@ -1265,15 +1282,67 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
         let g_meet = ((ug.galois_meet_q16.saturating_add(ag.galois_meet_q16) as f32) / 65_536.0)
             .min(6.0)
             * 1.4;
-        // Strong conceptual / hazard / Galois alignment (never triggered by a single ambient
-        // temporal word like "week" or a loose 2-hop neighbor on dense multi-session chats).
+        // Strong conceptual / hazard / Galois / Adhikari taxonomic-subsumption alignment.
+        // On sparse haystacks (`InMind`), also check WordNet asymmetric upward subsumption
+        // (`heyting_implication_ic_q16(u_tok, q_tok) >= 72`, e.g., `linux -> operating system`,
+        // `phenelzine -> antidepressant`, `colonoscopy -> procedure`, `asthma -> health condition`).
+        let mut tax_sub_score: f32 = 0.0;
+        if is_sparse_haystack && profile_q {
+            let q_cw: Vec<String> = raw_tokens(&ctx.q.text)
+                .into_iter()
+                .filter(|w| w.len() >= 4 && crate::retrieval::is_content(w))
+                .collect();
+            for &cid in &ctx.ix.turns[u_idx].content {
+                if let Some(u_name) = ctx.ix.vocab.names.get(cid as usize)
+                    && !u_name.starts_with('\u{1}')
+                    && u_name.len() >= 4
+                {
+                    let mut best_u = 0u16;
+                    for qw in &q_cw {
+                        let h = crate::wordnet::heyting_implication_ic_q16(u_name, qw);
+                        if h > best_u {
+                            best_u = h;
+                        }
+                        if best_u < 72
+                            && (crate::wordnet::upward_hypernyms(u_name, 3)
+                                .iter()
+                                .any(|&p| p == qw || p.split('_').any(|sp| sp == qw))
+                                || crate::wordnet::gloss_tokens_of(u_name)
+                                    .iter()
+                                    .any(|&gt| gt == qw)
+                                || crate::wikidata::upward_containers(u_name, 2)
+                                    .iter()
+                                    .any(|&cont| {
+                                        cont == qw
+                                            || cont
+                                                .split_ascii_whitespace()
+                                                .any(|sp| sp == qw)
+                                    })
+                                || crate::conceptnet::two_hop_neighbors(u_name, 10)
+                                    .iter()
+                                    .any(|&(cn, _)| {
+                                        cn == qw
+                                            || cn
+                                                .split_ascii_whitespace()
+                                                .any(|sp| sp == qw)
+                                    }))
+                        {
+                            best_u = 72;
+                        }
+                    }
+                    if best_u >= 72 {
+                        tax_sub_score += (best_u as f32) / 36.0;
+                    }
+                }
+            }
+        }
         let pair_in_top5_sess = ctx
             .final_session_indices
             .iter()
             .take(5)
             .any(|&s| s == ctx.ix.turns[u_idx].session);
         let has_strong_concept_link = if is_sparse_haystack {
-            (ud + ad) >= 1.0 || haz > 0.0 || g_meet > 0.0
+            (ud + ad) >= 1.0 || haz > 0.0 || g_meet > 0.0 || tax_sub_score >= 1.5
         } else {
             (ud + ad) >= 2.2
                 || haz >= 2.5
@@ -1284,6 +1353,7 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
             + (uf + af) * 1.15
             + haz
             + g_meet
+            + tax_sub_score * 2.5
             + ack_bonus
             + 0.10 * ctx.t_scene[u_idx].max(0.0);
         scored_pairs.push((u_idx, a_idx, sc, mem_ack, has_strong_concept_link));
@@ -1306,7 +1376,12 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     if profile_q {
         let (_, _, _, best_ack, best_link) = scored_pairs[0];
         let t0_has_user_exact = ctx.final_turn_indices.first().is_some_and(|&t0| {
-            ctx.ix.turns[t0].field == 0
+            let tr0 = &ctx.ix.turns[t0];
+            tr0.field == 0
+                && !tr0.is_question
+                && !tr0.is_backchannel
+                && !tr0.body_for_headers.contains('?')
+                && !is_request_or_gratitude_wrapper(&tr0.body_for_headers)
                 && (ctx.t_exact_mask.get(t0).copied().unwrap_or(0) & ctx.q_group_mask) != 0
         });
         if !best_ack && !(is_sparse_haystack && best_link && !t0_has_user_exact) {
