@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-11-25
+
+### Zero-Vector Causal Retrieval Engine (`vestige-core` & `strata-store`, Closes #853, #854, #855)
+
+- **Self-Plasticizing Strata Conductance & AC Impedance (#853, #854, #855):**
+  - Added outcome-weighted GhostLink conductance aggregation with witness receipt preservation (`crates/strata-store/src/ghostlink.rs`) and end-to-end conductance bridge (`crates/vestige-core/src/composition.rs`).
+  - Upgraded `ghostcurrent_mdl_q16.rs` with frequency-resolved AC impedance (`R + j\omega L + 1/(j\omega C)`) and Kirchhoff admittance across episodic sessions, with zero regression on short or single-session queries.
+- **Waves 5 & 6 + Breakthrough Seating & Dispositional Kernels (100% deterministic Q16.16, zero vectors, zero LLMs):**
+  - Added `lambek_qud_q16` (categorical QUD elimination with speaker-attribution slot guard), `genesis_spine_q16`, `revealed_preference_cone_q16` (interrogative-immune cross-POS WordNet/Roget/ConceptNet cone with Shannon IC rare-head filtering), `gricean_constraint_turn_q16`, `speaker_disposition_cone_q16`, and `submodular_residual_cover_q16` (preserving Mode B session diversity).
+  - Added post-gatekeeper Official Top-5 standing-rule co-seating and adjacent `t0 ± 1` assistant reply rescue for preference and multi-turn conversational evidence.
+  - Hardened UTF-8 slicing on multi-byte character boundaries across `wikidata.rs` and `habitus_energy_q16.rs`.
+- **4.2×–5.0× End-to-End Latency Speedup (Bit-Exact):**
+  - Replaced SipHash with deterministic zero-dependency `DetFxHasher`, hoisted lexical lookups, and pruned redundant candidate passes—cutting LongMemEval-S latency to **`966.9 ms/q`** (~5× faster), BEAM 100K total runtime to **`68.9s`** (5.0× faster), and LoCoMo-10 to **`63.9 ms/q`** (4.2× faster, 49 MB RSS).
+- **Verified v7.0.0 7-Suite Benchmark Results (`fb64f614`, CPU-only, $0 API cost, zero LLMs, zero vectors):**
+  - **LongMemEval-S (470 non-abstention):** RecallAll@5 **`87.23%`** (`+1.91%`), Capped-All@5 **`93.61%`**, RecallAny@5 **`97.87%`**, RecallAny@10 **`99.57%`** (`99.60%` all 500), NDCG@10 **`0.8902`**, `single-session-preference` R@5 **`86.67%`** (**`+20.00%`** jump), `single-session-user` **`100.00%`**, `knowledge-update` **`100.00%`** R@5 / **`97.44%`** All@5.
+  - **LongMemEval Temporal (211 q):** Sess Any@1 **`89.57%`**, Any@5 **`97.63%`**, Any@10 **`99.53%`**, All@5 **`85.78%`**, Turn Exact Any@10 **`93.14%`**, MRR **`0.9325`**, NDCG@10 **`0.9137`**.
+  - **BEAM 100K (355 scored q, 2,127 sub-sessions):** Official Sess Any@5 **`78.31%`** (Pkt@5 **`78.87%`**), Sess Any@10 **`87.32%`**, Turn Any@10 **`82.54%`**, MRR **`0.5802`**, `temporal_reasoning` **`97.5%`** Any@5 / **`100.0%`** Any@10, `contradiction_resolution` **`97.5%`** Any@5 / **`100.0%`** Any@10, `instruction_following` **`82.5%`** Any@5 / **`80.0%`** All@5.
+  - **LoCoMo-10 Blind Convs 6–10 (985 q, out-of-sample):** Sess R@5 **`93.40%`**, Turn Exact R@5 **`83.65%`** (**`+3.24%`** vs v6.2.3), Turn Soft R@5 **`86.40%`**, Turn Exact R@10 **`89.14%`**. All 10 Convs (1,982 q): Sess R@5 **`93.95%`**, Turn Exact R@5 **`83.55%`**, Turn Soft R@5 **`86.43%`**, Turn Exact R@10 **`89.96%`**.
+  - **ConvoMem (100 q):** Turn Exact R@5 **`73.0%`**, R@10 **`81.0%`**, Sess R@5 **`98.0%`**, `assistant_facts` **`100.0%`** R@5, `abstention` **`100.0%`** R@10, `changing_evidence` **`88.0%`** R@5.
+  - **STATE-Bench (86 multi-session episodes):** Turn Exact R@1 **`82.56%`**, R@5 **`95.35%`**, R@10 **`100.0%`**, Sess R@5 **`95.35%`**, MRR **`0.8887`**.
+  - **InMind (125 queries):** Implicit Bridge R@1 / R@5 / R@10 = **`91.2%` / `91.2%` / `91.2%`** (MRR **`0.912`**), Direct Recall **`79.2%`** Turn R@5 / **`81.6%`** Sess R@5.
+
+### Causal Frontier, BISCEPTER, Execution Leases & Zero-Cloud PR Bots (`vestige-mcp`)
+
+- **7 Deterministic `causal_walk` Frontier Engines & `BISCEPTER` Q16.16 (`causal_frontier.rs`, `biscepter.rs`):** Automated zombie-regression patch-ID matching, forward Chesterton's Fence invariants, Halpern-Pearl hunk ablation, and fixed-point Q16.16 noisy-bisect verification.
+- **Mid-Session Execution Leases (`reflex/lease.rs`, `reflex/enforce.rs`):** Fail-closed lease enforcement for PreToolUse / PostToolBatch agent hooks.
+- **5 Zero-Cloud GitHub PR Bots + Native SARIF 2.1.0 (`bot_fleet.rs`, `action.yml`, `.github/workflows/vestige-*.yml`):**
+  - `vestige-causal-gate` (zombie regression & Chesterton's Fence), `vestige-shield` (Unicode `U+E0000..=U+E007F` TAG smuggling, Trojan Bidi overrides, zero-width stealth, secrets, cross-language rules, Biba control-plane integrity), `vestige-ablator`, `vestige-bisector`, and `vestige-hygiene`.
+- **Distribution & Proof Surface (`proof_card.rs`, `distribution.rs`, `flake.nix`, `Dockerfile.airgap`, `.devcontainer/`, `.cursor/rules/vestige.mdc`, `.well-known/ai-provenance.json`):** Added `vestige card`, `vestige shield`, `vestige pr-audit`, `vestige fence`, Nix flake + Home Manager module, air-gapped Docker build, DevContainer, and machine-readable AI provenance manifest.
+
 ### MCP wire compatibility
 
 - The advertised `inputSchema` no longer carries a root-level `oneOf`, `anyOf` or `allOf`. Anthropic's Messages API rejects the whole request with `400 invalid_request_error: input_schema does not support oneOf, allOf, or anyOf at the top level`, so one bad schema in the catalog failed every turn for Claude clients. `curate`, `remember` and `session` each shipped a root `allOf` of per-action `if`/`then` branches from 6.2.0 onward; compaction already flattened every branch body to `{"type":"object"}`, so the block carried no information on the wire. The branches stay in the full schema served by `session(action='status', view='tools', tool='<name>')`, which is a tool result and never validated as an `inputSchema`.

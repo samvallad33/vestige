@@ -12,7 +12,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
         vestigePkg = pkgs.rustPlatform.buildRustPackage {
           pname = "vestige";
-          version = "6.2.3";
+          version = "7.0.0";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           cargoBuildFlags = [ "-p" "vestige-mcp" "--bin" "vestige" ];

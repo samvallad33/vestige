@@ -65,7 +65,7 @@ export class VestigeClient {
       await this._rpcStdio("initialize", {
         protocolVersion: "2024-11-05",
         capabilities: {},
-        clientInfo: { name: "@vestige/client", version: "6.2.3" },
+        clientInfo: { name: "@vestige/client", version: "7.0.0" },
       });
       this._initialized = true;
     }

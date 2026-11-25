@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vestige-client"
-version = "6.2.3"
+version = "7.0.0"
 description = "Zero-config Python SDK and framework adapters (LangChain, CrewAI, LlamaIndex, AutoGen) for Vestige Causal Proof Engine"
 readme = "README.md"
 requires-python = ">=3.10"

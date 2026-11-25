@@ -8,4 +8,4 @@ __all__ = [
     "VestigeClient",
     "VestigeError",
 ]
-__version__ = "6.2.3"
+__version__ = "7.0.0"

@@ -1,6 +1,6 @@
 [package]
 name = "vestige-core"
-version = "6.2.3"
+version = "7.0.0"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Vestige Team"]
