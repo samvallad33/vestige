@@ -383,6 +383,13 @@ impl SpeakerNickIndex {
                 }
             }
         }
+        if targets.is_empty() {
+            return Self {
+                prefix_of: DetHashMap::default(),
+                witnessed: DetHashMap::default(),
+                lower_attested,
+            };
+        }
         for text in &texts {
             for tok in surface_tokens(text) {
                 if !tok.title_case {
@@ -414,16 +421,18 @@ impl SpeakerNickIndex {
             }
         }
         let mut witnessed: DetHashMap<String, DetHashSet<String>> = DetHashMap::default();
-        for text in &texts {
-            for tok in surface_tokens(text) {
-                if !tok.title_case {
-                    continue;
+        if !prefix_of.is_empty() {
+            for text in &texts {
+                for tok in surface_tokens(text) {
+                    if !tok.title_case {
+                        continue;
+                    }
+                    let Some(full) = prefix_of.get(&tok.lower) else { continue };
+                    if tok.sentence_initial && lower_attested.contains(&tok.lower) {
+                        continue;
+                    }
+                    witnessed.entry(full.clone()).or_default().insert(tok.lower);
                 }
-                let Some(full) = prefix_of.get(&tok.lower) else { continue };
-                if tok.sentence_initial && lower_attested.contains(&tok.lower) {
-                    continue;
-                }
-                witnessed.entry(full.clone()).or_default().insert(tok.lower);
             }
         }
         Self { prefix_of, witnessed, lower_attested }
@@ -450,6 +459,9 @@ impl SpeakerNickIndex {
 
     pub(in crate::retrieval) fn bindings_in(&self, text: &str) -> DetHashMap<String, String> {
         let mut out = DetHashMap::default();
+        if self.prefix_of.is_empty() {
+            return out;
+        }
         for tok in surface_tokens(text) {
             if let Some(full) = self.bind_token(&tok, tok.sentence_initial) {
                 out.insert(tok.lower, full.to_string());

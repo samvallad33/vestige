@@ -48,6 +48,18 @@ fn graph() -> &'static Graph {
 /// `(term, integer_weight)` for `word` (where 100 = raw ConceptNet weight 1.0).
 /// Zero floats; deterministic ordering.
 pub fn two_hop_neighbors(word: &str, max_out: usize) -> Vec<(&'static str, u16)> {
+    type TwoHopKey = (String, usize);
+    type TwoHopVal = Vec<(&'static str, u16)>;
+    thread_local! {
+        static CACHE: std::cell::RefCell<HashMap<TwoHopKey, TwoHopVal>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+    if let Some(hit) = CACHE.with(|c| {
+        let map = c.borrow();
+        map.get(&(word.to_string(), max_out)).cloned()
+    }) {
+        return hit;
+    }
     let g = graph();
     let mut scores: HashMap<&'static str, u16> = HashMap::new();
 
@@ -83,6 +95,13 @@ pub fn two_hop_neighbors(word: &str, max_out: usize) -> Vec<(&'static str, u16)>
     let mut out: Vec<(&'static str, u16)> = scores.into_iter().collect();
     out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
     out.truncate(max_out);
+    CACHE.with(|c| {
+        let mut map = c.borrow_mut();
+        if map.len() >= 32_768 {
+            map.clear();
+        }
+        map.insert((word.to_string(), max_out), out.clone());
+    });
     out
 }
 
