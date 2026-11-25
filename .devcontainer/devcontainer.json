@@ -1,0 +1,12 @@
+{
+  "name": "Vestige Live Causal Proof Sandbox",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-1-bookworm",
+  "postCreateCommand": "cargo build --release -p vestige-mcp --bin vestige && ln -sf \"$PWD/target/release/vestige\" /usr/local/bin/vestige && vestige redteam && vestige card --repo . --since 7d",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer"
+      ]
+    }
+  }
+}

@@ -105,100 +105,104 @@ pub(in crate::retrieval) fn build_bridge_postings_and_ppmi(
     let n_turns_u32 = (t_own_stats.n as u32).max(1);
     let max_rare_df = (n_turns_u32 / 8).max(4);
     let mut bridge_vocab = Vocab::default();
-    let mut turn_bridge_sets: Vec<DetHashSet<u32>> = vec![DetHashSet::default(); turns.len()];
     let bridge_df_cap = max_rare_df.min(24);
+    let mut cid_to_bridge: DetHashMap<u32, Vec<u32>> = DetHashMap::default();
     if p.enable_hypernyms {
-        static BRIDGE_LEMMA_CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<(String, bool), Vec<String>>>> = OnceLock::new();
-        let cache = BRIDGE_LEMMA_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-        let mut cid_to_bridge: DetHashMap<u32, Vec<u32>> = DetHashMap::default();
-        for (&cid, &df) in &t_own_stats.df {
-            if df == 0 || df > bridge_df_cap {
-                continue;
+        thread_local! {
+            static BRIDGE_LEMMA_CACHE: std::cell::RefCell<DetHashMap<(String, bool), Vec<String>>> =
+                std::cell::RefCell::new(DetHashMap::default());
+        }
+        BRIDGE_LEMMA_CACHE.with(|cell| {
+            let mut cache = cell.borrow_mut();
+            if cache.len() >= 65_536 {
+                cache.clear();
             }
-            let word = &vocab.names[cid as usize];
-            if word.starts_with('\u{1}') {
-                continue;
-            }
-            let cached_strs = cache
-                .lock()
-                .ok()
-                .and_then(|g| g.get(&(word.clone(), p.enable_stemming)).cloned());
-            let strs: Vec<String> = if let Some(hit) = cached_strs {
-                hit
-            } else {
-                let mut acc: Vec<String> = Vec::new();
-                let mut push_str = |s: &str| {
-                    if !acc.iter().any(|x| x == s) {
-                        acc.push(s.to_string());
-                    }
-                    if p.enable_stemming {
-                        let st = stem_term(&stem(s));
-                        if !acc.iter().any(|x| x == &st) {
-                            acc.push(st);
+            for (&cid, &df) in &t_own_stats.df {
+                if df == 0 || df > bridge_df_cap {
+                    continue;
+                }
+                let word = &vocab.names[cid as usize];
+                if word.starts_with('\u{1}') {
+                    continue;
+                }
+                let key = (word.clone(), p.enable_stemming);
+                if !cache.contains_key(&key) {
+                    let mut acc: Vec<String> = Vec::new();
+                    let mut seen: DetHashSet<String> = DetHashSet::default();
+                    let mut push_str = |s: &str| {
+                        if seen.insert(s.to_string()) {
+                            acc.push(s.to_string());
                         }
-                    }
-                };
-                for lemma in wordnet_lemmas_with_morph(word) {
-                    push_str(lemma);
-                }
-                // Hovy 3-hop upward-only `@` hypernyms across surface + noun-singular forms
-                // (never bare suffix stems like "landed"->"land" which conflate verbs with nouns!).
-                let mut hyp_forms: Vec<String> = vec![word.clone()];
-                if let Some(sing) = word.strip_suffix("ies") {
-                    if sing.len() >= 3 {
-                        hyp_forms.push(format!("{sing}y"));
-                    }
-                } else if !word.ends_with("ss")
-                    && !word.ends_with("us")
-                    && !word.ends_with("is")
-                    && let Some(sing) = word.strip_suffix("es").or_else(|| word.strip_suffix('s'))
-                    && sing.len() >= 4
-                {
-                    hyp_forms.push(sing.to_string());
-                }
-                for form in &hyp_forms {
-                    for lemma in crate::wordnet::upward_hypernyms(form, 3) {
+                        if p.enable_stemming {
+                            let st = stem_term(&stem(s));
+                            if seen.insert(st.clone()) {
+                                acc.push(st);
+                            }
+                        }
+                    };
+                    for lemma in wordnet_lemmas_with_morph(word) {
                         push_str(lemma);
                     }
+                    // Hovy 3-hop upward-only `@` hypernyms across surface + noun-singular forms
+                    // (never bare suffix stems like "landed"->"land" which conflate verbs with nouns!).
+                    let mut hyp_forms: Vec<String> = vec![word.clone()];
+                    if let Some(sing) = word.strip_suffix("ies") {
+                        if sing.len() >= 3 {
+                            hyp_forms.push(format!("{sing}y"));
+                        }
+                    } else if !word.ends_with("ss")
+                        && !word.ends_with("us")
+                        && !word.ends_with("is")
+                        && let Some(sing) = word.strip_suffix("es").or_else(|| word.strip_suffix('s'))
+                        && sing.len() >= 4
+                    {
+                        hyp_forms.push(sing.to_string());
+                    }
+                    for form in &hyp_forms {
+                        for lemma in crate::wordnet::upward_hypernyms(form, 3) {
+                            push_str(lemma);
+                        }
+                    }
+                    // #817: sha256-pinned ConceptNet 5.7.0 (AtLocation, UsedFor, CapableOf, HasA)
+                    for (cn_lemma, _w) in crate::conceptnet::two_hop_neighbors(word, 4) {
+                        push_str(cn_lemma);
+                    }
+                    cache.insert(key.clone(), acc);
                 }
-                // #817: sha256-pinned ConceptNet 5.7.0 (AtLocation, UsedFor, CapableOf, HasA)
-                for (cn_lemma, _w) in crate::conceptnet::two_hop_neighbors(word, 4) {
-                    push_str(cn_lemma);
-                }
-                if let Ok(mut g) = cache.lock() {
-                    if g.len() < 65_536 {
-                        g.insert((word.clone(), p.enable_stemming), acc.clone());
+                if let Some(strs) = cache.get(&key) {
+                    if !strs.is_empty() {
+                        let mut bids = Vec::with_capacity(strs.len());
+                        for s in strs {
+                            bids.push(bridge_vocab.intern(s));
+                        }
+                        cid_to_bridge.insert(cid, bids);
                     }
                 }
-                acc
-            };
-            let mut bids = Vec::with_capacity(strs.len());
-            for s in &strs {
-                let lid = bridge_vocab.intern(s);
-                if !bids.contains(&lid) {
-                    bids.push(lid);
-                }
             }
-            if !bids.is_empty() {
-                cid_to_bridge.insert(cid, bids);
-            }
-        }
-        for ti in 0..turns.len() {
-            if turns[ti].is_backchannel {
-                continue;
-            }
-            for &cid in &turns[ti].content {
-                if let Some(bids) = cid_to_bridge.get(&cid) {
-                    turn_bridge_sets[ti].extend(bids.iter().copied());
-                }
-            }
-        }
+        });
     }
     let mut turn_bridge_postings = vec![Vec::new(); bridge_vocab.names.len()];
-    for (ti, bset) in turn_bridge_sets.iter().enumerate() {
-        for &bid in bset {
-            if let Some(list) = turn_bridge_postings.get_mut(bid as usize) {
-                list.push(ti as u32);
+    if !cid_to_bridge.is_empty() {
+        let mut scratch: Vec<u32> = Vec::with_capacity(256);
+        for (ti, tr) in turns.iter().enumerate() {
+            if tr.is_backchannel {
+                continue;
+            }
+            scratch.clear();
+            for &cid in &tr.content {
+                if let Some(bids) = cid_to_bridge.get(&cid) {
+                    scratch.extend_from_slice(bids);
+                }
+            }
+            if scratch.is_empty() {
+                continue;
+            }
+            scratch.sort_unstable();
+            scratch.dedup();
+            for &bid in &scratch {
+                if let Some(list) = turn_bridge_postings.get_mut(bid as usize) {
+                    list.push(ti as u32);
+                }
             }
         }
     }

@@ -39,9 +39,10 @@ pub(in crate::retrieval) fn build_rsb_and_supersession_edges(
             }
         }
     }
+    let max_handle_deg = ((ns_count / 12).clamp(6, 36)) as u32;
     for (_, list) in handle_postings {
         let deg = list.len() as u32;
-        if !(2..=6).contains(&deg) {
+        if !(2..=max_handle_deg).contains(&deg) {
             continue;
         }
         for idx in 1..list.len() {
@@ -76,9 +77,10 @@ pub(in crate::retrieval) fn build_rsb_and_supersession_edges(
             }
         }
     }
+    let max_ent_deg = (ns_count / 10).clamp(8, 48);
     for (_, mut list) in ent_user_postings {
         list.dedup();
-        if !(2..=8).contains(&list.len()) {
+        if !(2..=max_ent_deg).contains(&list.len()) {
             continue;
         }
         for idx in 1..list.len() {
@@ -146,9 +148,10 @@ pub(in crate::retrieval) fn build_rsb_and_supersession_edges(
             role_obj_postings.entry(rid).or_default().push(ti);
         }
     }
+    let max_role_deg = (ns_count / 12).clamp(6, 36);
     for (_, mut list) in role_obj_postings {
         list.dedup();
-        if !(2..=6).contains(&list.len()) {
+        if !(2..=max_role_deg).contains(&list.len()) {
             continue;
         }
         for idx in 1..list.len() {

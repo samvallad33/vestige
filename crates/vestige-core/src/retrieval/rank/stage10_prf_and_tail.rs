@@ -1,4 +1,4 @@
-//! Stage 10: Moffat RBP, Rocchio PRF, QLD/BM25L+DFR, PSL/ILP tail closure, and protected bridge tail.
+//! Stage 10: QLD/BM25L+DFR long-document promotion and protected bridge tail admission.
 
 use crate::retrieval::*;
 use crate::retrieval::context::{bag_to_q8_into, RankCtx};
@@ -8,7 +8,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let p = ctx.p;
     let k = ctx.k;
     let nt = ctx.nt;
-    let ns = ctx.ns;
     let plan = &ctx.plan;
     let eff_it = &ctx.eff_it;
     let pref_on = ctx.pref_on;
@@ -20,38 +19,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let t_bridge_hits = &ctx.t_bridge_hits;
     let mut final_turn_indices = std::mem::take(&mut ctx.final_turn_indices);
 
-    // #829 Moffat Rank-Biased Precision (p = 13/16 in Q16.16) tail slot reallocation (`5..k`, keeping `0..5` sealed),
-    // powered by #821 QLD, #823/#825 BM25L+DFR, and #828 Rocchio PRF turn & session signals.
-    if k >= 6 && !eff_it.is_event_sequence && !pref_on && !eff_it.task_under_rules {
-        let prf_seeds: Vec<usize> = final_turn_indices
-            .iter()
-            .take(4)
-            .copied()
-            .filter(|&ti| !ix.turns[ti].is_question && !ix.turns[ti].is_backchannel)
-            .collect();
-        let prf_negs: Vec<usize> = final_turn_indices.iter().skip(5).copied().collect();
-        let prf_centroid = crate::retrieval::lexical::rocchio::build_rocchio_centroid_q16(ix, &plan, &prf_seeds, &prf_negs);
+    // #823/#825 Unleash BM25L+DFR + QLD on long multi-paragraph monologue documents (> 3 * avgdl)
+    // penalized by BM25 length normalization.
+    if k >= 6 && is_monologue_corpus && !eff_it.is_event_sequence && !pref_on && !eff_it.task_under_rules {
         let mut qld_terms_buf: Vec<crate::retrieval::lexical::qld::QldTermInput> = Vec::with_capacity(plan.terms.len());
-        let s_rocchio_q16: Vec<u64> = (0..ns)
-            .map(|si| {
-                if ns <= 128 || ctx.s_score[si] > 0.0 || ctx.bridge_boost[si] > 0.0 {
-                    crate::retrieval::lexical::rocchio::score_session_rocchio_q16(ix, si, &prf_centroid)
-                } else {
-                    0
-                }
-            })
-            .collect();
-        let t_scene_q16: Vec<u64> = (0..nt)
-            .map(|ti| {
-                let v = t_scene[ti];
-                if v <= 0.0 {
-                    return 0;
-                }
-                let base_q16 = (v * 65536.0).min(u64::MAX as f32) as u64;
-                let s_r = s_rocchio_q16[ix.turns[ti].session] >> 5;
-                base_q16.saturating_add(s_r)
-            })
-            .collect();
         let avg_own_dl = (ix.t_own_stats.avg[0] + ix.t_own_stats.avg[1]).max(16.0);
         let eval_bm25l_turn: Vec<bool> = if nt <= 128 {
             vec![true; nt]
@@ -69,13 +40,11 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             for &(_, ti) in ranked_own.iter().take(128) {
                 flags[ti] = true;
             }
-            if is_monologue_corpus {
-                for ti in 0..nt {
-                    if !flags[ti] && t_own[ti] > 0.0 && t_exact_mask[ti].count_ones() >= 2 {
-                        let dl_ti = ix.turn_own_bags[ti].len[0] + ix.turn_own_bags[ti].len[1];
-                        if dl_ti > 3.0 * avg_own_dl {
-                            flags[ti] = true;
-                        }
+            for ti in 0..nt {
+                if !flags[ti] && t_own[ti] > 0.0 && t_exact_mask[ti].count_ones() >= 2 {
+                    let dl_ti = ix.turn_own_bags[ti].len[0] + ix.turn_own_bags[ti].len[1];
+                    if dl_ti > 3.0 * avg_own_dl {
+                        flags[ti] = true;
                     }
                 }
             }
@@ -83,36 +52,26 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         };
         let mut best_long_bm25l: Option<(usize, u64)> = None;
         let mut bm25l_raw_vec: Vec<u64> = vec![0; nt];
-        let t_own_q16: Vec<u64> = (0..nt)
-            .map(|ti| {
-                let v = t_own[ti];
-                if v <= 0.0 {
-                    return 0;
-                }
-                let base_q16 = (v * 65536.0).min(u64::MAX as f32) as u64;
-                if !eval_bm25l_turn[ti] {
-                    return base_q16;
-                }
-                let q_bag = bag_to_q8_into(&ix.turn_own_bags[ti], &plan, &ix.t_own_stats, &mut qld_terms_buf);
-                let bm25l_q16 = crate::retrieval::lexical::bm25l_dfr::bm25l_dfr_score_q16(&q_bag, &qld_terms_buf);
-                let qld_q16 = crate::retrieval::lexical::qld::qld_score_q16(&q_bag, &qld_terms_buf, crate::retrieval::lexical::qld::MU_TURN_Q8);
-                let combined_l = bm25l_q16.saturating_add(qld_q16);
-                bm25l_raw_vec[ti] = combined_l;
-                let dl_ti = ix.turn_own_bags[ti].len[0] + ix.turn_own_bags[ti].len[1];
-                if is_monologue_corpus
-                    && dl_ti > 3.0 * avg_own_dl
-                    && !turn_is_superseded(ix, ti)
-                    && !ix.turns[ti].is_pure_info_question
-                    && t_exact_mask[ti].count_ones() >= 2
-                    && !final_turn_indices[..5.min(final_turn_indices.len())].contains(&ti)
-                    && best_long_bm25l.map_or(true, |(_, bs)| combined_l > bs)
-                {
-                    best_long_bm25l = Some((ti, combined_l));
-                }
-                base_q16.saturating_add(combined_l >> 6)
-            })
-            .collect();
-        // #823/#825 Unleash BM25L+DFR on long multi-paragraph documents (> 3 * avgdl) penalized by BM25 length norm:
+        for ti in 0..nt {
+            if t_own[ti] <= 0.0 || !eval_bm25l_turn[ti] {
+                continue;
+            }
+            let q_bag = bag_to_q8_into(&ix.turn_own_bags[ti], plan, &ix.t_own_stats, &mut qld_terms_buf);
+            let bm25l_q16 = crate::retrieval::lexical::bm25l_dfr::bm25l_dfr_score_q16(&q_bag, &qld_terms_buf);
+            let qld_q16 = crate::retrieval::lexical::qld::qld_score_q16(&q_bag, &qld_terms_buf, crate::retrieval::lexical::qld::MU_TURN_Q8);
+            let combined_l = bm25l_q16.saturating_add(qld_q16);
+            bm25l_raw_vec[ti] = combined_l;
+            let dl_ti = ix.turn_own_bags[ti].len[0] + ix.turn_own_bags[ti].len[1];
+            if dl_ti > 3.0 * avg_own_dl
+                && !turn_is_superseded(ix, ti)
+                && !ix.turns[ti].is_pure_info_question
+                && t_exact_mask[ti].count_ones() >= 2
+                && !final_turn_indices[..5.min(final_turn_indices.len())].contains(&ti)
+                && best_long_bm25l.map_or(true, |(_, bs)| combined_l > bs)
+            {
+                best_long_bm25l = Some((ti, combined_l));
+            }
+        }
         if let Some((long_ti, long_sc)) = best_long_bm25l {
             if final_turn_indices.len() >= 5 && long_sc > 0 {
                 let h0 = final_turn_indices[0];
@@ -147,23 +106,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 }
             }
         }
-        crate::retrieval::lexical::rbp::apply_rbp_tail_allocation(
-            ix,
-            &prf_centroid,
-            &t_scene_q16,
-            &t_own_q16,
-            &mut final_turn_indices,
-            k,
-        );
-        // #804 Getoor PSL Hinge + #803 Roth 0-1 ILP multi-hop tail closure (`5..k`, keeping `0..5` sealed)
-        crate::retrieval::fusion::psl_ilp::apply_psl_ilp_tail_closure(
-            ix,
-            &plan,
-            &t_scene_q16,
-            &t_exact_mask,
-            &mut final_turn_indices,
-            k,
-        );
     }
 
     // Post-Gatekeeper Sealed-Head Bridge Tail Admission:

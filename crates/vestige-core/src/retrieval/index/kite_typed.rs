@@ -28,76 +28,107 @@ pub(in crate::retrieval) fn build_kite_typed_index(turns: &[TurnIx]) -> KiteType
 
     // Cap per-conversation indexing budget for very large multi-thousand-turn corpora while
     // keeping full coverage on dialogue corpora (LoCoMo ~400-700 turns, BEAM ~300-600 turns/conv).
-    let max_words_per_turn = if turns.len() > 1500 { 8usize } else { 14usize };
+    let max_words_per_turn = if turns.len() > 8_000 {
+        22usize
+    } else if turns.len() > 1_500 {
+        28usize
+    } else {
+        36usize
+    };
 
-    for (ti, tr) in turns.iter().enumerate() {
-        if tr.is_backchannel || tr.is_question || tr.is_standing_policy {
-            continue;
-        }
-        // Only index substantive declarative prose (`field == 0` user or named speaker turns).
-        if tr.field != 0 {
-            continue;
-        }
-        let mut seen_words: DetHashSet<String> = DetHashSet::default();
-        let mut seen_syns: DetHashSet<u32> = DetHashSet::default();
-        let mut seen_concepts: DetHashSet<String> = DetHashSet::default();
+    type KiteWordEntry = (Vec<(u32, u16)>, Vec<(String, u16)>);
+    thread_local! {
+        static KITE_WORD_CACHE: std::cell::RefCell<DetHashMap<String, KiteWordEntry>> =
+            std::cell::RefCell::new(DetHashMap::default());
+    }
 
-        let toks = raw_tokens(&tr.body_for_headers);
-        let mut indexed = 0usize;
-        for tok in toks {
-            if tok.len() < 4 || !is_content(&tok) || !seen_words.insert(tok.clone()) {
+    KITE_WORD_CACHE.with(|cell| {
+        let mut wcache = cell.borrow_mut();
+        if wcache.len() >= 49_152 {
+            wcache.clear();
+        }
+        for (ti, tr) in turns.iter().enumerate() {
+            if tr.is_backchannel || tr.is_question || tr.is_standing_policy {
                 continue;
             }
-            indexed += 1;
-            if indexed > max_words_per_turn {
-                break;
+            // Only index substantive declarative prose (`field == 0` user or named speaker turns).
+            if tr.field != 0 {
+                continue;
             }
-            // 1. Direct WordNet senses (`weight = 96`) + specific upward ancestor synsets (`desc <= 160`)
-            let senses = crate::wordnet::senses(&tok);
-            if !senses.is_empty() && senses.len() <= 8 {
-                for &syn in senses.iter().take(3) {
-                    if seen_syns.insert(syn) {
-                        synset_postings.entry(syn).or_default().push((ti, 96));
+            let mut seen_words: DetHashSet<String> = DetHashSet::default();
+            let mut seen_syns: DetHashSet<u32> = DetHashSet::default();
+            let mut seen_concepts: DetHashSet<String> = DetHashSet::default();
+
+            let toks = raw_tokens(&tr.body_for_headers);
+            let mut indexed = 0usize;
+            for tok in toks {
+                if tok.len() < 4 || !is_content(&tok) || !seen_words.insert(tok.clone()) {
+                    continue;
+                }
+                indexed += 1;
+                if indexed > max_words_per_turn {
+                    break;
+                }
+                if !wcache.contains_key(&tok) {
+                    let mut w_syns: Vec<(u32, u16)> = Vec::new();
+                    let mut w_cons: Vec<(String, u16)> = Vec::new();
+                    let mut w_seen_s: DetHashSet<u32> = DetHashSet::default();
+                    let mut w_seen_c: DetHashSet<String> = DetHashSet::default();
+                    // 1. Direct WordNet senses (`weight = 96`) + specific upward ancestor synsets (`desc <= 160`)
+                    let senses = crate::wordnet::senses(&tok);
+                    if !senses.is_empty() && senses.len() <= 8 {
+                        for &syn in senses.iter().take(3) {
+                            if w_seen_s.insert(syn) {
+                                w_syns.push((syn, 96));
+                            }
+                        }
+                        for (anc_syn, desc) in crate::wordnet::specific_ancestor_synsets(&tok, 2, 160)
+                            .into_iter()
+                            .take(6)
+                        {
+                            if w_seen_s.insert(anc_syn) {
+                                let w: u16 = if desc <= 20 {
+                                    88
+                                } else if desc <= 65 {
+                                    76
+                                } else {
+                                    62
+                                };
+                                w_syns.push((anc_syn, w));
+                            }
+                        }
                     }
-                }
-                for (anc_syn, desc) in crate::wordnet::specific_ancestor_synsets(&tok, 2, 160)
-                    .into_iter()
-                    .take(6)
-                {
-                    if seen_syns.insert(anc_syn) {
-                        let w: u16 = if desc <= 20 {
-                            88
-                        } else if desc <= 65 {
-                            76
-                        } else {
-                            62
-                        };
-                        synset_postings.entry(anc_syn).or_default().push((ti, w));
+                    // 2. Upward WordNet hypernym lemmas (1..=2 hops)
+                    for hyp in crate::wordnet::upward_hypernyms(&tok, 2).into_iter().take(6) {
+                        if hyp.len() >= 4 && hyp != tok && w_seen_c.insert(hyp.to_string()) {
+                            w_cons.push((hyp.to_string(), 74));
+                        }
                     }
+                    // 3. Wikidata CC0 upward container tokens (e.g., `bach -> composer, music`, `vivaldi -> composer`)
+                    for cont in crate::wikidata::upward_containers(&tok, 2).into_iter().take(4) {
+                        for part in cont.split_ascii_whitespace() {
+                            if part.len() >= 4 && part != tok && w_seen_c.insert(part.to_string()) {
+                                w_cons.push((part.to_string(), 80));
+                            }
+                        }
+                    }
+                    wcache.insert(tok.clone(), (w_syns, w_cons));
                 }
-            }
-            // 2. Upward WordNet hypernym lemmas (1..=2 hops)
-            for hyp in crate::wordnet::upward_hypernyms(&tok, 2).into_iter().take(6) {
-                if hyp.len() >= 4 && hyp != tok && seen_concepts.insert(hyp.to_string()) {
-                    concept_postings
-                        .entry(hyp.to_string())
-                        .or_default()
-                        .push((ti, 74));
-                }
-            }
-            // 3. Wikidata CC0 upward container tokens (e.g., `bach -> composer, music`, `vivaldi -> composer`)
-            for cont in crate::wikidata::upward_containers(&tok, 2).into_iter().take(4) {
-                for part in cont.split_ascii_whitespace() {
-                    if part.len() >= 4 && part != tok && seen_concepts.insert(part.to_string()) {
-                        concept_postings
-                            .entry(part.to_string())
-                            .or_default()
-                            .push((ti, 80));
+                if let Some((w_syns, w_cons)) = wcache.get(&tok) {
+                    for &(syn, w) in w_syns {
+                        if seen_syns.insert(syn) {
+                            synset_postings.entry(syn).or_default().push((ti, w));
+                        }
+                    }
+                    for (con, w) in w_cons {
+                        if seen_concepts.insert(con.clone()) {
+                            concept_postings.entry(con.clone()).or_default().push((ti, *w));
+                        }
                     }
                 }
             }
         }
-    }
+    });
 
     KiteTypedIndex {
         synset_postings,

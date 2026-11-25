@@ -755,6 +755,314 @@ enum Commands {
         cfg: PathBuf,
     },
 
+    /// Deterministic Pull Request Causal Audit (Chesterton's Fence + Zombie Patch-ID + optional Halpern-Pearl Ablation).
+    /// Powers the Vestige Causal Gate GitHub Action bot — works 100% locally with zero LLMs and zero cloud.
+    #[command(name = "pr-audit")]
+    PrAudit {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Base revision (e.g. pull_request.base.sha)
+        #[arg(long)]
+        base: String,
+        /// Head revision (e.g. pull_request.head.sha)
+        #[arg(long, default_value = "HEAD")]
+        head: String,
+        /// Optional deterministic test command for Halpern-Pearl hunk ablation + tautology check
+        #[arg(long)]
+        oracle: Option<String>,
+        /// Max hunks to ablate when --oracle is set
+        #[arg(long, default_value_t = 16)]
+        max_hunks: usize,
+        /// Emit GitHub-flavored Markdown Proof Card instead of JSON
+        #[arg(long)]
+        markdown: bool,
+        /// Emit SARIF 2.1.0 JSON for GitHub Code Scanning instead of raw report JSON
+        #[arg(long)]
+        sarif: bool,
+        /// Write output to file in addition to stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Also write a SARIF 2.1.0 file alongside stdout/--out (single-pass CI mode)
+        #[arg(long)]
+        sarif_out: Option<PathBuf>,
+        /// Exit with code 2 when any commit matches a previously reverted patch-id
+        #[arg(long)]
+        fail_on_zombie: bool,
+    },
+
+    /// Forward Chesterton's Fence pre-edit blame + Strata guard + Zombie Patch-ID check.
+    Fence {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Target file or file:start-end range (repeatable)
+        #[arg(long = "target", required = true)]
+        targets: Vec<String>,
+        /// Optional file containing a proposed unified diff to check for zombie patch-id matches
+        #[arg(long)]
+        diff_file: Option<PathBuf>,
+        /// Scope to query in Strata
+        #[arg(long, default_value = "user")]
+        scope: String,
+    },
+
+    /// Halpern-Pearl counterfactual hunk ablation + tautological test check in an isolated git worktree.
+    Ablate {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Commit to ablate against its parent
+        #[arg(long, default_value = "HEAD")]
+        commit: String,
+        /// Deterministic test command (must fail on commit^ and pass on commit)
+        #[arg(long)]
+        oracle: String,
+        /// Max hunks to ablate
+        #[arg(long, default_value_t = 16)]
+        max_hunks: usize,
+    },
+
+    /// Concealment, secret-pattern, and Biba high-integrity PR audit (powers Vestige Shield GitHub Bot).
+    Shield {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Base revision
+        #[arg(long)]
+        base: String,
+        /// Head revision
+        #[arg(long, default_value = "HEAD")]
+        head: String,
+        /// Emit GitHub-flavored Markdown Proof Card instead of JSON
+        #[arg(long)]
+        markdown: bool,
+        /// Emit SARIF 2.1.0 JSON for GitHub Code Scanning instead of raw report JSON
+        #[arg(long)]
+        sarif: bool,
+        /// Write output to file in addition to stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Also write a SARIF 2.1.0 file alongside stdout/--out (single-pass CI mode)
+        #[arg(long)]
+        sarif_out: Option<PathBuf>,
+        /// Exit with code 2 if any concealed Unicode or secret finding is detected
+        #[arg(long)]
+        fail_on_finding: bool,
+    },
+
+    /// BISCEPTER Q16.16 weighted-median bisect planner across good..bad (powers Vestige Bisector Bot).
+    #[command(name = "bisect-plan")]
+    BisectPlan {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Last-known-good revision
+        #[arg(long)]
+        good: String,
+        /// Failing revision
+        #[arg(long, default_value = "HEAD")]
+        bad: String,
+        /// Optional failing file path(s) for BISCEPTER anchor boost (repeatable)
+        #[arg(long = "file")]
+        files: Vec<String>,
+        /// Emit GitHub-flavored Markdown Triage Card instead of JSON
+        #[arg(long)]
+        markdown: bool,
+        /// Write output to file in addition to stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Weekly deterministic Memory Hygiene & RETRACE oscillation hotspot auditor (powers Vestige Hygiene Bot).
+    Hygiene {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Number of recent commits to scan for RETRACE oscillation hotspots
+        #[arg(long, default_value_t = 500)]
+        commits: usize,
+        /// Emit GitHub-flavored Markdown Hygiene Report instead of JSON
+        #[arg(long)]
+        markdown: bool,
+        /// Write output to file in addition to stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Mid-session Execution Lease: lock agent file scope, forbid unauthorized benchmarks,
+    /// enforce heavy-command mutexes, spin-loop circuit breakers, and instant emergency halt.
+    Lease {
+        #[command(subcommand)]
+        command: LeaseCommands,
+    },
+
+    /// Inject an instant one-shot owner steering directive (or `--halt` interrupt) into active agent hooks.
+    Steer {
+        /// Message delivered on the agent's very next mid-turn hook firing
+        message: String,
+        /// Immediately halt the agentic loop (`continue: false` + deny/block)
+        #[arg(long)]
+        halt: bool,
+        /// Optional target session id (default: all active sessions)
+        #[arg(long)]
+        session: Option<String>,
+    },
+
+    /// Render a screenshot-ready ASCII or Markdown Causal Proof Scorecard from local Strata + Reflex state.
+    Card {
+        /// Reflex ledger window (e.g. 24h, 7d, 30d)
+        #[arg(long, default_value = "7d")]
+        since: String,
+        /// Optional git repo path for counting signed `refs/notes/vestige-proof` commits
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Emit copy-pasteable GitHub/HN/X Markdown instead of ASCII box card
+        #[arg(long)]
+        markdown: bool,
+        /// Emit raw JSON metrics
+        #[arg(long)]
+        json: bool,
+        /// Write rendered card to file in addition to stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Custom Git merge driver (`merge=vestige-guard`) blocking concealed Unicode & secrets mid-merge.
+    #[command(name = "merge-driver")]
+    MergeDriver {
+        /// Common ancestor file (%O)
+        base: PathBuf,
+        /// Current branch file (%A)
+        current: PathBuf,
+        /// Incoming branch file (%B)
+        other: PathBuf,
+    },
+
+    /// Generate a BLAKE3-signed `.undo.patch` reverse diff for 3-second `git apply` incident recovery.
+    #[command(name = "undo-patch")]
+    UndoPatch {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Broken commit to invert
+        #[arg(long, default_value = "HEAD")]
+        commit: String,
+        /// Write patch to file in addition to stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Generate a GitHub-style RETRACE Code Churn Heatmap SVG for `CONTRIBUTING.md`.
+    #[command(name = "churn-map")]
+    ChurnMap {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Number of recent commits to scan
+        #[arg(long, default_value_t = 500)]
+        commits: usize,
+        /// Write SVG to file in addition to stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Append a `Vestige-Ablation: before->after (-pct%)` trailer to a commit message file.
+    Trailer {
+        /// Path to `.git/COMMIT_EDITMSG`
+        #[arg(long)]
+        msg_file: PathBuf,
+        /// Diff lines before ablation
+        #[arg(long)]
+        before: usize,
+        /// Necessary lines after ablation
+        #[arg(long)]
+        after: usize,
+    },
+
+    /// Compute the Zero-Slop Streak of consecutive clean commits and Shields.io badge JSON.
+    Streak {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Max commits to walk from HEAD
+        #[arg(long, default_value_t = 200)]
+        max_commits: usize,
+        /// Emit Shields.io endpoint JSON only
+        #[arg(long)]
+        badge: bool,
+    },
+
+    /// Generate a reviewer-friendly PR description separating Necessary Core Changes from boilerplate.
+    #[command(name = "pr-body")]
+    PrBody {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Base revision
+        #[arg(long)]
+        base: String,
+        /// Head revision
+        #[arg(long, default_value = "HEAD")]
+        head: String,
+        /// Optional JSON output from `vestige ablate`
+        #[arg(long)]
+        ablation_json: Option<PathBuf>,
+        /// Write Markdown to file in addition to stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Scan `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, and `.cursor/rules/` for dead paths and Unicode rot.
+    Doctor {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Scan instruction files for context rot and dead file references
+        #[arg(long)]
+        context_rot: bool,
+    },
+
+    /// Run the 50-payload deterministic Unicode Smuggling Canary benchmark suite (50/50 target).
+    Redteam,
+
+    /// Export a deterministic EU AI Act (Art. 12/14) or SOC 2 (CC8.1) audit annex from local Strata state.
+    Compliance {
+        /// Compliance standard (`eu-ai-act` or `soc2`)
+        #[arg(long, default_value = "eu-ai-act")]
+        standard: String,
+        /// Optional git repo path for signed proof-note counts
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Render as Markdown instead of JSON
+        #[arg(long)]
+        markdown: bool,
+        /// Write annex to file in addition to stdout
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Scan a workspace or directory of repos for Shadow AI agent configs, Unicode smuggling, and secrets.
+    #[command(name = "audit-shadow")]
+    AuditShadow {
+        /// Workspace or organization repo directory to scan
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
+
+    /// Cleanly remove Vestige git hooks, git aliases, merge-driver entries, and active lease state in <10ms.
+    Uninstall {
+        /// Remove all Vestige hooks, git aliases, `.gitattributes` entries, and lease files
+        #[arg(long)]
+        clean: bool,
+        /// Optional git repository path to clean
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Preview what would be removed without modifying files
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Install Cognitive Sandwich companion files.
     Sandwich {
         #[command(subcommand)]
@@ -924,6 +1232,50 @@ enum ProvenanceCommands {
         anchor: String,
     },
     /// Quarantined receipts, release frames, and the mesh digest.
+    Status,
+}
+
+#[derive(Subcommand)]
+enum LeaseCommands {
+    /// Arm or update the active Execution Lease governing Reflex PreToolUse / PostToolBatch hooks.
+    Set {
+        /// Restrict edits to files matching these path prefixes (repeatable)
+        #[arg(long = "allow-path")]
+        allow_paths: Vec<String>,
+        /// Forbid edits to protected/disjoint paths (repeatable)
+        #[arg(long = "deny-path")]
+        deny_paths: Vec<String>,
+        /// Forbid shell commands containing these substrings (e.g. `retrieval_bench`, repeatable)
+        #[arg(long = "deny-cmd")]
+        deny_cmds: Vec<String>,
+        /// Enforce exclusive cross-session mutex on heavy shell commands (repeatable)
+        #[arg(long = "mutex-cmd")]
+        mutex_cmds: Vec<String>,
+        /// Maximum tool calls allowed per turn before halting loop
+        #[arg(long)]
+        max_tools: Option<u32>,
+        /// Maximum consecutive identical failures allowed without an intervening edit
+        #[arg(long)]
+        max_repeat_fail: Option<u32>,
+        /// Optional lease TTL in minutes
+        #[arg(long)]
+        ttl_mins: Option<i64>,
+        /// Optional session id filter (default: all active sessions)
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Emergency brake: immediately deny the next tool call and halt the loop (`continue: false`).
+    Halt {
+        /// Reason shown to the halted agent and owner
+        #[arg(long, default_value = "Owner triggered emergency halt")]
+        reason: String,
+        /// Optional session id filter (default: all active sessions)
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Disarm the active Execution Lease and release any held command mutex.
+    Clear,
+    /// Show the current Execution Lease, held command mutex, and pending owner steers.
     Status,
 }
 
@@ -1195,6 +1547,460 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::ProveChild { mode, cfg } => {
             std::process::exit(vestige_mcp::walk_verify::child(&mode, &cfg))
+        }
+        Commands::PrAudit {
+            repo,
+            base,
+            head,
+            oracle,
+            max_hunks,
+            markdown,
+            sarif,
+            out,
+            sarif_out,
+            fail_on_zombie,
+        } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let maybe_storage = open_storage().ok();
+            let report = vestige_mcp::tools::causal_frontier::run_pr_audit(
+                maybe_storage.as_deref(),
+                &vestige_mcp::tools::causal_frontier::PrAuditConfig {
+                    repo: repo_abs,
+                    base,
+                    head,
+                    oracle_cmd: oracle,
+                    max_hunks,
+                },
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            if let Some(ref sp) = sarif_out {
+                let sarif_doc = vestige_mcp::tools::causal_frontier::render_pr_audit_sarif(&report);
+                std::fs::write(sp, serde_json::to_string_pretty(&sarif_doc)?)?;
+            }
+            let rendered = if sarif {
+                let sarif_doc = vestige_mcp::tools::causal_frontier::render_pr_audit_sarif(&report);
+                serde_json::to_string_pretty(&sarif_doc)?
+            } else if markdown {
+                vestige_mcp::tools::causal_frontier::render_pr_audit_markdown(&report)
+            } else {
+                serde_json::to_string_pretty(&report)?
+            };
+            if let Some(path) = out {
+                std::fs::write(&path, &rendered)?;
+            }
+            println!("{rendered}");
+            if fail_on_zombie && report.blocked_by_zombie {
+                std::process::exit(2);
+            }
+            Ok(())
+        }
+        Commands::Fence {
+            repo,
+            targets,
+            diff_file,
+            scope,
+        } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let proposed_diff = match diff_file {
+                Some(p) => Some(std::fs::read_to_string(p)?),
+                None => None,
+            };
+            let storage = open_storage()?;
+            let mut payload = serde_json::json!({
+                "repoPath": repo_abs.display().to_string(),
+                "targets": targets,
+                "scope": scope,
+            });
+            if let Some(d) = proposed_diff {
+                payload["proposed_diff"] = serde_json::json!(d);
+            }
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let out = rt
+                .block_on(vestige_mcp::tools::causal_frontier::execute_fence(
+                    &storage,
+                    Some(payload),
+                ))
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            if out["blocked_by_zombie"] == serde_json::json!(true) {
+                std::process::exit(2);
+            }
+            Ok(())
+        }
+        Commands::Ablate {
+            repo,
+            commit,
+            oracle,
+            max_hunks,
+        } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let out = rt
+                .block_on(vestige_mcp::tools::causal_frontier::execute_ablate(Some(
+                    serde_json::json!({
+                        "repoPath": repo_abs.display().to_string(),
+                        "commit": commit,
+                        "oracle_cmd": oracle,
+                        "max_hunks": max_hunks,
+                    }),
+                )))
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            if out["status"] != serde_json::json!("completed") {
+                std::process::exit(2);
+            }
+            Ok(())
+        }
+        Commands::Shield {
+            repo,
+            base,
+            head,
+            markdown,
+            sarif,
+            out,
+            sarif_out,
+            fail_on_finding,
+        } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let report =
+                vestige_mcp::tools::bot_fleet::run_shield_audit(&repo_abs, &base, &head)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            if let Some(ref sp) = sarif_out {
+                let sarif_doc = vestige_mcp::tools::bot_fleet::render_shield_sarif(&report);
+                std::fs::write(sp, serde_json::to_string_pretty(&sarif_doc)?)?;
+            }
+            let rendered = if sarif {
+                let sarif_doc = vestige_mcp::tools::bot_fleet::render_shield_sarif(&report);
+                serde_json::to_string_pretty(&sarif_doc)?
+            } else if markdown {
+                vestige_mcp::tools::bot_fleet::render_shield_markdown(&report)
+            } else {
+                serde_json::to_string_pretty(&report)?
+            };
+            if let Some(path) = out {
+                std::fs::write(&path, &rendered)?;
+            }
+            println!("{rendered}");
+            if fail_on_finding && report.blocked {
+                std::process::exit(2);
+            }
+            Ok(())
+        }
+        Commands::BisectPlan {
+            repo,
+            good,
+            bad,
+            files,
+            markdown,
+            out,
+        } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let report =
+                vestige_mcp::tools::bot_fleet::run_bisect_plan(&repo_abs, &good, &bad, &files)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            let rendered = if markdown {
+                vestige_mcp::tools::bot_fleet::render_bisect_plan_markdown(&report)
+            } else {
+                serde_json::to_string_pretty(&report)?
+            };
+            if let Some(path) = out {
+                std::fs::write(&path, &rendered)?;
+            }
+            println!("{rendered}");
+            Ok(())
+        }
+        Commands::Hygiene {
+            repo,
+            commits,
+            markdown,
+            out,
+        } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let report = vestige_mcp::tools::bot_fleet::run_hygiene_audit(&repo_abs, commits)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let rendered = if markdown {
+                vestige_mcp::tools::bot_fleet::render_hygiene_markdown(&report)
+            } else {
+                serde_json::to_string_pretty(&report)?
+            };
+            if let Some(path) = out {
+                std::fs::write(&path, &rendered)?;
+            }
+            println!("{rendered}");
+            Ok(())
+        }
+        Commands::Lease { command } => {
+            let data_dir = cli_data_dir()?;
+            match command {
+                LeaseCommands::Set {
+                    allow_paths,
+                    deny_paths,
+                    deny_cmds,
+                    mutex_cmds,
+                    max_tools,
+                    max_repeat_fail,
+                    ttl_mins,
+                    session,
+                } => {
+                    let now = Utc::now().timestamp();
+                    let lease = vestige_mcp::tools::reflex::lease::ExecutionLease {
+                        id: format!("lease-{now}"),
+                        active: true,
+                        halted: false,
+                        halt_reason: None,
+                        session_filter: session,
+                        allowed_paths: allow_paths,
+                        denied_paths: deny_paths,
+                        denied_command_patterns: deny_cmds,
+                        mutex_command_patterns: mutex_cmds,
+                        mutex_ttl_secs: None,
+                        max_tool_calls_per_turn: max_tools,
+                        max_identical_failures: max_repeat_fail,
+                        expires_at: ttl_mins.filter(|&m| m > 0).map(|m| now + m * 60),
+                        updated_at: now,
+                    };
+                    vestige_mcp::tools::reflex::lease::save_lease(&data_dir, &lease)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                    println!("{}", serde_json::to_string_pretty(&lease)?);
+                    Ok(())
+                }
+                LeaseCommands::Halt { reason, session } => {
+                    let lease = vestige_mcp::tools::reflex::lease::set_emergency_halt(
+                        &data_dir, &reason, session,
+                    )
+                    .map_err(|e| anyhow::anyhow!(e))?;
+                    println!("{}", serde_json::to_string_pretty(&lease)?);
+                    Ok(())
+                }
+                LeaseCommands::Clear => {
+                    vestige_mcp::tools::reflex::lease::clear_lease(&data_dir)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                    println!(
+                        "{}",
+                        serde_json::json!({ "status": "cleared", "data_dir": data_dir })
+                    );
+                    Ok(())
+                }
+                LeaseCommands::Status => {
+                    let status = serde_json::json!({
+                        "lease": vestige_mcp::tools::reflex::lease::load_lease(&data_dir),
+                        "mutex": vestige_mcp::tools::reflex::lease::load_mutex(&data_dir),
+                        "steers": vestige_mcp::tools::reflex::lease::load_steer_queue(&data_dir),
+                    });
+                    println!("{}", serde_json::to_string_pretty(&status)?);
+                    Ok(())
+                }
+            }
+        }
+        Commands::Steer {
+            message,
+            halt,
+            session,
+        } => {
+            let data_dir = cli_data_dir()?;
+            let item = vestige_mcp::tools::reflex::lease::push_steer(
+                &data_dir, &message, halt, session,
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{}", serde_json::to_string_pretty(&item)?);
+            Ok(())
+        }
+        Commands::Card {
+            since,
+            repo,
+            markdown,
+            json,
+            out,
+        } => {
+            let data_dir = cli_data_dir()?;
+            let repo_abs = repo.map(|r| std::fs::canonicalize(&r).unwrap_or(r));
+            let metrics = vestige_mcp::tools::proof_card::collect_proof_card(
+                &data_dir,
+                repo_abs.as_deref(),
+                &since,
+            );
+            let rendered = if json {
+                serde_json::to_string_pretty(&metrics)?
+            } else if markdown {
+                vestige_mcp::tools::proof_card::render_proof_card_markdown(&metrics)
+            } else {
+                vestige_mcp::tools::proof_card::render_proof_card_ascii(&metrics)
+            };
+            if let Some(path) = out {
+                std::fs::write(&path, &rendered)?;
+            }
+            println!("{rendered}");
+            Ok(())
+        }
+        Commands::MergeDriver {
+            base,
+            current,
+            other,
+        } => {
+            let verdict = vestige_mcp::tools::distribution::run_vestige_merge_driver(
+                &base, &current, &other,
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            eprintln!("{}", verdict.message);
+            if !verdict.allowed {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Commands::UndoPatch { repo, commit, out } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let (patch, _digest) =
+                vestige_mcp::tools::distribution::generate_undo_patch(&repo_abs, &commit)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            if let Some(path) = out {
+                std::fs::write(&path, &patch)?;
+            }
+            println!("{patch}");
+            Ok(())
+        }
+        Commands::ChurnMap { repo, commits, out } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let report = vestige_mcp::tools::bot_fleet::run_hygiene_audit(&repo_abs, commits)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let svg = vestige_mcp::tools::distribution::render_churn_heatmap_svg(&report);
+            if let Some(path) = out {
+                std::fs::write(&path, &svg)?;
+            }
+            println!("{svg}");
+            Ok(())
+        }
+        Commands::Trailer {
+            msg_file,
+            before,
+            after,
+        } => {
+            let trailer =
+                vestige_mcp::tools::distribution::format_ablation_trailer(before, after);
+            let appended =
+                vestige_mcp::tools::distribution::append_commit_trailer(&msg_file, &trailer)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            println!(
+                "{}",
+                serde_json::json!({ "trailer": trailer, "appended": appended })
+            );
+            Ok(())
+        }
+        Commands::Streak {
+            repo,
+            max_commits,
+            badge,
+        } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let report =
+                vestige_mcp::tools::distribution::compute_zero_slop_streak(&repo_abs, max_commits)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            if badge {
+                println!("{}", serde_json::to_string_pretty(&report.shields_badge)?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            }
+            Ok(())
+        }
+        Commands::PrBody {
+            repo,
+            base,
+            head,
+            ablation_json,
+            out,
+        } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let body = vestige_mcp::tools::distribution::render_pr_body(
+                &repo_abs,
+                &base,
+                &head,
+                ablation_json.as_deref(),
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            if let Some(path) = out {
+                std::fs::write(&path, &body)?;
+            }
+            println!("{body}");
+            Ok(())
+        }
+        Commands::Doctor { repo, context_rot } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let _ = context_rot;
+            let report = vestige_mcp::tools::distribution::run_context_rot_doctor(&repo_abs);
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if report.total_concealed_unicode > 0 {
+                std::process::exit(2);
+            }
+            Ok(())
+        }
+        Commands::Redteam => {
+            let report = vestige_mcp::tools::distribution::run_unicode_redteam_suite();
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if report.missed > 0 {
+                std::process::exit(2);
+            }
+            Ok(())
+        }
+        Commands::Compliance {
+            standard,
+            repo,
+            markdown,
+            out,
+        } => {
+            let data_dir = cli_data_dir()?;
+            let repo_abs = repo.map(|r| std::fs::canonicalize(&r).unwrap_or(r));
+            let std_kind = if standard.eq_ignore_ascii_case("soc2") {
+                vestige_mcp::tools::distribution::ComplianceStandard::Soc2
+            } else {
+                vestige_mcp::tools::distribution::ComplianceStandard::EuAiAct
+            };
+            let annex = vestige_mcp::tools::distribution::generate_compliance_annex(
+                &data_dir,
+                repo_abs.as_deref(),
+                std_kind,
+            );
+            let rendered = if markdown {
+                vestige_mcp::tools::distribution::render_compliance_markdown(&annex)
+            } else {
+                serde_json::to_string_pretty(&annex)?
+            };
+            if let Some(path) = out {
+                std::fs::write(&path, &rendered)?;
+            }
+            println!("{rendered}");
+            Ok(())
+        }
+        Commands::AuditShadow { root } => {
+            let root_abs = std::fs::canonicalize(&root).unwrap_or(root);
+            let report = vestige_mcp::tools::distribution::run_shadow_ai_audit(&root_abs);
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if report.high_risk_files > 0 {
+                std::process::exit(2);
+            }
+            Ok(())
+        }
+        Commands::Uninstall {
+            clean,
+            repo,
+            dry_run,
+        } => {
+            if !clean {
+                println!("vestige uninstall: pass --clean to remove hooks, aliases, merge-driver rules, and active leases (add --dry-run to preview).");
+                return Ok(());
+            }
+            let data_dir = cli_data_dir()?;
+            let repo_abs = repo.map(|r| std::fs::canonicalize(&r).unwrap_or(r));
+            let report = vestige_mcp::tools::distribution::run_clean_uninstall(
+                &data_dir,
+                repo_abs.as_deref(),
+                dry_run,
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
         }
     }
 }
@@ -4605,6 +5411,16 @@ fn run_init(git_hooks: bool, repo: Option<PathBuf>, force: bool) -> anyhow::Resu
         .map_err(|e| anyhow::anyhow!(e))?;
     for line in lines {
         println!("{line}");
+    }
+    if let Ok(proto) = vestige_mcp::tools::distribution::install_git_protocol_wiring(&repo) {
+        println!(
+            "git protocol wired: notes_fetch={} vblame={} bisect_prove={} merge_driver={} monorepo_scopes={}",
+            proto.notes_fetch_configured,
+            proto.vblame_alias_configured,
+            proto.bisect_prove_alias_configured,
+            proto.merge_driver_configured,
+            proto.monorepo_scopes.len()
+        );
     }
     Ok(())
 }

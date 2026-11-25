@@ -80,16 +80,45 @@ pub fn schema() -> Value {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["walk", "prove"],
+                "enum": ["walk", "prove", "fence", "why_not", "ablate"],
                 "default": "walk",
-                "description": "'walk' follows recorded causal edges from explicit starts. 'prove' bundles existing Reflex test witnesses for a commit using repoPath, commit, and out; it does not execute tests or bisect."
+                "description": "'walk' follows recorded causal edges backward (enriched with diverse_causes, interaction_pairs, zombie_oscillations, trust_audit, env_drift). 'prove' bundles Reflex test witnesses. 'fence' runs forward Chesterton's Fence pre-edit blame+Strata walk and zombie patch-id tombstone check. 'why_not' proves the minimal graph obstruction explaining why expected_id was not reached. 'ablate' runs isolated-worktree Halpern-Pearl counterfactual hunk ablation + tautological test rejection."
             },
             "from_handle": {
                 "type": "string",
-                "description": "For walk: exact memory ID, or an exact handle such as commit:<sha>, to walk backward from."
+                "description": "For walk/why_not: exact memory ID, or an exact handle such as commit:<sha>."
             },
-            "commit": {"type":"string", "description":"For prove: commit/ref to bundle (default HEAD)."},
-            "repoPath": {"type":"string", "description":"For prove: absolute git checkout path."},
+            "expected_id": {
+                "type": "string",
+                "description": "For why_not: exact memory ID or handle that did not appear in the walk."
+            },
+            "targets": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "For fence: repo-relative target paths or path:start-end ranges (e.g. ['src/auth.rs:10-40']) to check BEFORE editing."
+            },
+            "proposed_diff": {
+                "type": "string",
+                "description": "For fence: optional unified diff to hash with `git patch-id --stable` against reverted/rejected commit tombstones."
+            },
+            "check_working_tree": {
+                "type": "boolean",
+                "default": true,
+                "description": "For fence: when proposed_diff is omitted, hash `git diff HEAD` against reverted/rejected tombstones."
+            },
+            "oracle_cmd": {
+                "type": "string",
+                "description": "For ablate: deterministic command that must FAIL on commit^ and PASS on commit for Halpern-Pearl hunk ablation."
+            },
+            "max_hunks": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32,
+                "default": 16,
+                "description": "For ablate: maximum hunks to counterfactually ablate."
+            },
+            "commit": {"type":"string", "description":"For prove/ablate: commit/ref (default HEAD)."},
+            "repoPath": {"type":"string", "description":"For prove/fence/ablate: absolute git checkout path."},
             "out": {"type":"string", "enum":["file","notes","both","none"], "description":"For prove: proof artifact destination; file is the default."},
             "scope": {
                 "type": "string",
@@ -243,9 +272,9 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         .and_then(|v| v.as_str())
         .unwrap_or("walk");
 
-    if !matches!(action, "walk" | "prove") {
+    if !matches!(action, "walk" | "prove" | "fence" | "why_not" | "ablate") {
         return Err(format!(
-            "unknown causal_walk action '{action}'; use walk or prove. Repository ingest_repo/verify use session action='codebase' with the native payload in params; log verification uses precedent query='verify_log'"
+            "unknown causal_walk action '{action}'; use walk, prove, fence, why_not, or ablate. Repository ingest_repo/verify use session action='codebase' with the native payload in params; log verification uses precedent query='verify_log'"
         ));
     }
 
@@ -262,7 +291,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         ] {
             if raw.get(field).is_some() {
                 return Err(format!(
-                    "unsupported causal_walk argument '{field}': this tool does not gather issues or run bisect/tests; prove bundles recorded witnesses using repoPath, commit, and out"
+                    "unsupported causal_walk argument '{field}': this tool does not gather issues or run bisect/tests; prove bundles recorded witnesses using repoPath, commit, and out (use action='ablate' with oracle_cmd for counterfactual hunk ablation)"
                 ));
             }
         }
@@ -273,6 +302,15 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         // runs blocking Git work off the async worker, and reports unwitnessed
         // or failed claims without manufacturing a VERIFIED status.
         return super::receipt::execute(storage, args).await;
+    }
+    if action == "fence" {
+        return super::causal_frontier::execute_fence(storage, args).await;
+    }
+    if action == "why_not" {
+        return super::causal_frontier::execute_why_not(storage, args).await;
+    }
+    if action == "ablate" {
+        return super::causal_frontier::execute_ablate(args).await;
     }
     if let Some(raw) = args.as_ref() {
         for field in ["repo", "repoPath", "commit", "out"] {
@@ -286,6 +324,9 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
 
     if crate::strata_memory::is_strata_backend(storage.as_ref()) {
         let mut result = recorded_backward_walk(storage, args.clone())?;
+        // Enrich backward walk with deterministic frontier analytics (diverse why-provenance,
+        // multi-commit interaction pairs, zombie oscillations, trust floor audit, env drift).
+        super::causal_frontier::enrich_walk_response(storage.as_ref(), &mut result);
         // Attach forgotten lessons if any lesson retrievability is low (< 0.5)
         if let Ok(forgotten) = super::forgotten_lesson::execute(storage, args).await
             && let Some(res_obj) = result.as_object_mut()
@@ -1498,6 +1539,7 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         }
         text
     });
+    let ingest_hints = build_ingest_hints(&walk, scope);
     json!({
         "tool": "causal_walk",
         "status": "completed",
@@ -1520,11 +1562,51 @@ fn walk_payload(storage: &Arc<Storage>, scope: &str, walk: WalkOut) -> Value {
         "ranking": ranking,
         "not_followed": not_followed,
         "needs_report": walk.needs_report,
+        "ingest_hints": ingest_hints,
         "upstreamSkipped": walk.upstream_note,
         "ancestrySkipped": walk.ancestry_note,
         "range": walk.range,
         "note": "Backward BFS over recorded causal edges only, from every start node and from file or package anchors a stack_frame or failing_test resolved. From a memory to what it is derived_from, along corrects (a git revert to the commit it names, or a lesson to the failure), and to the records that are evidence_of it, that it closed, or that touched it. A path follows lineage freely and at most one touched edge; not_followed counts the rest. When a frame, package anchor, or failure revision resolved, rank is structural (reverted after the failure, blame of the line, hunk, hop, edge kind). Otherwise rank is depth, then exact identities shared with the start. A node_id on any start point names the recorded symptom.",
     })
+}
+
+/// Actionable ingestion hints emitted ONLY when a recorded walk hit a graph gap
+/// (unresolved file anchor, memories trapped behind the 1-`touched`-edge cap, or
+/// zero upstream lineage edges). Never alters ranking or invents edges.
+fn build_ingest_hints(walk: &WalkOut, scope: &str) -> Option<Vec<Value>> {
+    let mut hints = Vec::new();
+    let unresolved_files: Vec<&str> = walk
+        .rows
+        .iter()
+        .filter(|row| {
+            matches!(row.kind, "stack_frame" | "failing_test") && row.status != "resolved"
+        })
+        .filter_map(|row| row.locator.as_ref().map(|loc| loc.path.as_str()))
+        .collect();
+    if !unresolved_files.is_empty() {
+        hints.push(json!({
+            "code": "missing_file_anchor",
+            "paths": unresolved_files,
+            "action": format!(
+                "Run session(action='codebase', params={{'action':'ingest_repo','repo_path':'<repo>','scope':'{scope}'}}) or save memories with files=[...] so stack_frame/failing_test resolves to exact file: anchors."
+            ),
+        }));
+    }
+    if walk.not_followed.edges > 0 {
+        hints.push(json!({
+            "code": "touched_edge_cap",
+            "blocked_edges": walk.not_followed.edges,
+            "blocked_memories": walk.not_followed.memories,
+            "action": "Memories stopped behind the 1-touched-edge cap. Pass repo_path + explicit links=[{'kind':'derived_from'|'evidence_of'|'closes','to':'<id>'}] on remember(action='save') so causal_walk traverses full lineage depth.",
+        }));
+    }
+    if walk.causes.is_empty() && walk.needs_report.is_none() {
+        hints.push(json!({
+            "code": "no_upstream_lineage",
+            "action": "Install git hooks (`vestige init --git-hooks`) and pass repo_path + files + links on remember(action='save') so commits, test witnesses, failures, and fixes form a traversable backward chain.",
+        }));
+    }
+    (!hints.is_empty()).then_some(hints)
 }
 
 /// Why a walk from real start nodes found no cause, from what the log holds:
@@ -4285,5 +4367,97 @@ mod strata_walk {
             .find(|row| row["structure"]["sha"] == cause)
             .unwrap_or_else(|| panic!("{out}"));
         assert_eq!(cause_row["structure"]["edge"], "corrects", "{out}");
+    }
+
+    #[tokio::test]
+    async fn ingest_hints_reports_missing_anchors_touched_cap_and_stays_none_when_clean() {
+        let (storage, _log) = open();
+
+        // 1. Unresolved stack_frame anchor triggers missing_file_anchor hint.
+        let miss = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{"kind": "stack_frame", "frame": "src/unindexed.rs:42"}]
+            })),
+        )
+        .await
+        .unwrap();
+        let miss_hints = miss["ingest_hints"]
+            .as_array()
+            .unwrap_or_else(|| panic!("expected missing_file_anchor hint: {miss}"));
+        assert!(
+            miss_hints.iter().any(|h| h["code"] == "missing_file_anchor"
+                && h["paths"]
+                    .as_array()
+                    .map(|p| p.iter().any(|v| v == "src/unindexed.rs"))
+                    .unwrap_or(false)),
+            "expected missing_file_anchor for src/unindexed.rs: {miss}"
+        );
+
+        // 2. Isolated logged_write with zero upstream edges triggers no_upstream_lineage.
+        let orphan = put(&storage, "demo", "orphan failure symptom");
+        let empty = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{"kind": "logged_write", "node_id": orphan}]
+            })),
+        )
+        .await
+        .unwrap();
+        let empty_hints = empty["ingest_hints"]
+            .as_array()
+            .unwrap_or_else(|| panic!("expected no_upstream_lineage hint: {empty}"));
+        assert!(
+            empty_hints
+                .iter()
+                .any(|h| h["code"] == "no_upstream_lineage"),
+            "expected no_upstream_lineage hint: {empty}"
+        );
+
+        // 3. Two-hop upstream touched chain (root -> mid -> leaf) triggers touched_edge_cap hint.
+        let root_touched = put(&storage, "demo", "deep touched root");
+        let mid_touched = put(&storage, "demo", "intermediate touched node");
+        let leaf_touched = put(&storage, "demo", "symptom touching mid");
+        link(&storage, &root_touched, &mid_touched, "touched");
+        link(&storage, &mid_touched, &leaf_touched, "touched");
+        let capped = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{"kind": "logged_write", "node_id": leaf_touched}]
+            })),
+        )
+        .await
+        .unwrap();
+        let capped_hints = capped["ingest_hints"]
+            .as_array()
+            .unwrap_or_else(|| panic!("expected touched_edge_cap hint: {capped}"));
+        assert!(
+            capped_hints
+                .iter()
+                .any(|h| h["code"] == "touched_edge_cap"
+                    && h["blocked_edges"].as_u64().unwrap_or(0) >= 1),
+            "expected touched_edge_cap hint: {capped}"
+        );
+
+        // 4. Clean derived_from lineage resolves cleanly with ingest_hints == null.
+        let cause = put(&storage, "demo", "recorded upstream commit cause");
+        let symptom = put(&storage, "demo", "symptom linked via derived_from");
+        link(&storage, &symptom, &cause, "derived_from");
+        let clean = execute(
+            &storage,
+            Some(json!({
+                "scope": "demo",
+                "start_points": [{"kind": "logged_write", "node_id": symptom}]
+            })),
+        )
+        .await
+        .unwrap();
+        assert!(
+            clean["ingest_hints"].is_null(),
+            "clean derived_from walk must emit null ingest_hints: {clean}"
+        );
     }
 }

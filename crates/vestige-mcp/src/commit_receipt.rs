@@ -177,6 +177,50 @@ fn contains_ci(hay: &str, needle: &str) -> bool {
             .contains(&needle.to_ascii_lowercase())
 }
 
+/// Process-cached non-secret `rustc` semantic version (e.g. `1.86.0`) for OOM-RL II
+/// environment-drift anchors on commit receipts. Never reads or stores secret values.
+fn cached_rustc_version() -> Option<&'static str> {
+    static VER: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    VER.get_or_init(|| {
+        let out = Command::new("rustc")
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        // `rustc 1.86.0 (hash date)` -> `1.86.0`
+        let ver = text.split_whitespace().nth(1)?;
+        (!ver.is_empty() && ver.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'))
+            .then(|| ver.to_string())
+    })
+    .as_deref()
+}
+
+/// Deterministic actor provenance tag distinguishing automated agent sessions from
+/// manual human git commits (`actor:agent-mcp` vs `actor:human-git`). Checks only
+/// presence of non-secret session marker env vars — never stores values.
+fn detect_actor_tag() -> &'static str {
+    // hardcode-scan: protocol (standard agent session marker env-var names for actor provenance)
+    const AGENT_SESSION_VARS: &[&str] = &[
+        "VESTIGE_AGENT_SESSION",
+        "CLAUDE_SESSION_ID",
+        "CODEX_SESSION_ID",
+        "ANTIGRAVITY_SESSION",
+    ];
+    if AGENT_SESSION_VARS
+        .iter()
+        .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
+    {
+        "actor:agent-mcp"
+    } else {
+        "actor:human-git"
+    }
+}
+
 impl CommitFacts {
     pub fn short(&self) -> &str {
         &self.sha[..self.sha.len().min(12)]
@@ -247,7 +291,8 @@ impl CommitFacts {
         missing
     }
 
-    /// Tags for a receipt: `commit:<sha>`, its short form, the branch.
+    /// Tags for a receipt: `commit:<sha>`, its short form, the branch, non-secret
+    /// environment fingerprints (`env:os:...`, `env:rustc:...`), and signed actor provenance.
     pub fn tags(&self, auto: bool) -> Vec<String> {
         let mut tags = vec![
             format!("commit:{}", self.sha),
@@ -260,6 +305,15 @@ impl CommitFacts {
         if let Some(b) = &self.branch {
             tags.push(format!("branch:{b}"));
         }
+        tags.push(format!(
+            "env:os:{}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ));
+        if let Some(ver) = cached_rustc_version() {
+            tags.push(format!("env:rustc:{ver}"));
+        }
+        tags.push(detect_actor_tag().to_string());
         tags
     }
 
@@ -390,6 +444,34 @@ impl ReceiptStore {
     }
 }
 
+fn head_tree_oid(repo: &Path) -> Option<String> {
+    git(repo, &["rev-parse", "HEAD^{tree}"])
+        .map(|t| t.trim().to_string())
+        .filter(|t| is_hex(t))
+}
+
+/// Look up any signed Reflex test witness memories already recorded for the
+/// committed tree (`tree-<oid>`), returning `(summary, witness_ids)`.
+fn tree_witness_fallback(store: &ReceiptStore, repo: &Path) -> (Option<String>, Vec<String>) {
+    let Some(tree) = head_tree_oid(repo) else {
+        return (None, Vec::new());
+    };
+    let mut ids = store.tag_ids(&format!("tree-{tree}"));
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return (None, Vec::new());
+    }
+    let short_tree = &tree[..tree.len().min(12)];
+    let listed: Vec<&str> = ids.iter().take(6).map(String::as_str).collect();
+    let summary = format!(
+        "witnessed on tree {short_tree}: {} signed Reflex test witness(es) [{}]",
+        ids.len(),
+        listed.join(", ")
+    );
+    (Some(summary), ids)
+}
+
 /// `vestige hook post-commit`: write the machine commit receipt into Strata.
 pub fn post_commit(
     store: &ReceiptStore,
@@ -397,12 +479,27 @@ pub fn post_commit(
     gate_output: Option<&str>,
 ) -> Result<(CommitFacts, String), String> {
     let facts = read(repo, "HEAD").ok_or_else(|| "git could not read HEAD".to_string())?;
-    let args = serde_json::json!({
-        "content": facts.receipt_text(gate_output),
+    let (auto_gate, witness_ids) = tree_witness_fallback(store, repo);
+    let effective_gate = gate_output
+        .filter(|g| !g.trim().is_empty())
+        .or(auto_gate.as_deref());
+    let file_paths: Vec<String> = facts.files.iter().map(|f| f.path.clone()).collect();
+    let mut args = serde_json::json!({
+        "content": facts.receipt_text(effective_gate),
         "tags": facts.tags(true),
         "node_type": "event",
         "source": format!("vestige hook post-commit {}", facts.short()),
+        "repo_path": repo.display().to_string(),
+        "files": file_paths,
     });
+    if !witness_ids.is_empty() {
+        let links: Vec<serde_json::Value> = witness_ids
+            .iter()
+            .take(8)
+            .map(|wid| serde_json::json!({ "kind": "derived_from", "to": wid }))
+            .collect();
+        args["links"] = serde_json::Value::Array(links);
+    }
     let value = store.remember(args)?;
     let mut ids = Vec::new();
     collect_ids(&value, &mut ids);
@@ -491,6 +588,21 @@ pub fn pre_commit(
     }
     for stop in open_stops(repo, window) {
         problems.push(format!("open Operator stop: {stop}"));
+    }
+    if let Some(staged_diff) = git(repo, &["diff", "--cached", "--no-ext-diff", "--no-color"])
+        && !staged_diff.trim().is_empty()
+    {
+        let (_, zombies) =
+            crate::tools::causal_frontier::git_native_zombie_matches(repo, &staged_diff);
+        for z in zombies {
+            let rev = z["reverted_commit"].as_str().unwrap_or("?");
+            let by = z["reverted_by_commit"].as_str().unwrap_or("?");
+            let short_rev = &rev[..rev.len().min(8)];
+            let short_by = &by[..by.len().min(8)];
+            problems.push(format!(
+                "zombie regression: staged diff matches canonical git patch-id of reverted commit {short_rev} (reverted by {short_by})"
+            ));
+        }
     }
     let cfg = crate::tools::reflex::config_for(data_dir, Some(repo));
     if !cfg.commands.is_empty() {
@@ -665,5 +777,97 @@ mod tests {
         assert!(install_git_hooks(dir.path(), exe, false).is_err());
         install_git_hooks(dir.path(), exe, true).unwrap();
         assert!(hooks.join("post-commit.pre-vestige").exists());
+    }
+
+    #[test]
+    fn post_commit_auto_attaches_signed_tree_witness_and_derived_from_link() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store_dir = tempfile::TempDir::new().unwrap();
+        let git_run = |args: &[&str]| {
+            let st = Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?} failed");
+        };
+        git_run(&["init", "-q"]);
+        git_run(&["config", "user.email", "test@example.com"]);
+        git_run(&["config", "user.name", "Test User"]);
+        std::fs::write(dir.path().join("lib.rs"), "pub fn ok() -> bool { true }\n").unwrap();
+        git_run(&["add", "lib.rs"]);
+        git_run(&["commit", "-q", "-m", "initial"]);
+
+        let tree_oid = head_tree_oid(dir.path()).expect("HEAD tree oid");
+        let storage = crate::strata_memory::open(store_dir.path()).unwrap();
+        let receipt_store = ReceiptStore::Local(storage.clone());
+
+        let witness_val = receipt_store
+            .remember(serde_json::json!({
+                "content": "TEST WITNESS, recorded by Reflex. cargo test green (exit 0).",
+                "tags": ["reflex-witness", format!("tree-{tree_oid}")],
+                "node_type": "event",
+            }))
+            .expect("save witness");
+        let witness_id = witness_val["nodeId"].as_str().unwrap().to_string();
+
+        let (_facts, receipt_id) =
+            post_commit(&receipt_store, dir.path(), None).expect("post_commit");
+        let receipt_node = storage
+            .get_node(&receipt_id)
+            .unwrap()
+            .expect("commit receipt node");
+        assert!(
+            receipt_node.content.contains("signed Reflex test witness(es)"),
+            "expected witness summary in commit receipt, got: {}",
+            receipt_node.content
+        );
+        assert!(
+            receipt_node.content.contains(&witness_id),
+            "expected witness id {witness_id} in commit receipt"
+        );
+        let edges = storage.get_connections_for_memory(&receipt_id).unwrap();
+        assert!(
+            edges
+                .iter()
+                .any(|e| e.source_id == receipt_id && e.target_id == witness_id && e.link_type == "derived_from"),
+            "commit receipt must carry derived_from edge to tree witness: {edges:?}"
+        );
+    }
+
+    #[test]
+    fn pre_commit_blocks_staged_zombie_regression_matching_reverted_patch_id() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let data = tempfile::TempDir::new().unwrap();
+        let git_run = |args: &[&str]| {
+            let st = Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?} failed");
+        };
+        git_run(&["init", "-q"]);
+        git_run(&["config", "user.email", "test@example.com"]);
+        git_run(&["config", "user.name", "Test User"]);
+        std::fs::write(dir.path().join("auth.rs"), "pub fn safe() -> bool { true }\n").unwrap();
+        git_run(&["add", "auth.rs"]);
+        git_run(&["commit", "-q", "-m", "initial safe auth"]);
+
+        // Introduce bad change, commit, then revert it.
+        std::fs::write(dir.path().join("auth.rs"), "pub fn safe() -> bool { false }\n").unwrap();
+        git_run(&["add", "auth.rs"]);
+        git_run(&["commit", "-q", "-m", "bad weaken auth"]);
+        let bad_sha = git(dir.path(), &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        git_run(&["revert", "--no-edit", &bad_sha]);
+
+        // Now stage the exact same bad change again -> pre_commit MUST refuse it as a zombie regression!
+        std::fs::write(dir.path().join("auth.rs"), "pub fn safe() -> bool { false }\n").unwrap();
+        git_run(&["add", "auth.rs"]);
+        let problems = pre_commit(None, data.path(), dir.path(), "24h");
+        assert!(
+            problems.iter().any(|p| p.contains("zombie regression")),
+            "pre_commit must refuse staged zombie regression: {problems:?}"
+        );
     }
 }

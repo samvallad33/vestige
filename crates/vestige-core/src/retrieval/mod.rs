@@ -40,8 +40,71 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
-// Step 10B: fixed-key SipHash instead of per-process RandomState.
-pub(in crate::retrieval) type DetHasher = std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>;
+// Deterministic fixed-seed FxHasher (2 cycles per u32 vs SipHash ~30 cycles; zero external deps).
+#[derive(Default)]
+pub(in crate::retrieval) struct DetFxHasher(u64);
+
+impl DetFxHasher {
+    const K: u64 = 0x517c_c1b7_2722_0a95;
+
+    #[inline]
+    fn add_word(&mut self, w: u64) {
+        self.0 = (self.0.rotate_left(5) ^ w).wrapping_mul(Self::K);
+    }
+}
+
+impl std::hash::Hasher for DetFxHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    fn write(&mut self, mut bytes: &[u8]) {
+        while bytes.len() >= 8 {
+            let w = u64::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]);
+            self.add_word(w);
+            bytes = &bytes[8..];
+        }
+        if bytes.len() >= 4 {
+            let w = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as u64;
+            self.add_word(w);
+            bytes = &bytes[4..];
+        }
+        for &b in bytes {
+            self.add_word(b as u64);
+        }
+    }
+
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.add_word(i as u64);
+    }
+
+    #[inline]
+    fn write_u16(&mut self, i: u16) {
+        self.add_word(i as u64);
+    }
+
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.add_word(i as u64);
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.add_word(i);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.add_word(i as u64);
+    }
+}
+
+pub(in crate::retrieval) type DetHasher = std::hash::BuildHasherDefault<DetFxHasher>;
 pub(in crate::retrieval) type DetHashMap<K, V> = HashMap<K, V, DetHasher>;
 pub(in crate::retrieval) type DetHashSet<K> = HashSet<K, DetHasher>;
 use std::fs::OpenOptions;
@@ -262,6 +325,18 @@ pub struct PremiseCoverage {
     pub union_groups: usize,
     pub grounded_groups: usize,
     pub grounded_covered: usize,
+    /// Open-Circuit Back-EMF (`#855`): true when Kirchhoff current fails to ground on any live
+    /// sufficient sink (missing final hop or dead-end retracted/superseded chain).
+    pub open_circuit: bool,
+    /// Exact turn ID of the ungrounded frontier node where current stalled (`#855`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontier_turn_id: Option<String>,
+    /// Uncovered query term groups along the partial chain (`#855`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_query_groups: Vec<String>,
+    /// Unresolved WH answer slot type (`"TIME"`, `"NUM"`, `"HUM"`, `"LOC"`, `"CAUSE"`) if any (`#855`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unresolved_slot_type: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]

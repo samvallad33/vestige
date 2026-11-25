@@ -118,144 +118,6 @@ pub(in crate::retrieval) fn zatocode_overlap_q16(q_sig: u128, doc_sig: u128) -> 
     (hit.saturating_mul(Q16)) / q_bits
 }
 
-/// #816 Ranganathan 5-Facet PMEST Signature (Personality, Matter, Energy, Space, Time).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in crate::retrieval) struct PmestSignature {
-    pub(in crate::retrieval) personality: u16,
-    pub(in crate::retrieval) matter: u16,
-    pub(in crate::retrieval) energy: u16,
-    pub(in crate::retrieval) space: u16,
-    pub(in crate::retrieval) time: u16,
-}
-
-impl PmestSignature {
-    pub(in crate::retrieval) fn for_turn(ix: &Index, ti: usize) -> Self {
-        let t = &ix.turns[ti];
-        let p_bits = (t.entities.len().min(63) as u16)
-            | (if !t.speaker.is_empty() { 1 << 8 } else { 0 });
-        let m_bits = (t.slot_entities_clean.min(255) as u16)
-            | ((t.role_objs.len().min(63) as u16) << 8);
-        let e_bits = ((t.answers_question as u16) << 0)
-            | ((t.has_causal as u16) << 1)
-            | ((t.is_initiative as u16) << 2)
-            | ((t.is_personal_constraint as u16) << 3);
-        let s_bits = ((t.has_spatial as u16) << 0) | ((t.form_handle as u16) << 1);
-        let t_bits = ((t.has_temporal as u16) << 0)
-            | ((t.form_clock as u16) << 1)
-            | ((t.form_digit as u16) << 2);
-        Self {
-            personality: p_bits,
-            matter: m_bits,
-            energy: e_bits,
-            space: s_bits,
-            time: t_bits,
-        }
-    }
-
-    pub(in crate::retrieval) fn for_query(plan: &QueryPlan) -> Self {
-        let it = &plan.intent;
-        Self {
-            personality: (plan.focal_ids.len().min(63) as u16) | (1 << 8),
-            matter: plan.groups.len().min(255) as u16,
-            energy: ((it.sniper_why as u16) << 1) | ((it.preference as u16) << 3),
-            space: (it.sniper_where as u16) << 0,
-            time: (((it.temporal || it.sniper_when || it.is_event_sequence) as u16) << 0),
-        }
-    }
-
-    #[inline]
-    pub(in crate::retrieval) fn align_q16(self, other: Self) -> u64 {
-        let mut active = 0u64;
-        let mut matched = 0u64;
-        for (a, b) in [
-            (self.personality, other.personality),
-            (self.matter, other.matter),
-            (self.energy, other.energy),
-            (self.space, other.space),
-            (self.time, other.time),
-        ] {
-            if a != 0 {
-                active += 1;
-                if (a & b) != 0 || (a > 0 && b > 0) {
-                    matched += 1;
-                }
-            }
-        }
-        if active == 0 {
-            0
-        } else {
-            (matched * Q16) / active
-        }
-    }
-}
-
-/// #818 Ounis-Gated Cyc isa/partOf Bitmask + #820 Entity Canonical Equivalence Bridge:
-/// Encodes up to 64 relation bits over widened ConceptNet two-hop neighbors (48)
-/// and WordNet hypernyms/hyponyms in both directions (`query -> doc` and `doc -> query`).
-pub(in crate::retrieval) fn isa_part_of_bitmask_u64(ix: &Index, plan: &QueryPlan, ti: usize) -> u64 {
-    let mut mask = 0u64;
-    let t = &ix.turns[ti];
-    let mut speaker_lowers: Vec<String> = Vec::new();
-    for tr in ix.turns.iter().take(64) {
-        if !tr.speaker.is_empty() && tr.speaker != "user" && tr.speaker != "assistant" {
-            let sl = tr.speaker.to_ascii_lowercase();
-            if !speaker_lowers.contains(&sl) {
-                speaker_lowers.push(sl);
-            }
-        }
-    }
-    let mut q_words: Vec<&str> = Vec::new();
-    for g in &plan.groups {
-        if g.len() >= 3
-            && !speaker_lowers.iter().any(|sp| sp.eq_ignore_ascii_case(g))
-            && !q_words.contains(&g.as_str())
-        {
-            q_words.push(g.as_str());
-        }
-    }
-    for qt in &plan.terms {
-        if !qt.exact_hit {
-            continue;
-        }
-        let Some(q_word) = ix.vocab.names.get(qt.id as usize) else {
-            continue;
-        };
-        let clean_q = q_word
-            .strip_prefix("\u{1}stem:")
-            .or_else(|| q_word.strip_prefix("\u{1}ent:"))
-            .unwrap_or(q_word.as_str());
-        if clean_q.len() >= 3
-            && !speaker_lowers.iter().any(|sp| sp.eq_ignore_ascii_case(clean_q))
-            && !q_words.contains(&clean_q)
-        {
-            q_words.push(clean_q);
-        }
-    }
-    for clean_q in q_words {
-        for cn in crate::conceptnet::two_hop_neighbors(clean_q, 48) {
-            if let Some(lid) = ix.vocab.get(cn.0) {
-                if t.content.contains(&lid) {
-                    let bit = (splitmix64(lid as u64) & 63) as u32;
-                    mask |= 1u64 << bit;
-                }
-            }
-        }
-        for hyp in crate::wordnet::expansion_lemmas(clean_q)
-            .into_iter()
-            .chain(crate::wordnet::holonyms_and_upward(clean_q, 3))
-            .chain(crate::wordnet::gloss_and_compound_concepts(clean_q))
-        {
-            if let Some(lid) = ix.vocab.get(hyp) {
-                if t.content.contains(&lid) {
-                    let bit = (splitmix64((lid as u64) ^ 0x5555) & 63) as u32;
-                    mask |= 1u64 << bit;
-                }
-            }
-        }
-    }
-    mask
-}
-
 /// Flipped WordNet Document->Query Hypernym, Holonym (#p/#m) & Gloss Check (#818/#814):
 /// Checks rare content words (`df <= max_rare_df`) in turn `ti` and tests whether any
 /// of their WordNet `holonyms_and_upward(..., 3)` or `gloss_and_compound_concepts` match
@@ -305,39 +167,11 @@ fn doc_upward_hypernyms_match_query(
     hit_mask
 }
 
-/// #819 Forbus Structure-Mapping Engine (SME) relational skeleton similarity in Q16.16.
-#[inline]
-pub(in crate::retrieval) fn forbus_sme_alignment_q16(ix: &Index, plan: &QueryPlan, ti: usize) -> u64 {
-    let q_pmest = PmestSignature::for_query(plan);
-    let d_pmest = PmestSignature::for_turn(ix, ti);
-    let facet_align = q_pmest.align_q16(d_pmest);
-    let rel_bonus = if !ix.turns[ti].is_question && !ix.turns[ti].role_objs.is_empty() {
-        Q16 >> 2
-    } else {
-        0
-    };
-    facet_align.saturating_add(rel_bonus).min(Q16)
-}
-
-/// #822 Agichtein Typographical Definition / Theorem Zone Detector:
-/// Identifies definitional / specification / structured-list turns from pure punctuation
-/// and structural layout signals (no open-class cue-word lists).
-#[inline]
-pub(in crate::retrieval) fn is_definition_or_theorem_zone(ix: &Index, ti: usize) -> bool {
-    let t = &ix.turns[ti];
-    if t.list_item_count >= 2 || (t.form_midcap && t.form_digit && t.slot_entities_clean >= 2) {
-        return true;
-    }
-    let body = t.body_for_headers.as_str();
-    body.contains(":=") || body.contains("=>") || (body.matches(':').count() >= 2 && t.content.len() >= 6)
-}
-
 /// Durable Experiencer Preference Register (`PrefRegister`):
 /// Indexes durable constraint/standing-directive turns with their u128 Zatocode over
 /// entity/vocab tokens for zero-overlap lifestyle/preference routing.
 #[derive(Clone, Debug, Default)]
 pub(in crate::retrieval) struct PrefRegister {
-    pub(in crate::retrieval) slot_mask_64: u64,
     pub(in crate::retrieval) entries: Vec<(usize, u128)>,
 }
 
@@ -356,10 +190,7 @@ impl PrefRegister {
                 entries.push((ti, code));
             }
         }
-        Self {
-            slot_mask_64: ix.standing_register,
-            entries,
-        }
+        Self { entries }
     }
 
     pub(in crate::retrieval) fn resonance_q16(&self, q_code: u128, ti: usize) -> u64 {
@@ -369,58 +200,6 @@ impl PrefRegister {
             0
         }
     }
-}
-
-/// Evaluate combined Cycle E taxonomic/structural resonance score in Q16.16 for `ti`
-/// and return `(taxa_score_q16, isa_mask, is_def_zone)` for LockeLedger auditing.
-pub(in crate::retrieval) fn evaluate_turn_taxa_q16(
-    ix: &Index,
-    plan: &QueryPlan,
-    pref_reg: &PrefRegister,
-    q_wilkins: u64,
-    q_zato: u128,
-    ti: usize,
-) -> (u64, u64, bool) {
-    let t_wilkins = turn_wilkins_code_u64(ix, ti);
-    let wilkins_q16 = if q_wilkins != 0 && t_wilkins != 0 {
-        wilkins_lcp_similarity_q16(q_wilkins, t_wilkins)
-    } else {
-        0
-    };
-    let d_zato = zatocode_u128(
-        ix.turns[ti]
-            .entities
-            .iter()
-            .copied()
-            .chain(ix.turns[ti].content.iter().copied().take(12)),
-    );
-    let zato_q16 = zatocode_overlap_q16(q_zato, d_zato);
-    let sme_q16 = forbus_sme_alignment_q16(ix, plan, ti);
-    let isa_mask = if crate::zero_overlap::ounis_zero_overlap_gate(
-        plan.terms
-            .iter()
-            .filter_map(|qt| qt.group.map(|_| ix.t_own_stats.df.get(&qt.id).copied().unwrap_or(0))),
-    ) {
-        isa_part_of_bitmask_u64(ix, plan, ti)
-    } else {
-        0
-    };
-    let isa_q16 = ((isa_mask.count_ones() as u64).min(8) * Q16) >> 3;
-    let is_def = is_definition_or_theorem_zone(ix, ti);
-    let def_q16 = if is_def { Q16 >> 3 } else { 0 };
-    let pref_q16 = if pref_reg.slot_mask_64 != 0 || !pref_reg.entries.is_empty() {
-        pref_reg.resonance_q16(q_zato, ti)
-    } else {
-        0
-    };
-
-    let combined = wilkins_q16
-        .saturating_add(zato_q16)
-        .saturating_add(sme_q16 >> 1)
-        .saturating_add(isa_q16)
-        .saturating_add(def_q16)
-        .saturating_add(pref_q16);
-    (combined, isa_mask, is_def)
 }
 
 /// Conditional Deficit-Gated Corpus Rescue (`Deficit A` / `Deficit B` / `preference`):
@@ -467,6 +246,9 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
     q_zato: u128,
     base_q16: &[u64],
     t_exact_mask: &[u64],
+    t_bridge: &mut [f32],
+    bridge_boost: &mut [f32],
+    smax: f32,
     final_turn_indices: &mut Vec<usize>,
     k: usize,
     deficit_a: bool,
@@ -504,7 +286,7 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
             }));
     let mono_oov_active = is_monologue_stream
         && has_ungrounded_rare_oov
-        && nt <= 8192
+        && nt <= 32_768
         && (has_oov_or_rare_group || deficit_a || deficit_b);
     let large_long_mono = is_monologue_stream && nt > 600 && ix.t_own_stats.avg[0] >= 55.0;
     let base_top128: Vec<bool> = if large_long_mono {
@@ -527,7 +309,7 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
     // content tokens) represents an explicit durable personal memory commit (`0` false positives across
     // standard multi-paragraph Q&A sessions). Surfaces on prospective advisory consultations or
     // deficit-gated personal self-inventory queries without touching retrospective episodic WH-queries.
-    if k >= 5 && !is_monologue_stream && speaker_lowers.is_empty() && ix.session_turns.len() >= 16 {
+    if k >= 5 && !is_monologue_stream && speaker_lowers.is_empty() && nt >= 12 {
         let mut grounded_commits: Vec<(usize, usize)> = Vec::new();
         for ti in 0..nt.saturating_sub(1) {
             let u = &ix.turns[ti];
@@ -542,19 +324,20 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
             {
                 let uw = u.body_for_headers.split_whitespace().count();
                 let aw = a.body_for_headers.split_whitespace().count();
-                if (2..=34).contains(&uw)
-                    && (2..=38).contains(&aw)
+                if (2..=38).contains(&uw)
+                    && (2..=52).contains(&aw)
                     && !u.body_for_headers.contains('?')
                     && !a.body_for_headers.contains('?')
                 {
                     grounded_commits.push((ti, ti + 1));
-                    if grounded_commits.len() > 4 {
+                    if grounded_commits.len() >= 24 {
                         break;
                     }
                 }
             }
         }
-        if (1..=4).contains(&grounded_commits.len()) {
+        let dense_commits = grounded_commits.len() > 4;
+        if !grounded_commits.is_empty() && (!dense_commits || ix.session_turns.len() <= 32) {
             let ql = q_text.to_ascii_lowercase();
             // hardcode-scan: closed-class (retrospective episodic recall WH-interrogatives)
             let is_past_episodic = [
@@ -625,7 +408,10 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
                             bridge_cnt += 1;
                         }
                     }
-                    if exact_u == 0 && bridge_cnt == 0 && !is_self_inventory && large_haystack {
+                    if dense_commits && exact_u == 0 && bridge_cnt < 2 {
+                        continue;
+                    }
+                    if exact_u == 0 && bridge_cnt == 0 && !is_self_inventory && (large_haystack || dense_commits) {
                         continue;
                     }
                     let d_zato = zatocode_u128(
@@ -662,19 +448,14 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
     }
 
     let q_low_all = q_text.trim_start().to_ascii_lowercase();
+    let q_toks_od_gate = fold_ascii_tokens(q_text);
+    let q_refs_od_gate: Vec<&str> = q_toks_od_gate.iter().map(String::as_str).collect();
     // hardcode-scan: closed-class (hypothetical open-domain modal and yes/no auxiliary interrogative cues)
     let dialogue_hypothetical_od = !speaker_lowers.is_empty()
-        && (q_low_all.starts_with("would ")
-            || q_low_all.starts_with("could ")
-            || q_low_all.starts_with("might ")
-            || q_low_all.starts_with("does ")
-            || q_low_all.starts_with("is ")
-            || q_low_all.contains(" likely ")
-            || q_low_all.contains(" potentially ")
-            || q_low_all.contains(" or ")
-            || q_low_all.starts_with("what might ")
-            || q_low_all.starts_with("what could ")
-            || q_low_all.starts_with("what would "));
+        && !q_low_all.starts_with("when ")
+        && !q_low_all.starts_with("how many ")
+        && (crate::retrieval::lexical::speaker_translation_q16::is_open_domain_inferential_shape(&q_refs_od_gate)
+            || q_low_all.contains(" or "));
 
     if k < 5
         || (!deficit_a
@@ -1774,10 +1555,16 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
     }
 
     best_cands.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let dedup_by_turn = is_monologue_stream || ix.session_turns.len() <= 4;
     let mut dedup_cands: Vec<(usize, u64, bool, u64)> = Vec::new();
     for cand in best_cands {
         let cs = ix.turns[cand.0].session;
-        if !dedup_cands.iter().any(|&(ti, _, _, _)| ix.turns[ti].session == cs) {
+        let dup = if dedup_by_turn {
+            dedup_cands.iter().any(|&(ti, _, _, _)| ti == cand.0)
+        } else {
+            dedup_cands.iter().any(|&(ti, _, _, _)| ix.turns[ti].session == cs)
+        };
+        if !dup {
             dedup_cands.push(cand);
             if dedup_cands.len() >= 3 {
                 break;
@@ -1812,8 +1599,29 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
             .map(|&ti| (t_exact_mask[ti] & non_sp_mask).count_ones())
             .max()
             .unwrap_or(0);
-        if h0_non_sp == 0 || (dialogue_hypothetical_od && h0_non_sp <= 1 && cand_score >= Q16 * 10) {
-            let start_slot = if h0_non_sp == 0 || cand_score >= Q16 * 14 { 0usize } else { 2usize };
+        // Propagate bounded Resnik LCA / ConceptNet / KITE taxonomic credit into `t_bridge` and `bridge_boost`
+        // so Stage-12 Kemeny session fusion and `@1` `f[16]`/`f[42]`/`f[43]` honor rescued Open-Domain evidence!
+        for &(r_ti, r_sc, r_sp, _) in dedup_cands.iter().take(3) {
+            if !r_sp {
+                continue;
+            }
+            let norm = ((r_sc as f32) / ((Q16 * 12) as f32)).min(1.0);
+            if r_ti < t_bridge.len() {
+                let lift_t = (0.35 * smax.max(1.0) * norm).max(0.25 * norm);
+                if lift_t > t_bridge[r_ti] {
+                    t_bridge[r_ti] = lift_t;
+                }
+            }
+            let r_sess = ix.turns[r_ti].session;
+            if r_sess < bridge_boost.len() && smax > 0.0 {
+                let lift_s = 0.28 * smax * norm;
+                if lift_s > bridge_boost[r_sess] {
+                    bridge_boost[r_sess] = lift_s;
+                }
+            }
+        }
+        if h0_non_sp == 0 || (dialogue_hypothetical_od && h0_non_sp <= 1 && cand_score >= Q16 * 6) {
+            let start_slot = if h0_non_sp == 0 || cand_score >= Q16 * 10 { 0usize } else { 1usize };
             let max_ins = if h0_non_sp == 0 { 3usize } else { 2usize };
             for (offset, &(r_ti, r_sc, r_sp, r_tag)) in dedup_cands.iter().take(max_ins).enumerate() {
                 if offset > 0 && (!r_sp || r_tag == 0 || r_sc * 2 < cand_score) {
@@ -1829,7 +1637,7 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
                 final_turn_indices.truncate(k);
             }
             return start_slot == 0;
-        } else if (top3_max_non_sp <= 1 || cand_score >= Q16 * 8)
+        } else if (top3_max_non_sp <= 1 || cand_score >= Q16 * 6)
             && !final_turn_indices[..5.min(final_turn_indices.len())].contains(&cand_ti)
         {
             for (offset, &(r_ti, r_sc, r_sp, _)) in dedup_cands.iter().take(2).enumerate() {
@@ -1842,7 +1650,7 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
                 if let Some(pos) = final_turn_indices.iter().position(|&x| x == r_ti) {
                     final_turn_indices.remove(pos);
                 }
-                let ins_at = (3 + offset).min(final_turn_indices.len());
+                let ins_at = (2 + offset).min(final_turn_indices.len());
                 final_turn_indices.insert(ins_at, r_ti);
             }
             if final_turn_indices.len() > k {
@@ -1855,13 +1663,21 @@ pub(in crate::retrieval) fn apply_deficit_taxa_and_pref_rescue(
     // Direct Slot-0 promotion for monologue WH queries with ungrounded OOV/rare concept bridges:
     if is_monologue_stream && rare_oov_hits >= 1 && has_ungrounded_rare_oov {
         let low = q_text.trim_start().to_ascii_lowercase();
-        let is_wh_lead =
-            low.starts_with("which ") || low.starts_with("what ") || low.starts_with("who ");
+        let is_wh_lead = low.starts_with("which ")
+            || low.starts_with("what ")
+            || low.starts_with("who ")
+            || low.starts_with("where ");
         if is_wh_lead {
-            if let Some(pos) = final_turn_indices.iter().position(|&x| x == cand_ti) {
-                final_turn_indices.remove(pos);
+            for (ins_idx, &(r_ti, r_sc, _, r_oov)) in dedup_cands.iter().take(3).enumerate() {
+                if ins_idx > 0 && (r_oov == 0 || r_sc * 2 < cand_score) {
+                    break;
+                }
+                if let Some(pos) = final_turn_indices.iter().position(|&x| x == r_ti) {
+                    final_turn_indices.remove(pos);
+                }
+                let at = ins_idx.min(final_turn_indices.len());
+                final_turn_indices.insert(at, r_ti);
             }
-            final_turn_indices.insert(0, cand_ti);
             if final_turn_indices.len() > k {
                 final_turn_indices.truncate(k);
             }
@@ -1948,14 +1764,5 @@ mod tests {
         let z2 = zatocode_u128([10, 20, 99]);
         assert!(zatocode_overlap_q16(z1, z1) == Q16);
         assert!(zatocode_overlap_q16(z1, z2) > 0);
-
-        let p = PmestSignature {
-            personality: 1,
-            matter: 2,
-            energy: 0,
-            space: 1,
-            time: 0,
-        };
-        assert_eq!(p.align_q16(p), Q16);
     }
 }

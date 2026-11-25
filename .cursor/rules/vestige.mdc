@@ -1,0 +1,14 @@
+---
+description: Vestige deterministic causal proof and high-churn file guard for Cursor Composer
+alwaysApply: true
+---
+
+# Vestige Deterministic Guardrails
+
+Before modifying any source file, follow these deterministic checks using the local Vestige MCP tools:
+
+1. Start every session by calling `session(action="start")` to load pinned engineering invariants and active intentions from the local Strata ledger.
+2. Before editing a high-churn or previously reverted file, call `recall` or `causal_walk(action="fence", ...)` to check Chesterton's Fence guards and prior failure receipts so reverted bugs are never re-introduced.
+3. If a test fails or a build breaks, call `causal_walk` pointed at the failing symbol before guessing at a fix.
+4. Anchor every verified architectural decision or bug resolution back into Strata with `remember(action="save", ...)` and supersede invalidated facts via `curate`.
+5. Respect any active `vestige lease` scope boundaries and never attempt to bypass an Operator guard stop.

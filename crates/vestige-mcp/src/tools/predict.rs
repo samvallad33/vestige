@@ -32,5 +32,24 @@ pub async fn execute(
     args: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let context = args.as_ref().and_then(|a| a.get("context"));
-    crate::strata_memory::ghostlink::predict(storage.as_ref(), context)
+    let mut base = crate::strata_memory::ghostlink::predict(storage.as_ref(), context)?;
+    if let Some(file) = context
+        .and_then(|c| c.get("current_file"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+    {
+        let cwd = std::env::current_dir().ok();
+        let report = crate::cognitive_kernel::simulate_edit_blast_radius(
+            storage.as_ref(),
+            file,
+            cwd.as_deref(),
+        );
+        if let Some(obj) = base.as_object_mut() {
+            obj.insert(
+                "blastRadius".to_string(),
+                serde_json::to_value(report).unwrap_or(serde_json::Value::Null),
+            );
+        }
+    }
+    Ok(base)
 }

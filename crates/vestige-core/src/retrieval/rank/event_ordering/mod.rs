@@ -526,6 +526,47 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
         }
     }
 
+    // C12: Harris-Allen ORD-Horn Stratigraphic Precedence + Reichenbach (S, R, E) Flashback Voter
+    let harris_ord =
+        crate::retrieval::graph::reichenbach_roman_belnap_q16::harris_allen_stratigraphic_order(
+            ix, &cands,
+        );
+    let mut harris_pos: Vec<usize> = vec![0usize; cands.len()];
+    for (pos_i, &si_val) in harris_ord.iter().enumerate() {
+        if let Some(ci) = cands.iter().position(|&x| x == si_val) {
+            harris_pos[ci] = pos_i;
+        }
+    }
+    let fb_shifts: Vec<i64> = cands
+        .iter()
+        .map(|&si_val| {
+            crate::retrieval::graph::reichenbach_roman_belnap_q16::estimate_reichenbach_flashback_shift_q16(
+                ix, si_val,
+            )
+        })
+        .collect();
+    for a in 0..cands.len() {
+        for b in (a + 1)..cands.len() {
+            if fb_shifts[a] != fb_shifts[b] || harris_pos[a] != harris_pos[b] {
+                let mut strat_delta: i64 = if harris_pos[a] < harris_pos[b] {
+                    12_288
+                } else {
+                    -12_288
+                };
+                if fb_shifts[a] < fb_shifts[b] {
+                    strat_delta += 8_192;
+                } else if fb_shifts[a] > fb_shifts[b] {
+                    strat_delta -= 8_192;
+                }
+                if q_prof.query_orders_descending {
+                    strat_delta = -strat_delta;
+                }
+                pref[a][b] += strat_delta;
+                pref[b][a] -= strat_delta;
+            }
+        }
+    }
+
     let ordered = solve_fabula_fas_kendall_order(&cands, &ix.session_ids, pref);
     final_session_indices[start_idx..total_m].copy_from_slice(&ordered);
 
@@ -541,7 +582,25 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
         let mut reprojected: Vec<usize> = Vec::with_capacity(target_k);
         let mut secondary_in_sess: Vec<usize> = Vec::new();
         let smax = s_score.iter().copied().fold(0.0f32, f32::max);
+        let strong_eo_sess = final_session_indices
+            .iter()
+            .take(5)
+            .filter(|&&si| smax > 0.0 && s_score.get(si).copied().unwrap_or(0.0) >= 0.42 * smax)
+            .count();
         for (rank_i, &si) in final_session_indices.iter().take(target_k).enumerate() {
+            if rank_i >= strong_eo_sess.max(2)
+                && strong_eo_sess <= 2
+                && !secondary_in_sess.is_empty()
+            {
+                for &sti in &secondary_in_sess {
+                    if reprojected.len() >= 5 {
+                        break;
+                    }
+                    if !reprojected.contains(&sti) {
+                        reprojected.push(sti);
+                    }
+                }
+            }
             if rank_i >= 5 && smax > 0.0 && s_score.get(si).copied().unwrap_or(0.0) < 0.38 * smax {
                 break;
             }
@@ -550,11 +609,26 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
                 .iter()
                 .copied()
                 .filter(|&ti| {
-                    ix.turns[ti].field == 0
-                        && !ix.turns[ti].is_backchannel
-                        && !ix.turns[ti].is_standing_policy
+                    let t = &ix.turns[ti];
+                    t.field == 0
+                        && !t.is_backchannel
+                        && !t.is_standing_policy
+                        && !crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                            ix, ti, query,
+                        )
                 })
                 .collect();
+            if user_turns.is_empty() {
+                user_turns = members
+                    .iter()
+                    .copied()
+                    .filter(|&ti| {
+                        ix.turns[ti].field == 0
+                            && !ix.turns[ti].is_backchannel
+                            && !ix.turns[ti].is_standing_policy
+                    })
+                    .collect();
+            }
             if user_turns.is_empty() {
                 user_turns = members
                     .iter()
@@ -615,10 +689,15 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
                     reprojected.push(chosen);
                 }
                 if rank_i < 5 {
+                    let max_sec = if strong_eo_sess <= 2 { 3usize } else { 1usize };
+                    let mut added_sec = 0usize;
                     for &uti in &user_turns {
                         if uti != chosen && ctx.t_scene.get(uti).copied().unwrap_or(0.0) > 0.0 {
                             secondary_in_sess.push(uti);
-                            break;
+                            added_sec += 1;
+                            if added_sec >= max_sec {
+                                break;
+                            }
                         }
                     }
                 }

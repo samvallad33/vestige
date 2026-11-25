@@ -146,7 +146,11 @@ pub mod tagging;
 /// Evidence-aware intention command adapter.
 pub mod intention_graph;
 
+pub mod bot_fleet;
+pub mod causal_frontier;
+pub mod distribution;
 pub mod project;
+pub mod proof_card;
 pub mod prove;
 
 /// Ignored real-repo proof. `cargo test --workspace` does not run it.

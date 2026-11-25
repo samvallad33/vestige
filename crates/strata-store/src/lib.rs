@@ -91,14 +91,17 @@ pub use canonical::{
 pub use error::StoreError;
 pub use gate_log::StrataEventLog;
 pub use ghostlink::{
-    composition_pair, hypothesis_record, parse_weave_source, weave_source, BridgeCandidate,
-    BridgeReport,
+    apply_outcome_conductance_q16, composition_pair, hypothesis_record,
+    outcome_conductance_delta_q16, outcome_conductance_multiplier_q16, parse_weave_source,
+    series_resistance_from_conductance_q16, weave_source, BridgeCandidate, BridgeReport,
     CompositionRecord, DivergentEval, DivergentPage, DivergentSummary, GhostSnapshot, Lane,
-    PathStep, PathVia, PoolFilter, ADMITTING_KINDS, BEYOND_RADIUS, BRIDGE_MAX_HOPS,
-    COMPOSITION_NODE_TYPE, DEFAULT_PER_MEMORY_CAP, DIVERGENT_RADIUS, GHOSTLINK_TAG,
-    HYPOTHESIS_NODE_TYPE, HYPOTHESIS_SOURCE_PREFIX, HYPOTHESIS_TAG,
-    LEGACY_INFERRED, LENS_TAG_PREFIX, MEASURED_MEMBER_CAP, OUTCOME_TAG_PREFIX, WEAVE_SOURCE_PREFIX,
-    WEAVE_TAG, W_CLOSED_BY, W_DERIVED_FROM, W_TOUCHED_ARTIFACT, W_TOUCHED_ASSOCIATION,
+    OutcomeConductanceEdge, PathStep, PathVia, PoolFilter, ADMITTING_KINDS, BEYOND_RADIUS,
+    BRIDGE_MAX_HOPS, COMPOSITION_NODE_TYPE, CONDUCTANCE_Q16_ONE, DEFAULT_PER_MEMORY_CAP,
+    DIVERGENT_RADIUS, GHOSTLINK_TAG, HYPOTHESIS_NODE_TYPE, HYPOTHESIS_SOURCE_PREFIX,
+    HYPOTHESIS_TAG, LEGACY_INFERRED, LENS_TAG_PREFIX, MEASURED_MEMBER_CAP,
+    OUTCOME_MULTIPLIER_MAX_Q16, OUTCOME_MULTIPLIER_MIN_Q16, OUTCOME_TAG_PREFIX,
+    WEAVE_SOURCE_PREFIX, WEAVE_TAG, W_CLOSED_BY, W_DERIVED_FROM, W_TOUCHED_ARTIFACT,
+    W_TOUCHED_ASSOCIATION,
 };
 pub use op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 pub use store::mesh::{

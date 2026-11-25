@@ -1,0 +1,83 @@
+name: "Vestige Causal Gate & Shield"
+description: "Deterministic local Rust PR proof gate with native SARIF 2.1.0 for zombie regressions, Chesterton's Fence, concealed Unicode smuggling, secrets, and cross-language safety checks. Zero cloud, zero LLMs."
+author: "samvallad33"
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  mode:
+    description: "Gate mode to run: shield, pr-audit, or both"
+    required: false
+    default: "both"
+  base_sha:
+    description: "Base commit SHA"
+    required: true
+  head_sha:
+    description: "Head commit SHA"
+    required: false
+    default: "HEAD"
+  upload_sarif:
+    description: "Upload SARIF 2.1.0 results to GitHub Code Scanning"
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache compiled Vestige binary
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target/release/vestige
+        key: vestige-bin-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+    - name: Build Vestige binary if not cached
+      shell: bash
+      run: |
+        if [ ! -x target/release/vestige ]; then
+          cargo build --release -p vestige-mcp --bin vestige
+        fi
+
+    - name: Run Vestige Shield (Unicode, Secrets, Rust/Py/TS Rules, Biba)
+      if: inputs.mode == 'shield' || inputs.mode == 'both'
+      shell: bash
+      run: |
+        ./target/release/vestige shield \
+          --repo "$GITHUB_WORKSPACE" \
+          --base "${{ inputs.base_sha }}" \
+          --head "${{ inputs.head_sha }}" \
+          --markdown --out vestige-shield.md \
+          --sarif-out vestige-shield.sarif \
+          --fail-on-finding
+
+    - name: Run Vestige Causal Gate (Zombie Patch-ID & Chesterton's Fence)
+      if: inputs.mode == 'pr-audit' || inputs.mode == 'both'
+      shell: bash
+      run: |
+        ./target/release/vestige pr-audit \
+          --repo "$GITHUB_WORKSPACE" \
+          --base "${{ inputs.base_sha }}" \
+          --head "${{ inputs.head_sha }}" \
+          --markdown --out vestige-causal-gate.md \
+          --sarif-out vestige-causal-gate.sarif \
+          --fail-on-zombie
+
+    - name: Upload Shield SARIF to GitHub Code Scanning
+      if: always() && inputs.upload_sarif == 'true' && hashFiles('vestige-shield.sarif') != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: vestige-shield.sarif
+        category: vestige-shield
+
+    - name: Upload Causal Gate SARIF to GitHub Code Scanning
+      if: always() && inputs.upload_sarif == 'true' && hashFiles('vestige-causal-gate.sarif') != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: vestige-causal-gate.sarif
+        category: vestige-causal-gate

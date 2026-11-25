@@ -6,13 +6,13 @@ Unlike probabilistic LLMs and vector RAG databases that rely on floating-point s
 
 [![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://github.com/samvallad33/vestige)
 [![License: AGPL-3.0](https://img.shields.io/github/license/samvallad33/vestige)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/samvallad33/vestige)](https://github.com/samvallad33/vestige/releases/tag/v6.2.3)
+[![Release](https://img.shields.io/github/v/release/samvallad33/vestige)](https://github.com/samvallad33/vestige/releases/tag/v7.0.0)
 
 > 🚀 **Live WebGPU Companion (Zero Install):** [https://stara-companion.pages.dev/?v=pro-reset](https://stara-companion.pages.dev/?v=pro-reset)
 
 ---
 
-## ⚡ Quick Start (`v6.2.3`)
+## ⚡ Quick Start (`v7.0.0`)
 
 ### 1. Auto-configure for Claude Code, Cursor & Windsurf (npm):
 ```bash
@@ -28,13 +28,16 @@ npx @vestige/init --guard
   }
 }
 ```
-*(Or in Antigravity: `agy plugin add vestige`)*
+*(Or in Antigravity: `agy plugin add vestige`, or via Nix: `nix run github:samvallad33/vestige`)*
 
 ### 3. Pre-built Native Binaries (macOS ARM/x86, Linux, Windows):
-Download pre-built standalone binaries directly from [GitHub Releases](https://github.com/samvallad33/vestige/releases/tag/v6.2.3), or install via shell:
+Download pre-built standalone binaries directly from [GitHub Releases](https://github.com/samvallad33/vestige/releases/tag/v7.0.0), or install via shell:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/scripts/install.sh | sh
 ```
+
+### 4. Zero-Cloud GitHub PR Gate & Shield (SARIF 2.1.0):
+Add `uses: samvallad33/vestige@v7.0.0` in GitHub Actions to catch zombie regressions, Chesterton's Fence violations, concealed Unicode/Bidi smuggling, secrets, and Biba control-plane edits with **$0 cloud cost**.
 
 ---
 
@@ -62,16 +65,20 @@ curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/scripts/in
 
 ---
 
-## 📈 Benchmarks (`v6.2.3`)
+## 📈 Benchmarks (`v7.0.0`)
 
-Benchmarked using the local `retrieval_bench` binary on an Intel Core i5-2520M with 8 GB RAM, CPU only (**no embeddings, no LLM, no GPU, $0 API costs**):
+Benchmarked locally using the native Rust `retrieval_bench` binary on CPU only (**no embeddings, no LLM, no GPU, $0 API cost**):
 
 | Benchmark | Split / Slice | Level | Metric | Score |
 | :--- | :--- | :--- | :--- | :--- |
-| **LoCoMo-10** | Blind Convs 6–10 (`n = 985`, out-of-sample) | Session / Turn | Sess R@5 / Turn Exact R@5 / Turn R@10 | **93.71%** / **80.41%** / **88.02%** (`~59ms/q`) |
-| **LoCoMo-10** | All 10 Convs (`n = 1,982`) | Session / Turn | Sess R@5 / Turn Exact R@5 / Turn Soft R@5 | **94.25%** / **81.84%** / **84.71%** |
-| **LongMemEval-S** | Official (`470` non-abstention) | Session | Any@1 / Any@5 / Any@10 / CappedAll@5 | **85.74%** / **96.17%** / **99.57%** / **92.08%** |
-| **BEAM 100K** | `355` scored questions (`2,127` sub-sessions) | Session / Turn | Pkt Sess Any@5 / Pkt Turn Any@5 / Temporal Any@5 | **78.59%** / **70.42%** / **100.0%** |
+| **LongMemEval-S** | Official (`470` non-abstention) | Session | Any@5 / Any@10 / All@5 / CappedAll@5 / Pref R@5 | **97.87%** / **99.57%** / **87.23%** / **93.61%** / **86.67%** (`967ms/q`) |
+| **LongMemEval Temporal** | Temporal Reasoning & Updates (`n = 211`) | Session / Turn | Sess Any@1 / Any@5 / Any@10 / Turn Any@10 | **89.57%** / **97.63%** / **99.53%** / **93.14%** (`MRR 0.9325`) |
+| **LoCoMo-10** | Blind Convs 6–10 (`n = 985`, out-of-sample) | Session / Turn | Sess R@5 / Turn Exact R@5 / Soft R@5 / R@10 | **93.40%** / **83.65%** / **86.40%** / **89.14%** (`63.9ms/q`, 49 MB RSS) |
+| **LoCoMo-10** | All 10 Convs (`n = 1,982`) | Session / Turn | Sess R@5 / Turn Exact R@5 / Soft R@5 / R@10 | **93.95%** / **83.55%** / **86.43%** / **89.96%** |
+| **BEAM 100K** | `355` scored q (`2,127` sub-sessions) | Session / Turn | Official Sess Any@5 / Any@10 / Temporal Any@5 | **78.31%** / **87.32%** / **97.5%** (`68.9s` total, 5× faster) |
+| **STATE-Bench** | `86` multi-session enterprise episodes | Turn / Session | Turn Exact R@1 / R@5 / R@10 | **82.56%** / **95.35%** / **100.0%** (`MRR 0.8887`) |
+| **InMind** | `125` implicit-association queries | Turn / Session | Implicit Bridge R@1 / R@5 / R@10 | **91.2%** / **91.2%** / **91.2%** (`MRR 0.912`) |
+| **ConvoMem** | `100` precision & evidence queries | Turn / Session | Turn Exact R@5 / R@10 / Sess R@5 / Asst R@5 | **73.0%** / **81.0%** / **98.0%** / **100.0%** |
 | **MemoryAgentBench** | QA2 421K (`100` questions) | Document | All@5 | **85/100 (85.00%)** |
 
 Reproduce locally:

@@ -303,6 +303,8 @@ fn step13_khipu_bridge_transfers_across_sessions_bounded() {
         groups: vec!["espresso".to_string()],
         group_of: DetHashMap::default(),
         focal_ids: DetHashSet::default(),
+        excluded_ids: DetHashSet::default(),
+        rare_entity_ids: Vec::new(),
     };
     let mut t_own = vec![0.0f32; ix.turns.len()];
     let mut t_exact_mask = vec![0u64; ix.turns.len()];
@@ -380,6 +382,8 @@ fn step14_role_frame_extraction_and_bipartite_boost() {
         groups: vec!["hotels".to_string()],
         group_of: DetHashMap::default(),
         focal_ids: DetHashSet::default(),
+        excluded_ids: DetHashSet::default(),
+        rare_entity_ids: Vec::new(),
     };
     let t_own = vec![10.0, 11.0, 9.5];
     let mut t_scene = vec![10.0, 11.0, 9.5];
@@ -520,6 +524,8 @@ fn step17_isnad_three_session_chain_decays_per_hop() {
         groups: vec!["espresso".to_string()],
         group_of: DetHashMap::default(),
         focal_ids: DetHashSet::default(),
+        excluded_ids: DetHashSet::default(),
+        rare_entity_ids: Vec::new(),
     };
     let mut t_own = vec![0.0f32; ix.turns.len()];
     let mut t_exact_mask = vec![0u64; ix.turns.len()];

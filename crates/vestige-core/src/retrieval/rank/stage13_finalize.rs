@@ -77,6 +77,44 @@ pub(in crate::retrieval) fn run(ctx: RankCtx<'_>) -> RankResult {
     } else {
         "COVERED"
     };
+    let gc = ctx.ghostcurrent;
+    let open_circuit = gc.open_circuit || cov_status == "ABSTAIN";
+    let frontier_turn_id = if open_circuit {
+        gc.frontier_turn_idx
+            .and_then(|ti| ix.turns.get(ti).map(|t| t.id.clone()))
+            .or_else(|| {
+                final_turn_indices
+                    .first()
+                    .and_then(|&ti| ix.turns.get(ti).map(|t| t.id.clone()))
+            })
+    } else {
+        None
+    };
+    let missing_query_groups = if open_circuit {
+        if !gc.missing_query_groups.is_empty() {
+            gc.missing_query_groups.clone()
+        } else {
+            plan.groups
+                .iter()
+                .enumerate()
+                .take(64)
+                .filter(|&(gi, gw)| {
+                    (q_group_mask & (1u64 << gi)) != 0
+                        && (union_mask_top5 & (1u64 << gi)) == 0
+                        && !gw.starts_with('\u{1}')
+                })
+                .map(|(_, gw)| gw.clone())
+                .collect()
+        }
+    } else {
+        Vec::new()
+    };
+    let unresolved_slot_type = if open_circuit {
+        gc.unresolved_slot_type
+            .or_else(|| crate::retrieval::graph::ghostcurrent_mdl_q16::wh_slot_type_label(&q.text))
+    } else {
+        None
+    };
     let premise_coverage = PremiseCoverage {
         status: cov_status,
         total_groups: q_group_cnt,
@@ -84,6 +122,10 @@ pub(in crate::retrieval) fn run(ctx: RankCtx<'_>) -> RankResult {
         union_groups,
         grounded_groups,
         grounded_covered,
+        open_circuit,
+        frontier_turn_id,
+        missing_query_groups,
+        unresolved_slot_type,
     };
 
     let wf_g1_s10 = ctx.wf_g1_s10;
@@ -129,6 +171,9 @@ pub(in crate::retrieval) fn run(ctx: RankCtx<'_>) -> RankResult {
             "g4_flags": wf_g4_flags,
             "g5_s5": g5_s5,
             "g5_t5": g5_t5,
+            "gc_best_absorbed_q16": gc.best_absorbed_q16,
+            "gc_best_mdl_energy_q16": gc.best_mdl_energy_q16,
+            "gc_open_circuit": open_circuit,
         });
         let _ = writeln!(f, "{rec}");
     }

@@ -149,6 +149,20 @@ pub(in crate::retrieval) fn run<'a>(
             {
                 sc *= 1.8;
             }
+            let has_echo_u = members.iter().any(|&t| {
+                ix.turns[t].field == 0
+                    && crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                        ix, t, &q.text,
+                    )
+            });
+            let has_clean_focal = members.iter().any(|&t| {
+                !crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                    ix, t, &q.text,
+                ) && ix.turns[t].content.iter().any(|id| plan.focal_ids.contains(id))
+            });
+            if has_echo_u && !has_clean_focal {
+                sc *= 0.25;
+            }
             if sc > s_win[si] {
                 s_win[si] = sc;
             }
@@ -249,6 +263,13 @@ pub(in crate::retrieval) fn run<'a>(
             }
         }
     }
+    crate::retrieval::lexical::tier_bridge_q16::apply_stage01_tier_bridge_q16(
+        ix,
+        q,
+        &plan,
+        &s_exact_mask,
+        &mut s_score,
+    );
     let smax = s_score.iter().cloned().fold(0.0f32, f32::max);
 
     let nt = ix.turns.len();
@@ -315,6 +336,7 @@ pub(in crate::retrieval) fn run<'a>(
         deficit_b: false,
         torrens_locked_head: false,
         implicit_disclosure_locked: false,
+        ghostcurrent: Default::default(),
         wf_g1_s10: Vec::new(),
         wf_g3_t10: Vec::new(),
         wf_g4_s5: Vec::new(),

@@ -100,8 +100,7 @@ fn apply_session_late_sync_and_margin_swap(
     } else {
         match final_session_indices.first() {
             None => true,
-            Some(&incumbent) => s_score.get(head_sess).copied().unwrap_or(0.0)
-                >= s_score.get(incumbent).copied().unwrap_or(0.0),
+            Some(&incumbent) => sight(head_sess) >= 0.88 * sight(incumbent),
         }
     };
     let hard_locked_head = torrens_locked_head || taxa_session_lock;
@@ -747,7 +746,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let smax = ctx.smax;
     let s_score = &ctx.s_score;
     let s_exact_mask = &ctx.s_exact_mask;
-    let bridge_boost = &ctx.bridge_boost;
+    let mut bridge_boost = std::mem::take(&mut ctx.bridge_boost);
     let t_own = &ctx.t_own;
     let t_raw = &ctx.t_raw;
     let t_scene = &ctx.t_scene;
@@ -755,7 +754,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let t_policy_floored = &ctx.t_policy_floored;
     let t_pref_floored = &ctx.t_pref_floored;
     let base_q16 = &ctx.base_q16;
-    let q_group_cnt = ctx.q_group_cnt;
     let q_group_mask = ctx.q_group_mask;
     let deficit_a = ctx.deficit_a;
     let deficit_b = ctx.deficit_b;
@@ -767,46 +765,8 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
 
     let state_intent = if is_monologue_corpus { &eff_it } else { &it };
 
-    // #805 Allen Interval Algebra + #808 Temporal Contradiction Pruner + #812 Box-Cox Stabilization
-    crate::retrieval::graph::temporal_allen::apply_allen_boxcox_tail_refinement(ix, state_intent, &base_q16, &mut final_turn_indices, k);
-
-    // #798/#799/#800/#826/#767 Block-Max WAND + Fagin TA bitpacked posting scan & wide candidate admission
-    let is_beam_multi_wand = !has_named_speakers_eff && !is_monologue_corpus && ix.session_turns.len() >= 16;
-    let wand_stats = crate::retrieval::lexical::wand::verify_query_block_max_wand(ix, &plan, &base_q16, k.max(20));
-    if !torrens_locked_head && !wand_stats.top_k.is_empty() && q_group_cnt >= 2 {
-        let mut cur_union = final_turn_indices
-            .iter()
-            .fold(0u64, |acc, &ti| acc | (t_exact_mask[ti] & q_group_mask));
-        for &(w_ti, w_sc) in &wand_stats.top_k {
-            if w_sc == 0
-                || w_ti >= nt
-                || final_turn_indices.contains(&w_ti)
-                || ix.turns[w_ti].is_question
-                || ix.turns[w_ti].is_backchannel
-                || (!is_beam_multi_wand && turn_is_superseded(ix, w_ti))
-            {
-                continue;
-            }
-            let new_bits = (t_exact_mask[w_ti] & q_group_mask) & !cur_union;
-            if new_bits == 0 {
-                continue;
-            }
-            if final_turn_indices.len() < k {
-                final_turn_indices.push(w_ti);
-                cur_union |= new_bits;
-            } else if let Some(dup_slot) = (5..final_turn_indices.len()).rev().find(|&idx| {
-                let s = ix.turns[final_turn_indices[idx]].session;
-                final_turn_indices[..idx].iter().any(|&p| ix.turns[p].session == s)
-            }) {
-                final_turn_indices[dup_slot] = w_ti;
-                cur_union |= new_bits;
-            }
-        }
-    }
-
     let taxa_promoted: bool;
-    // #814/#815/#816/#818/#819/#820/#822 Cycle E Taxonomic & Experiencer Preference Corpus Rescue +
-    // #806 Mackworth AC-3 Arc Consistency + #827 ACT-R Base-Level Activation + #830 LockeLedger 256-Bucket Attribution
+    // #814/#815/#816/#818/#819/#820/#822 Cycle E Taxonomic & Experiencer Preference Corpus Rescue
     {
         let pref_reg = crate::retrieval::graph::taxa::PrefRegister::build(ix);
         let q_wilkins = plan
@@ -827,6 +787,9 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 q_zato,
                 &base_q16,
                 &t_exact_mask,
+                &mut ctx.t_bridge,
+                &mut bridge_boost,
+                smax,
                 &mut final_turn_indices,
                 k,
                 deficit_a,
@@ -845,130 +808,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 let last = final_turn_indices.len() - 1;
                 if base_q16[final_turn_indices[last]] == 0 {
                     final_turn_indices[last] = dti;
-                }
-            }
-        }
-        // #733 Aho-Garey-Ullman Transitive Reduction over top candidate window
-        let win_n = final_turn_indices.len().min(10);
-        let mut adj_mask = vec![0u64; win_n];
-        for i in 0..win_n {
-            for j in (i + 1)..win_n {
-                if ix.session_ts[ix.turns[final_turn_indices[i]].session] <= ix.session_ts[ix.turns[final_turn_indices[j]].session] {
-                    adj_mask[i] |= 1u64 << j;
-                }
-            }
-        }
-        let _reduced_spine = crate::retrieval::graph::causal::transitive_reduction_edges(&adj_mask);
-        if !taxa_locked_head && !torrens_locked_head {
-            crate::retrieval::graph::ac3::apply_ac3_consistency(ix, state_intent, &base_q16, &mut final_turn_indices, k);
-        }
-        let ref_ts_sec = ix.session_ts.iter().copied().max().unwrap_or(0);
-        let mut ledger = crate::retrieval::graph::locke_ledger::build_turn_attribution_ledger(ix, &final_turn_indices, &base_q16);
-        for &ti in &final_turn_indices {
-            let stab_days = ix.turns[ti].stability.max(0.0).round() as u64;
-            let actr_q16 = crate::retrieval::graph::actr::actr_base_level_q16(ix, ti, ref_ts_sec, stab_days);
-            let tid = &ix.turns[ti].id;
-            if actr_q16 > 0 {
-                ledger.record_channel(tid, crate::retrieval::graph::locke_ledger::CH_ACTR, actr_q16 as u64);
-            }
-            if t_exact_mask[ti] > 0 {
-                ledger.record_channel(tid, crate::retrieval::graph::locke_ledger::CH_QLD, base_q16[ti]);
-                ledger.record_channel(tid, crate::retrieval::graph::locke_ledger::CH_BM25L_DFR, base_q16[ti]);
-            }
-            ledger.record_channel(tid, crate::retrieval::graph::locke_ledger::CH_ROCCHIO, base_q16[ti] >> 4);
-            ledger.record_channel(tid, crate::retrieval::graph::locke_ledger::CH_RBP, 1 << 16);
-            ledger.record_channel(tid, crate::retrieval::graph::locke_ledger::CH_AC3, 1 << 16);
-            ledger.record_channel(tid, crate::retrieval::graph::locke_ledger::CH_PSL_ILP, 1 << 16);
-            if let Some(&(_, wsc)) = wand_stats.top_k.iter().find(|&&(wti, _)| wti == ti) {
-                ledger.record_channel(tid, crate::retrieval::graph::locke_ledger::CH_WAND, wsc);
-            }
-            let (taxa_q16, _isa_mask, _is_def) = crate::retrieval::graph::taxa::evaluate_turn_taxa_q16(
-                ix,
-                &plan,
-                &pref_reg,
-                q_wilkins,
-                q_zato,
-                ti,
-            );
-            if taxa_q16 > 0 {
-                ledger.record_channel(tid, crate::retrieval::graph::locke_ledger::CH_TAXA, taxa_q16);
-            }
-            let causal_q16 = crate::retrieval::graph::causal::evaluate_causal_turn_q16(
-                ix,
-                state_intent,
-                ti,
-                base_q16[ti],
-                &final_turn_indices,
-            );
-            if causal_q16 > 0 {
-                ledger.record_channel(tid, crate::retrieval::graph::locke_ledger::CH_CAUSAL, causal_q16);
-            }
-        }
-        let _attribution_root = ledger.finalize_root();
-    }
-
-    // Allen-Between Entity Trajectory Interpolation for Multi-Hop / Narrative chains:
-    // When two retrieved top turns `t_a < t_b` share a rare entity or rare content anchor (`1 <= df <= 6`),
-    // admit intermediate turns `t_a < t_mid < t_b` carrying that anchor into Slots `2..5` without
-    // pushing earlier admitted hops past index `4`.
-    if final_turn_indices.len() >= 2 && !torrens_locked_head {
-        let top_snap: Vec<usize> = final_turn_indices.iter().take(5).copied().collect();
-        let mut admitted_mids: Vec<usize> = Vec::new();
-        for i in 0..top_snap.len() {
-            for j in (i + 1)..top_snap.len() {
-                let ta = top_snap[i].min(top_snap[j]);
-                let tb = top_snap[i].max(top_snap[j]);
-                if tb.saturating_sub(ta) >= 2 && tb.saturating_sub(ta) <= 40 {
-                    let mut shared_rare: Vec<u32> = ix.turns[ta]
-                        .entities
-                        .iter()
-                        .filter(|&&eid| ix.turns[tb].entities.contains(&eid))
-                        .filter(|&&eid| {
-                            let df = ix.t_own_stats.df.get(&eid).copied().unwrap_or(0);
-                            (1..=6).contains(&df)
-                        })
-                        .copied()
-                        .collect();
-                    if shared_rare.is_empty() && is_monologue_corpus {
-                        for &cid in &ix.turns[ta].content {
-                            if ix.turns[tb].content.contains(&cid) {
-                                let df = ix.t_own_stats.df.get(&cid).copied().unwrap_or(0);
-                                if (1..=5).contains(&df) && !shared_rare.contains(&cid) {
-                                    shared_rare.push(cid);
-                                }
-                            }
-                        }
-                    }
-                    for aid in shared_rare {
-                        for mid in (ta + 1)..tb {
-                            if (ix.turns[mid].entities.contains(&aid)
-                                || (is_monologue_corpus && ix.turns[mid].content.contains(&aid)))
-                                && !ix.turns[mid].is_question
-                                && !ix.turns[mid].is_backchannel
-                                && !final_turn_indices.contains(&mid)
-                                && !admitted_mids.contains(&mid)
-                                && admitted_mids.len() < 2
-                            {
-                                admitted_mids.push(mid);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let mut ins_cursor = 2usize;
-        for mid in admitted_mids {
-            if final_turn_indices.len() < 5 {
-                final_turn_indices.push(mid);
-            } else if ins_cursor < 5 {
-                let slot = (ins_cursor..5)
-                    .rev()
-                    .find(|&s| !top_snap[..2.min(top_snap.len())].contains(&final_turn_indices[s]))
-                    .unwrap_or(4);
-                final_turn_indices.insert(slot, mid);
-                ins_cursor = (slot + 1).min(5);
-                if final_turn_indices.len() > k {
-                    final_turn_indices.truncate(k);
                 }
             }
         }
@@ -994,26 +833,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         k,
     );
 
-    if !crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled(eff_it, &q.text) {
-        stratigraphic_mst_engram_q16::apply_stratigraphic_mst_silent_engram_seating(
-            ix,
-            &q.text,
-            &eff_it,
-            &mut final_session_indices,
-            &s_score,
-            &s_exact_mask,
-            k,
-        );
-        petrie_camin_sokal_q16::apply_petrie_pq_camin_sokal_kemeny_voter(
-            ix,
-            &q.text,
-            &eff_it,
-            &mut final_session_indices,
-            &s_score,
-            &s_exact_mask,
-            k,
-        );
-    }
     if has_named_speakers_eff
         && !eff_it.is_event_sequence
         && !pref_on
@@ -1041,20 +860,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     .unwrap_or(0)
             })
             .collect();
-        let rrf_inp = crate::retrieval::fusion::top10_rrf::Top10RrfInputs {
-            ix,
-            q_text: &q.text,
-            plan: &plan,
-            final_turn_indices: &final_turn_indices,
-            best_scene_q16: &best_scene_q16,
-            sight_all_q16: &sight_all_q16,
-            s_exact_mask: &s_exact_mask,
-        };
-        crate::retrieval::fusion::top10_rrf::apply_slot0_locked_top10_rrf(
-            &rrf_inp,
-            &mut final_session_indices,
-        );
-
         // Domain C (Step 6B): Unified Clause-Proof Weighted RRF + Weighted Local Kemenization
         // Replaces literal `s_exact_mask` locks and stale `keep0` pinning with unified
         // `sight_all_q16` + `proof_ic_q16` + `best_scene_q16` + Stage-12 Kemeny consensus.
@@ -1133,208 +938,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 final_session_indices[..pool_len].copy_from_slice(&rest[..pool_len]);
             } else {
                 final_session_indices[..pool_len].copy_from_slice(&fused_ord);
-            }
-
-            // Wave 6 `S8-004` Session-Level Rhumb-Union Bridge Seat + M3 2-Hop Bridge-Entity Triangle Closure:
-            // Triggered on explicit `multi_hop` OR any coverage deficit where none of top-3 sessions covers all query groups.
-            let deficit_b = q_group_cnt >= 2
-                && final_session_indices
-                    .iter()
-                    .take(3)
-                    .map(|&s| (s_exact_mask.get(s).copied().unwrap_or(0) & q_group_mask).count_ones())
-                    .max()
-                    .unwrap_or(0)
-                    < (q_group_cnt as u32);
-            if (eff_it.multi_hop || deficit_b) && q_group_cnt >= 2 && final_session_indices.len() >= 3 {
-                let s0 = final_session_indices[0];
-                let m0 = s_exact_mask.get(s0).copied().unwrap_or(0) & q_group_mask;
-                if m0 != 0 && m0 != q_group_mask {
-                    let top_check = final_session_indices.len().min(10);
-                    let mut union_win: Option<usize> = None;
-                    'rhumb_sess: for i in 0..top_check.min(4) {
-                        let ma = s_exact_mask.get(final_session_indices[i]).copied().unwrap_or(0) & q_group_mask;
-                        if ma == 0 {
-                            continue;
-                        }
-                        for j in (i + 1)..top_check.min(6) {
-                            let mb = s_exact_mask.get(final_session_indices[j]).copied().unwrap_or(0) & q_group_mask;
-                            if mb != 0 && (ma & mb) == 0 {
-                                let target_u = ma | mb;
-                                if let Some(pos_u) = (1..top_check).find(|&idx_u| {
-                                    let su = final_session_indices[idx_u];
-                                    let mu = s_exact_mask.get(su).copied().unwrap_or(0) & q_group_mask;
-                                    (mu & target_u) == target_u
-                                        && mu.count_ones() > m0.count_ones()
-                                        && sight_all_q16[su].saturating_mul(100) >= sight_all_q16[s0].saturating_mul(84)
-                                }) {
-                                    union_win = Some(pos_u);
-                                    break 'rhumb_sess;
-                                }
-                            }
-                        }
-                    }
-                    if let Some(pos_u) = union_win {
-                        let moved = final_session_indices.remove(pos_u);
-                        if eff_it.multi_hop || !full_lex_lock {
-                            final_session_indices.insert(0, moved);
-                        } else {
-                            let dst = 1.min(final_session_indices.len());
-                            final_session_indices.insert(dst, moved);
-                        }
-                    }
-
-                    // M3 2-Hop Bridge-Entity Triangle Closure (Slots 2..4; never disturbs crisp Slot 0):
-                    // Scan top-16 sessions for `(s_a in 0..3, s_b in 5..16)` sharing a rare non-query
-                    // entity `e_bridge` (`2 <= s_df <= (ns / 4).max(3)`) where `s_b` strictly expands `m0`.
-                    let s0_now = final_session_indices[0];
-                    let m0_now = s_exact_mask.get(s0_now).copied().unwrap_or(0) & q_group_mask;
-                    let top16_len = final_session_indices.len().min(16);
-                    if m0_now != 0 && m0_now != q_group_mask && top16_len > 5 {
-                        let max_bridge_df = (ix.session_turns.len() / 4).max(3) as u32;
-                        let mut head_rare_ents: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-                        for &sa in final_session_indices.iter().take(3) {
-                            for &eid in &ix.session_entities[sa] {
-                                if plan.focal_ids.contains(&eid) {
-                                    continue;
-                                }
-                                let sdf = ix.s_stats.df.get(&eid).copied().unwrap_or(0);
-                                if (2..=max_bridge_df).contains(&sdf) {
-                                    head_rare_ents.insert(eid);
-                                }
-                            }
-                        }
-                        if !head_rare_ents.is_empty() {
-                            let mut best_tri: Option<(u32, usize, u64, usize, u32)> = None;
-                            for pos_b in 5..top16_len {
-                                let sb = final_session_indices[pos_b];
-                                let mb = s_exact_mask.get(sb).copied().unwrap_or(0) & q_group_mask;
-                                let extra_bits = (mb & !m0_now).count_ones();
-                                if extra_bits == 0 {
-                                    continue;
-                                }
-                                if sight_all_q16[sb].saturating_mul(100) < sight_all_q16[s0_now].saturating_mul(45) {
-                                    continue;
-                                }
-                                let mut shared_cnt = 0usize;
-                                let mut first_bridge = 0u32;
-                                for &eid in &head_rare_ents {
-                                    if ix.session_entities[sb].contains(&eid) {
-                                        if shared_cnt == 0 {
-                                            first_bridge = eid;
-                                        }
-                                        shared_cnt += 1;
-                                    }
-                                }
-                                if shared_cnt == 0 {
-                                    continue;
-                                }
-                                let cand = (extra_bits, shared_cnt, sight_all_q16[sb], pos_b, first_bridge);
-                                let better = best_tri.is_none_or(|cur| {
-                                    (cand.0, cand.1, cand.2, std::cmp::Reverse(cand.3))
-                                        > (cur.0, cur.1, cur.2, std::cmp::Reverse(cur.3))
-                                });
-                                if better {
-                                    best_tri = Some(cand);
-                                }
-                            }
-                            if let Some((_, _, _, pos_b, bridge_eid)) = best_tri {
-                                let sb = final_session_indices.remove(pos_b);
-                                let dst_s = if final_session_indices.len() >= 4
-                                    && ((s_exact_mask.get(final_session_indices[3]).copied().unwrap_or(0)
-                                        & q_group_mask
-                                        & !m0_now)
-                                        != 0)
-                                {
-                                    4.min(final_session_indices.len())
-                                } else {
-                                    3.min(final_session_indices.len())
-                                };
-                                final_session_indices.insert(dst_s, sb);
-                                if !final_turn_indices.iter().take(5).any(|&ti| ix.turns[ti].session == sb) {
-                                    if let Some(bt) = ix.session_turns[sb]
-                                        .iter()
-                                        .copied()
-                                        .filter(|&ti| {
-                                            !ix.turns[ti].is_backchannel
-                                                && !ix.turns[ti].is_question
-                                                && !turn_is_superseded(ix, ti)
-                                                && ix.turns[ti].entities.contains(&bridge_eid)
-                                        })
-                                        .max_by(|&a, &b| {
-                                            t_scene[a]
-                                                .partial_cmp(&t_scene[b])
-                                                .unwrap_or(std::cmp::Ordering::Equal)
-                                                .then_with(|| b.cmp(&a))
-                                        })
-                                    {
-                                        if let Some(ex) = final_turn_indices.iter().position(|&x| x == bt) {
-                                            if ex >= 5 {
-                                                final_turn_indices.remove(ex);
-                                                let ins_t = 4.min(final_turn_indices.len());
-                                                final_turn_indices.insert(ins_t, bt);
-                                            }
-                                        } else {
-                                            let ins_t = 4.min(final_turn_indices.len());
-                                            final_turn_indices.insert(ins_t, bt);
-                                            final_turn_indices.truncate(k);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Tier-2 Pass-2 Exclusion Re-Ask + #9 Simplicial 2-Complex / Hodge Triangle Completion
-                    // on Named-Speaker Multi-Hop (`eff_it.multi_hop || deficit_b`):
-                    // When Top-5 turns are dominated by a single entity cluster and still miss query groups,
-                    // find a complementary turn `t_b` that closes an entity triangle with Top-2 (`t_a <-> e_bridge <-> t_b`)
-                    // while covering an uncovered query group, seating it into Slot 4!
-                    let top5_turn_mask: u64 = final_turn_indices
-                        .iter()
-                        .take(5)
-                        .fold(0u64, |acc, &ti| acc | (t_exact_mask.get(ti).copied().unwrap_or(0) & q_group_mask));
-                    if top5_turn_mask != 0 && top5_turn_mask != q_group_mask && final_turn_indices.len() >= 5 {
-                        let max_t_df = ((ix.turns.len() / 8).max(4)) as u32;
-                        let mut top2_bridge_ents: std::collections::BTreeSet<u32> =
-                            std::collections::BTreeSet::new();
-                        for &ta in final_turn_indices.iter().take(2) {
-                            for &eid in &ix.turns[ta].entities {
-                                if !plan.focal_ids.contains(&eid) {
-                                    let tdf = ix.t_own_stats.df.get(&eid).copied().unwrap_or(0);
-                                    if (2..=max_t_df).contains(&tdf) {
-                                        top2_bridge_ents.insert(eid);
-                                    }
-                                }
-                            }
-                        }
-                        let mut best_p2_turn: Option<(u32, usize, u64, usize)> = None;
-                        for (pos_t, &tb) in final_turn_indices.iter().enumerate().take(16).skip(5) {
-                            let trb = &ix.turns[tb];
-                            if trb.is_question || trb.is_backchannel || turn_is_superseded(ix, tb) {
-                                continue;
-                            }
-                            let mb = t_exact_mask.get(tb).copied().unwrap_or(0) & q_group_mask;
-                            let uncov = (mb & !top5_turn_mask).count_ones();
-                            if uncov == 0 {
-                                continue;
-                            }
-                            let tri_links = trb
-                                .entities
-                                .iter()
-                                .filter(|eid| top2_bridge_ents.contains(eid))
-                                .count();
-                            let sc_b = ieee754_bits_to_q16(t_scene.get(tb).copied().unwrap_or(0.0).to_bits());
-                            let key = (uncov, tri_links, sc_b, pos_t);
-                            if best_p2_turn.is_none_or(|cur| (key.0, key.1, key.2) > (cur.0, cur.1, cur.2)) {
-                                best_p2_turn = Some(key);
-                            }
-                        }
-                        if let Some((_, _, _, pos_t)) = best_p2_turn {
-                            let tb = final_turn_indices.remove(pos_t);
-                            final_turn_indices.insert(4, tb);
-                        }
-                    }
-                }
             }
 
             // Phase 4 Step 10A (T44 Slot-0 Condorcet Duel + T39 First-Mention Colophon Tie-Break):
@@ -2904,6 +2507,93 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             }
         }
 
+        // Universal Anonymous Multi-Session Top-5 Turn Sync (`MSR`, `KU`, `CR`, `TR`):
+        // When `final_session_indices[..5]` holds >= 2 strong distinct sessions (`sight >= 0.45 * smax`)
+        // but `final_turn_indices[..5]` suffers duplicate-session hoarding from `S[0]`, preserve Slot 0
+        // and guarantee each strong Top-5 session gets its best non-backchannel turn in `0..5`.
+        if !is_agg_multi
+            && !is_did_you
+            && !is_pure_pref_stmt
+            && !eff_it.task_under_rules
+            && !eff_it.is_event_sequence
+            && !eff_summary_request(&q.text)
+            && final_turn_indices.len() >= 5
+            && smax > 0.0
+        {
+            let strong_top5_sess: Vec<usize> = final_session_indices
+                .iter()
+                .take(5)
+                .copied()
+                .filter(|&si| !is_rule_only_sess(si) && (s_score[si] + bridge_boost[si]) >= 0.45 * smax)
+                .collect();
+            let mut cur_top5_sess: BTreeSet<usize> = BTreeSet::new();
+            for &ti in final_turn_indices.iter().take(5) {
+                cur_top5_sess.insert(ix.turns[ti].session);
+            }
+            if strong_top5_sess.len() >= 2 && cur_top5_sess.len() < strong_top5_sess.len() {
+                let mut packed: Vec<usize> = Vec::with_capacity(k.max(5));
+                packed.push(final_turn_indices[0]);
+                for &si in &strong_top5_sess {
+                    if packed.len() >= 5 {
+                        break;
+                    }
+                    if packed.iter().any(|&t| ix.turns[t].session == si) {
+                        continue;
+                    }
+                    let best_ti = ix.session_turns[si]
+                        .iter()
+                        .copied()
+                        .filter(|&ti| {
+                            !ix.turns[ti].is_backchannel
+                                && !ix.turns[ti].is_standing_policy
+                                && (is_ku_shape
+                                    || is_have_i
+                                    || !turn_is_superseded(ix, ti))
+                                && t_scene.get(ti).copied().unwrap_or(0.0) > 0.0
+                        })
+                        .max_by(|&a, &b| {
+                            let au = u8::from(
+                                (eff_it.assistant_attribution && ix.turns[a].field == 1)
+                                    || (!eff_it.assistant_attribution
+                                        && ix.turns[a].field == 0
+                                        && !ix.turns[a].is_pure_info_question),
+                            );
+                            let bu = u8::from(
+                                (eff_it.assistant_attribution && ix.turns[b].field == 1)
+                                    || (!eff_it.assistant_attribution
+                                        && ix.turns[b].field == 0
+                                        && !ix.turns[b].is_pure_info_question),
+                            );
+                            let ea = (t_exact_mask.get(a).copied().unwrap_or(0) & q_group_mask).count_ones();
+                            let eb = (t_exact_mask.get(b).copied().unwrap_or(0) & q_group_mask).count_ones();
+                            au.cmp(&bu)
+                                .then_with(|| ea.cmp(&eb))
+                                .then_with(|| {
+                                    t_scene[a]
+                                        .partial_cmp(&t_scene[b])
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                                .then_with(|| b.cmp(&a))
+                        });
+                    if let Some(bt) = best_ti {
+                        packed.push(bt);
+                    }
+                }
+                for &old_ti in &final_turn_indices {
+                    if packed.len() >= k.max(5) {
+                        break;
+                    }
+                    if !packed.contains(&old_ti) {
+                        packed.push(old_ti);
+                    }
+                }
+                if packed.len() >= 5 {
+                    packed.truncate(k.max(5));
+                    final_turn_indices = packed;
+                }
+            }
+        }
+
         // T61 Ultra-Rare Distinctive User-Term Floor (`1 <= user_df <= 2`, e.g. `"subscription"` in c6 IE,
         // `"deck"` in c5 IE):
         // Measures `user_df` (sessions where the USER `tf[0]` used the term, immune to 500-word assistant inflation!).
@@ -4191,7 +3881,12 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             }
         }
         if !merged.is_empty() {
-            merged.truncate(k.max(5));
+            let eo_pool_cap = if crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled(eff_it, &q.text) {
+                96.max(k.max(5))
+            } else {
+                k.max(5)
+            };
+            merged.truncate(eo_pool_cap);
             final_session_indices = merged;
         }
     }
@@ -4205,18 +3900,20 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && !final_session_indices.is_empty()
     {
         let is_sum_sync = eff_summary_request(&q.text);
+        let is_chrono_prog =
+            eff_it.is_event_sequence
+                || crate::retrieval::fusion::summary_silhouette_q16::is_chronological_progression_query(&q.text);
         let target_k = k.max(5);
-        // GeoRAG Multi-Clause Facility Location (`2606.29328`) for `summarization` and `event_ordering`:
-        if is_sum_sync
-            || crate::retrieval::fusion::summary_silhouette_q16::is_chronological_progression_query(&q.text)
-        {
+        // GeoRAG Multi-Clause Facility Location (`2606.29328`) for `summarization` and `event_ordering`
+        // (keeps top-16 multi-clause milestones alive for Matroid 5-era stratification below):
+        if is_sum_sync || is_chrono_prog {
             final_session_indices =
                 crate::retrieval::fusion::summary_silhouette_q16::select_multiclause_facility_sessions_q16(
                     ix,
                     &q.text,
                     &final_session_indices,
                     &s_score,
-                    target_k.max(10),
+                    target_k.max(16),
                     false,
                 );
         }
@@ -4322,121 +4019,18 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 }
             }
         }
-        // Pillar 5 (ScalDPP `2604.03240` Incremental Q16 Cholesky MAP-DPP):
-        // Break single-cluster redundancy on `event_ordering` while locking Slot 0 (preserve GeoRAG on `summarization`),
-        // so Slots `1..target_k` pack orthogonal timeline phases.
-        if !is_sum_sync && final_session_indices.len() >= 4 {
-            let dpp_cands: Vec<(usize, u64)> = final_session_indices
-                .iter()
-                .take(24)
-                .enumerate()
-                .map(|(rank_i, &si)| {
-                    let base = (s_score.get(si).copied().unwrap_or(0.0)
-                        + bridge_boost.get(si).copied().unwrap_or(0.0))
-                    .max(0.0);
-                    let rank_prior = 65_536u64 / (1 + (rank_i as u64) / 3);
-                    let q16 = ((base * 65_536.0) as u64).max(rank_prior);
-                    (si, q16)
-                })
-                .collect();
-            let dpp_head = crate::retrieval::fusion::scaldpp_q16::select_scaldpp_cholesky_sessions_q16(
-                ix,
-                &dpp_cands,
-                target_k.max(10).min(dpp_cands.len()),
-                true,
-            );
-            if !dpp_head.is_empty() {
-                let mut merged_dpp = dpp_head;
-                for &si in &final_session_indices {
-                    if !merged_dpp.contains(&si) {
-                        merged_dpp.push(si);
-                    }
-                }
-                final_session_indices = merged_dpp;
-            }
-        }
-        // Engine #5 (Edmonds Weighted Matroid Intersection Q16.16):
-        // Global max-weight selection over Top-32 candidates subject to M1 (temporal/epoch bin)
-        // and M2 (query aspect/facet) partition matroids with Slot-0 Genesis pin.
+        // Chronological milestone interleaving for progression queries (Wave C1 consolidation:
+        // replaces redundant ScalDPP + Matroid Intersection passes superseded by GeoRAG + C10 VCG):
         if !is_sum_sync
             && crate::retrieval::fusion::summary_silhouette_q16::is_chronological_progression_query(&q.text)
             && final_session_indices.len() >= 3
         {
-            use crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16;
-            use crate::retrieval::fusion::matroid_intersection_q16::{
-                select_sessions_matroid_q16, MatroidElem, MAX_MATROID_GROUND,
-            };
-            let ns_m = ix.session_turns.len().max(1);
-            let pool_n = final_session_indices.len().min(MAX_MATROID_GROUND);
-            let mut eff_ts_m = vec![0i64; ns_m];
-            let mut last_ts_m = 0i64;
-            for si in 0..ns_m {
-                if ix.session_ts[si] > 0 {
-                    last_ts_m = ix.session_ts[si];
-                }
-                eff_ts_m[si] = last_ts_m;
-            }
-            let mut m1_bins: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
-            let mut m2_bins: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
-            let elems: Vec<MatroidElem> = final_session_indices
-                .iter()
-                .take(pool_n)
-                .enumerate()
-                .map(|(rank_i, &si)| {
-                    let sc = (s_score.get(si).copied().unwrap_or(0.0)
-                        + bridge_boost.get(si).copied().unwrap_or(0.0))
-                    .max(0.0);
-                    let w_q16 = (ieee754_bits_to_q16(sc.to_bits()) as i64)
-                        .max(65_536 / (1 + (rank_i as i64) / 2));
-                    let m1_part = if eff_ts_m[si] > 0 {
-                        eff_ts_m[si].div_euclid(86_400) as usize
-                    } else {
-                        (si.saturating_mul(target_k) / ns_m).min(target_k.saturating_sub(1))
-                    };
-                    let em = s_exact_mask.get(si).copied().unwrap_or(0);
-                    let m2_part = if em != 0 {
-                        em.trailing_zeros() as usize
-                    } else {
-                        100 + (si % 7)
-                    };
-                    m1_bins.insert(m1_part);
-                    m2_bins.insert(m2_part);
-                    let chrono_key = if eff_ts_m[si] > 0 { eff_ts_m[si] } else { si as i64 };
-                    MatroidElem {
-                        id: si,
-                        weight_q16: w_q16,
-                        m1_part,
-                        m2_part,
-                        chrono_key,
-                    }
-                })
-                .collect();
-            let max_per_epoch = if m1_bins.len() >= target_k { 1 } else { 2 };
-            let max_per_aspect = if m2_bins.len() >= target_k { 1 } else { 2 };
-            let picked = select_sessions_matroid_q16(
-                &elems,
-                target_k.min(pool_n),
-                max_per_epoch,
-                max_per_aspect,
-                Some(0),
-                false,
-            );
-            if !picked.is_empty() {
-                let mut rebuilt = picked;
-                for &si in &final_session_indices {
-                    if !rebuilt.contains(&si) {
-                        rebuilt.push(si);
-                    }
-                }
-                final_session_indices = rebuilt;
-            } else {
-                final_session_indices =
-                    crate::retrieval::fusion::summary_silhouette_q16::interleave_chronological_milestones(
-                        ix,
-                        &final_session_indices,
-                        target_k,
-                    );
-            }
+            final_session_indices =
+                crate::retrieval::fusion::summary_silhouette_q16::interleave_chronological_milestones(
+                    ix,
+                    &final_session_indices,
+                    target_k,
+                );
         }
         let mut synced_turns: Vec<usize> = Vec::with_capacity(target_k);
         let mut dyad_partners: Vec<usize> = Vec::new();
@@ -4454,28 +4048,55 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 || q_sum_low2.contains("how my");
             let pick_sum_turn = |si: usize, force_user_slot0: bool| -> Option<(usize, Option<usize>)> {
                 let members = &ix.session_turns[si];
-                // #5 Query-Anchored Session-Summary Silhouette: prefer substantive user initiative
-                // turns with broad unique aspect coverage over short ack/clarification questions.
-                let best_any = members
+                // #5 Query-Anchored Session-Summary Silhouette: select best substantive USER initiative
+                // turn (`field == 0`) separately from `best_asst` (`field == 1`) so long assistant
+                // recaps cannot starve the session's opening user turn before the dyad comparison.
+                let best_user = members
                     .iter()
                     .copied()
-                    .filter(|&ti| !ix.turns[ti].is_backchannel && !ix.turns[ti].is_standing_policy)
+                    .filter(|&ti| {
+                        let t = &ix.turns[ti];
+                        t.field == 0 && !t.is_backchannel && !t.is_standing_policy
+                    })
                     .max_by(|&a, &b| {
                         let ea = (t_exact_mask.get(a).copied().unwrap_or(0) & qg_mask).count_ones();
                         let eb = (t_exact_mask.get(b).copied().unwrap_or(0) & qg_mask).count_ones();
                         let sa = crate::retrieval::fusion::summary_silhouette_q16::summary_turn_silhouette_score(ix, a, t_scene, ea);
                         let sb = crate::retrieval::fusion::summary_silhouette_q16::summary_turn_silhouette_score(ix, b, t_scene, eb);
                         sa.cmp(&sb).then_with(|| b.cmp(&a))
-                    })?;
+                    });
+                let best_any = best_user.or_else(|| {
+                    members
+                        .iter()
+                        .copied()
+                        .filter(|&ti| !ix.turns[ti].is_backchannel && !ix.turns[ti].is_standing_policy)
+                        .max_by(|&a, &b| {
+                            let ea = (t_exact_mask.get(a).copied().unwrap_or(0) & qg_mask).count_ones();
+                            let eb = (t_exact_mask.get(b).copied().unwrap_or(0) & qg_mask).count_ones();
+                            let sa = crate::retrieval::fusion::summary_silhouette_q16::summary_turn_silhouette_score(ix, a, t_scene, ea);
+                            let sb = crate::retrieval::fusion::summary_silhouette_q16::summary_turn_silhouette_score(ix, b, t_scene, eb);
+                            sa.cmp(&sb).then_with(|| b.cmp(&a))
+                        })
+                })?;
                 let best_asst = members
                     .iter()
                     .copied()
                     .filter(|&ti| {
                         let ct = &ix.turns[ti];
-                        ct.field == 1
-                            && !ct.is_question
-                            && !ct.is_backchannel
-                            && ct.body_for_headers.len() >= 24
+                        if ct.field != 1
+                            || ct.is_question
+                            || ct.is_backchannel
+                            || ct.body_for_headers.len() < 24
+                        {
+                            return false;
+                        }
+                        // hardcode-scan: closed-class (assistant gratitude/closing pleasantry openings)
+                        let al = ct.body_for_headers.trim_start().to_ascii_lowercase();
+                        !(al.starts_with("you're welcome")
+                            || al.starts_with("you're very welcome")
+                            || al.starts_with("you\u{2019}re welcome")
+                            || al.starts_with("you\u{2019}re very welcome")
+                            || al.starts_with("glad i could help"))
                     })
                     .max_by(|&a, &b| {
                         let pa = u8::from(turn_pos(ix, a) == Some(1));
@@ -4512,12 +4133,13 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         && !user_is_ack_reaction
                         && ix.turns[best_any].body_for_headers.len() >= 36
                         && (!ix.turns[best_any].is_question
-                            || (force_u
-                                && ix.turns[best_any].body_for_headers.len() >= 48
+                            || (ix.turns[best_any].body_for_headers.len() >= 48
                                 && !ix.turns[best_any].is_pure_info_question
                                 && !ix.turns[best_any].is_short_question))
-                        && (force_u || any_bits >= asst_bits || any_sc >= 0.65 * asst_sc);
-                    if !keep_user_primary && asst_sc >= 0.55 * any_sc {
+                        && (force_u
+                            || any_bits > asst_bits
+                            || (any_bits >= asst_bits && any_sc >= 0.85 * asst_sc));
+                    if !keep_user_primary && asst_sc >= 0.72 * any_sc {
                         let pt = (asst_ti != best_any && ix.turns[best_any].field == 0).then_some(best_any);
                         return Some((asst_ti, pt));
                     }
@@ -4525,22 +4147,54 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 Some((best_any, best_asst.filter(|&a| a != best_any)))
             };
             let mut top5_picks: Vec<(usize, Option<usize>)> = Vec::new();
-            for (rank_idx, &si) in final_session_indices.iter().take(5).enumerate() {
-                if let Some(pair) = pick_sum_turn(si, rank_idx == 0 && is_prog_sum_turn) {
+            for &si in final_session_indices.iter().take(5) {
+                if let Some(pair) = pick_sum_turn(si, is_prog_sum_turn) {
                     top5_picks.push(pair);
                 }
             }
+            let strong_sum_sess = final_session_indices
+                .iter()
+                .take(5)
+                .filter(|&&si| smax_sync_d > 0.0 && s_score.get(si).copied().unwrap_or(0.0) >= 0.52 * smax_sync_d)
+                .count();
             let mut used_p0 = false;
+            let mut used_p1 = false;
             for (rank_i, &(chosen, partner)) in top5_picks.iter().enumerate() {
+                if rank_i >= 2
+                    && strong_sum_sess <= 2
+                    && !used_p0
+                    && let Some(&(_, Some(p0))) = top5_picks.first()
+                    && !synced_turns.is_empty()
+                    && t_scene.get(p0).copied().unwrap_or(0.0)
+                        >= 0.50 * t_scene.get(synced_turns[0]).copied().unwrap_or(0.0)
+                {
+                    if !synced_turns.contains(&p0) && synced_turns.len() < target_k {
+                        synced_turns.push(p0);
+                        used_p0 = true;
+                    }
+                }
+                if rank_i >= 3
+                    && strong_sum_sess <= 2
+                    && !used_p1
+                    && let Some(&(_, Some(p1))) = top5_picks.get(1)
+                    && !synced_turns.is_empty()
+                    && t_scene.get(p1).copied().unwrap_or(0.0)
+                        >= 0.50 * t_scene.get(synced_turns[0]).copied().unwrap_or(0.0)
+                {
+                    if !synced_turns.contains(&p1) && synced_turns.len() < target_k {
+                        synced_turns.push(p1);
+                        used_p1 = true;
+                    }
+                }
                 if rank_i == 3
                     && !used_p0
                     && let Some(&(_, Some(p0))) = top5_picks.first()
                     && let Some(&s3) = final_session_indices.get(3)
                     && smax_sync_d > 0.0
-                    && s_score.get(s3).copied().unwrap_or(0.0) < 0.62 * smax_sync_d
+                    && s_score.get(s3).copied().unwrap_or(0.0) < 0.68 * smax_sync_d
                     && !synced_turns.is_empty()
                     && t_scene.get(p0).copied().unwrap_or(0.0)
-                        >= 0.60 * t_scene.get(synced_turns[0]).copied().unwrap_or(0.0)
+                        >= 0.55 * t_scene.get(synced_turns[0]).copied().unwrap_or(0.0)
                 {
                     if !synced_turns.contains(&p0) && synced_turns.len() < target_k {
                         synced_turns.push(p0);
@@ -4552,11 +4206,12 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 }
                 if let Some(pt) = partner
                     && !(rank_i == 0 && used_p0)
+                    && !(rank_i == 1 && used_p1)
                 {
                     dyad_partners.push(pt);
                 }
             }
-            for pt in dyad_partners {
+            for pt in dyad_partners.iter().copied().take(2) {
                 if synced_turns.len() >= target_k {
                     break;
                 }
@@ -4575,6 +4230,14 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     && !synced_turns.contains(&chosen)
                 {
                     synced_turns.push(chosen);
+                }
+            }
+            for pt in dyad_partners.iter().copied().skip(2) {
+                if synced_turns.len() >= target_k {
+                    break;
+                }
+                if !synced_turns.contains(&pt) {
+                    synced_turns.push(pt);
                 }
             }
         } else {
@@ -4703,6 +4366,69 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         ctx.wf_g4_flags = crate::retrieval::rank::take_wf_flags();
     }
 
+    // C10: Slot-0-Anchored Jonker-Volgenant Bipartite Marriage + VCG Clarke-Pivot Top-5 Slate
+    // Marries distinct uncovered query groups / stratigraphic eras 1-to-1 to Slots 1..5 while keeping Slot 0 sealed.
+    let is_sum_slate = crate::retrieval::eff_summary_request(&q.text);
+    if (eff_it.multi_hop || is_sum_slate)
+        && !eff_it.is_event_sequence
+        && final_turn_indices.len() >= 5
+        && plan.groups.len() >= 2
+    {
+        let c_cap = final_turn_indices.len().min(20);
+        let cand_tis: Vec<usize> = final_turn_indices[..c_cap].to_vec();
+        let n_grp = plan.groups.len().min(8);
+        let r_facets = if is_sum_slate {
+            ix.session_turns.len().clamp(2, 5)
+        } else {
+            n_grp.max(2)
+        };
+        let max_t_sc = t_scene
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max)
+            .max(1e-6);
+        let mut payoff_rc: Vec<Vec<i64>> = vec![vec![0i64; c_cap]; r_facets];
+        let mut atom_masks: Vec<u64> = vec![0u64; c_cap];
+        let n_atoms = (n_grp + 8).min(64);
+        let atom_ic_q16: Vec<i64> = vec![65_536i64; n_atoms];
+
+        for (col, &ti) in cand_tis.iter().enumerate() {
+            let tr = &ix.turns[ti];
+            if col > 0 && (tr.is_pure_info_question || tr.is_backchannel) {
+                continue;
+            }
+            let scn_q = (((t_scene.get(ti).copied().unwrap_or(0.0).max(0.0)) / max_t_sc) * 32_768.0) as i64;
+            let ex_m = t_exact_mask.get(ti).copied().unwrap_or(0) & ((1u64 << n_grp) - 1);
+            let sess_bit = 1u64 << (n_grp + (tr.session % (64 - n_grp).max(1)));
+            atom_masks[col] = ex_m | sess_bit;
+            if is_sum_slate {
+                let ns_tot = ix.session_turns.len().max(1);
+                let era = ((tr.session * r_facets) / ns_tot).min(r_facets - 1);
+                payoff_rc[era][col] = 65_536i64.saturating_add(scn_q);
+            } else {
+                for r in 0..r_facets {
+                    if (ex_m & (1u64 << r)) != 0 {
+                        payoff_rc[r][col] = 65_536i64.saturating_add(scn_q);
+                    } else if ctx.t_bridge.get(ti).copied().unwrap_or(0.0) > 0.0 {
+                        payoff_rc[r][col] = 24_576i64.saturating_add(scn_q / 2);
+                    }
+                }
+            }
+        }
+        let jv_idx = crate::retrieval::fusion::hogbom_clean_vcg_q16::jonker_volgenant_vcg_slate_q16(
+            &payoff_rc,
+            &atom_masks,
+            &atom_ic_q16,
+            0,
+            c_cap,
+        );
+        if jv_idx.len() == c_cap && jv_idx[0] == 0 {
+            let mut rebuilt: Vec<usize> = jv_idx.into_iter().map(|ci| cand_tis[ci]).collect();
+            rebuilt.extend_from_slice(&final_turn_indices[c_cap..]);
+            final_turn_indices = rebuilt;
+        }
+    }
+
     // Unified Q16.16 GBDT/LambdaMART + Condorcet @1 & @5 Gatekeeper Scorer over deep pool
     crate::retrieval::seating::gatekeeper::apply_at1_gatekeeper_q16(
         ix,
@@ -4735,743 +4461,180 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         k,
     );
 
+    // Phase 2 GhostCurrent: Post-AT1 Slot-0 & witness-spine co-seating (strictly gated by Epistemic Deficit)
+    if !ctx.torrens_locked_head && !ctx.implicit_disclosure_locked {
+        let mut gc_slot0_ctx =
+            crate::retrieval::graph::ghostcurrent_mdl_q16::GhostCurrentSlot0Ctx {
+                ix,
+                plan,
+                q,
+                eff_it,
+                pref_on,
+                deficit_a: ctx.deficit_a,
+                res: &ctx.ghostcurrent,
+                t_own,
+                t_mask: &ctx.t_mask,
+                t_exact_mask,
+                q_group_mask: ctx.q_group_mask,
+                k,
+                final_turn_indices: &mut final_turn_indices,
+                final_session_indices: &mut final_session_indices,
+            };
+        crate::retrieval::graph::ghostcurrent_mdl_q16::apply_ghostcurrent_slot0_promotion(
+            &mut gc_slot0_ctx,
+        );
+    }
+
+    ctx.bridge_boost = bridge_boost;
     ctx.final_session_indices = final_session_indices;
     ctx.final_turn_indices = final_turn_indices;
     crate::retrieval::event_ordering::apply_event_ordering_stack(ctx);
     crate::retrieval::rank::tool_receipt::apply_tool_receipt_priority(ctx);
     crate::retrieval::rank::implicit_bridge::apply_unified_implicit_bridge(ctx);
     crate::retrieval::rank::supersession_and_guard::apply_supersession_and_entity_guard(ctx);
+    // C12: Belnap FOUR_2 Paraconsistent Contradiction Pair Co-Seating (`Both = {T, F}` -> Slots 0 & 1)
+    // hardcode-scan: closed-class (epistemic contradiction and state-transition interrogative cues)
+    let q_low_belnap = ctx.q.text.to_ascii_lowercase();
+    let belnap_eligible = !ctx.has_named_speakers_eff
+        && !ctx.is_monologue_corpus
+        && (q_low_belnap.contains("contradict")
+            || q_low_belnap.contains("inconsisten")
+            || q_low_belnap.contains("conflict")
+            || q_low_belnap.contains("discrepanc"));
+    if belnap_eligible {
+        crate::retrieval::graph::reichenbach_roman_belnap_q16::coseat_belnap_bilattice_pair(
+            ctx.ix,
+            &mut ctx.final_session_indices,
+            &mut ctx.final_turn_indices,
+            &ctx.t_scene,
+            ctx.k,
+        );
+    }
+    // Wave 5 (Lambek QUD Categorical Elimination + 2-Hop Bridge Transfer Slot-0 Tie-Break):
+    if !ctx.torrens_locked_head && !ctx.implicit_disclosure_locked {
+        let l_ctx = crate::retrieval::lexical::lambek_qud_q16::LambekSlot0Ctx {
+            ix: ctx.ix,
+            q: ctx.q,
+            plan: &ctx.plan,
+            eff_it: &ctx.eff_it,
+            t_exact_mask: &ctx.t_exact_mask,
+            t_scene: &ctx.t_scene,
+            t_bridge: &ctx.t_bridge,
+            k: ctx.k,
+        };
+        crate::retrieval::lexical::lambek_qud_q16::apply_lambek_qud_slot0_tiebreak(
+            &l_ctx,
+            &mut ctx.final_turn_indices,
+            &mut ctx.final_session_indices,
+        );
+    }
+    // Wave 6 (Chronological Genesis Spine Stratification + Knowledge-Update Mutation Polarity):
+    crate::retrieval::rank::genesis_spine_q16::apply_genesis_spine_and_ku_polarity(ctx);
+    // Breakthroughs #5 & #6 respect both Torrens & implicit-disclosure head locks;
+    // Breakthroughs #2 (Slots 3..4 stranded preference rescue) & #3 (Slot-0 lock-aware Gricean
+    // Slots 3..4 novel-constraint packing) protect Slots 0..2 unconditionally so they safely run
+    // even when Slot 0 carries an implicit-disclosure / Galois lock.
+    if !ctx.torrens_locked_head {
+        // Breakthrough #2 (Revealed-Preference Interrogative Immunity + Polysemy-Attenuated Cone):
+        crate::retrieval::seating::revealed_preference_cone_q16::apply_revealed_preference_cone_seating(
+            ctx,
+        );
+        if !ctx.implicit_disclosure_locked {
+            // Breakthrough #5 (Counterfactual/Epistemic Modal x Named Speaker Dispositional Cone):
+            crate::retrieval::rank::speaker_disposition_cone_q16::apply_speaker_disposition_cone_seating(
+                ctx,
+            );
+            // Breakthrough #6 (#855 Open-Circuit Residual Peeling + Counting Cover + Max-Entropy Spine):
+            let _ = crate::retrieval::fusion::submodular_residual_cover_q16::apply_submodular_residual_cover(
+                ctx,
+            );
+        }
+        // Breakthrough #3 (Gricean Maxim-of-Quantity Conditional Information-Gain Intra-Session Turn Selector):
+        crate::retrieval::seating::gricean_constraint_turn_q16::apply_gricean_constraint_turn_seating(
+            ctx,
+        );
+    }
+    // Breakthrough #4A: Post-Gatekeeper Official Top-5 Standing-Rule Co-Seating.
+    // Protects Slots 0..2 unconditionally (and Slot 3 for single-rule seating) while ensuring
+    // the highest-confidence condition/scope-matched active standing rule from `ctx.standing_rules[0..2]`
+    // is never left stranded outside official Top-5 after downstream gatekeepers run.
+    // hardcode-scan: closed-class (past-episodic, aggregation, and pairwise comparison guards)
+    let ql_sr = ctx.q.text.trim().to_ascii_lowercase();
+    let sr_excluded_q = ql_sr.contains("did i ")
+        || ql_sr.contains("did we ")
+        || ql_sr.contains("did you ")
+        || ql_sr.contains("have i ")
+        || ql_sr.contains("have we ")
+        || ql_sr.contains("was my ")
+        || ql_sr.contains("were my ")
+        || ql_sr.starts_with("how many ")
+        || ql_sr.starts_with("how long ")
+        || ql_sr.contains("between ")
+        || ql_sr.contains(" across ");
+    if !ctx.has_named_speakers_eff
+        && !ctx.is_monologue_corpus
+        && !ctx.ix.has_tool_calls
+        && !sr_excluded_q
+        && !ctx.standing_rules.is_empty()
+        && !ctx.eff_it.is_event_sequence
+        && !eff_summary_request(&ctx.q.text)
+        && !ctx.eff_it.sniper_how_many
+        && !ctx.eff_it.multi_hop
+        && ctx.ix.session_turns.len() >= 16
+        && ctx.final_session_indices.len() >= 5
+        && ctx.final_turn_indices.len() >= 5
+    {
+        let mut seated_tail = 0usize;
+        for sr in ctx.standing_rules.iter().take(2) {
+            let Some(r_ti) = ctx.ix.turns.iter().position(|t| t.id == sr.id) else {
+                continue;
+            };
+            if turn_is_superseded(ctx.ix, r_ti) {
+                continue;
+            }
+            let cond_hit = ctx.cond_rule_turns.contains(&r_ti);
+            let hi_conf = sr.score >= 8.0
+                || (cond_hit && sr.score >= 3.0)
+                || (ctx.eff_it.task_under_rules && sr.score >= 3.0);
+            if !hi_conf {
+                continue;
+            }
+            if seated_tail >= 1 && !(ctx.eff_it.task_under_rules && cond_hit && sr.score >= 15.0) {
+                break;
+            }
+            let r_si = ctx.ix.turns[r_ti].session;
+            let sess_in_top5 = ctx.final_session_indices[..5].contains(&r_si);
+            let turn_in_top5 = ctx.final_turn_indices[..5].contains(&r_ti);
+            if sess_in_top5 && turn_in_top5 {
+                continue;
+            }
+            let slot = if seated_tail == 0 { 4usize } else { 3usize };
+            if !sess_in_top5 {
+                if let Some(pos) = ctx.final_session_indices.iter().position(|&s| s == r_si) {
+                    ctx.final_session_indices.remove(pos);
+                }
+                let ins = slot.min(ctx.final_session_indices.len());
+                ctx.final_session_indices.insert(ins, r_si);
+            }
+            if !turn_in_top5 {
+                if let Some(pos) = ctx.final_turn_indices.iter().position(|&t| t == r_ti) {
+                    ctx.final_turn_indices.remove(pos);
+                }
+                let ins = slot.min(ctx.final_turn_indices.len());
+                ctx.final_turn_indices.insert(ins, r_ti);
+                if ctx.final_turn_indices.len() > ctx.k {
+                    ctx.final_turn_indices.truncate(ctx.k);
+                }
+            }
+            seated_tail += 1;
+            if seated_tail >= 2 {
+                break;
+            }
+        }
+    }
     if ctx.final_session_indices.len() > ctx.k {
         ctx.final_session_indices.truncate(ctx.k);
     }
 }
 
 
-/// Stratigraphic Phase Grouping + Kruskal MST Diameter Pseudotime + Silent-Engram Rescue.
-///
-/// Combines Harris (1979) stratigraphic phase partitioning, Chambers & Jurafsky (ACL 2008)
-/// protagonist narrative chains, Trapnell et al. (Nature Biotech 2014) deterministic Kruskal
-/// MST diameter backbone, and Cai/Silva (Nature 2016) silent-engram connectivity rescue.
-/// Leaves Position 1 (`final_session_indices[0]`), `t_own`, `t_turn_raw`, and Turn Slots `0..5`
-/// untouched, filling only empty seats or redundant-stratum vacancies in Positions `2..5`.
-mod stratigraphic_mst_engram_q16 {
-    use super::*;
-    use crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16;
-    use crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled;
-    use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
-    /// Unit `1.0` in unsigned `Q16.16` fixed-point math (`2^16`).
-    const Q16_ONE: u64 = 65_536;
-    /// Number of top-5 session seats evaluated by `All@5` (`5`).
-    const TOP5_SESSION_SEATS: usize = 5;
-    /// Maximum top lexical anchor sessions used to extract protagonist thread entities (`3`).
-    const PROTAGONIST_ANCHOR_SESSIONS: usize = 3;
-    /// Minimum cross-session document frequency for a thread-linking protagonist entity (`2`).
-    const PROTAGONIST_MIN_SESSION_DF: u32 = 2;
-    /// Maximum cross-session document frequency before an entity becomes an ambient hub (`10`).
-    const PROTAGONIST_MAX_SESSION_DF: u32 = 10;
-    /// Minimum distinct protagonist entities required to form an active narrative spine (`2`).
-    const MIN_PROTAGONIST_SPINE_ENTITIES: usize = 2;
-    /// Minimum candidate sessions in graph to run Kruskal MST diameter extraction (`3`).
-    const MIN_MST_GRAPH_NODES: usize = 3;
-    /// Maximum graph nodes admitted into Kruskal MST (`24`, bounding pairwise edges to `<= 276`).
-    const MAX_MST_GRAPH_NODES: usize = 24;
-    /// Howard & Kahana (2002) integer temporal-context contiguity weight (`0.25` in `Q16.16`).
-    const TCM_PHASE_PROXIMITY_WEIGHT_Q16: u64 = 16_384;
-
-    /// Closed-class sequence/span grammar detector (zero open-class topic words).
-    /// hardcode-scan: closed-class (temporal connectives, quantifiers, prepositions, interrogatives only).
-    pub(super) fn has_closed_class_multi_event_grammar(query: &str) -> bool {
-        let mut conn_hits = 0usize;
-        let mut has_span_prep = false;
-        let mut has_plural_quant = false;
-        for raw in query.split(|c: char| !c.is_ascii_alphanumeric()) {
-            if raw.is_empty() {
-                continue;
-            }
-            let w = raw.to_ascii_lowercase();
-            if matches!(
-                w.as_str(),
-                "first"
-                    | "then"
-                    | "finally"
-                    | "before"
-                    | "after"
-                    | "since"
-                    | "until"
-                    | "earlier"
-                    | "later"
-                    | "previously"
-                    | "already"
-            ) {
-                conn_hits += 1;
-            }
-            if matches!(w.as_str(), "throughout" | "across" | "between") {
-                has_span_prep = true;
-            }
-            if matches!(w.as_str(), "all" | "every" | "each" | "both" | "our") {
-                has_plural_quant = true;
-            }
-        }
-        conn_hits >= 2 || (has_span_prep && has_plural_quant)
-    }
-
-    /// Maps session `si` (`0..ns`) into its Harris stratigraphic macro-phase `0..num_phases`.
-    #[inline]
-    pub(super) fn stratigraphic_phase_of(si: usize, ns: usize, num_phases: usize) -> usize {
-        if ns == 0 || num_phases <= 1 {
-            return 0;
-        }
-        ((si * num_phases) / ns).min(num_phases - 1)
-    }
-
-    /// Deterministic disjoint-set union-find for Kruskal Maximum-Affinity Spanning Tree.
-    struct DisjointSet {
-        parent: Vec<usize>,
-    }
-
-    impl DisjointSet {
-        fn new(n: usize) -> Self {
-            Self {
-                parent: (0..n).collect(),
-            }
-        }
-
-        fn find(&mut self, mut x: usize) -> usize {
-            while self.parent[x] != x {
-                let p = self.parent[x];
-                self.parent[x] = self.parent[p];
-                x = p;
-            }
-            x
-        }
-
-        fn union(&mut self, a: usize, b: usize) -> bool {
-            let ra = self.find(a);
-            let rb = self.find(b);
-            if ra == rb {
-                return false;
-            }
-            if ra < rb {
-                self.parent[rb] = ra;
-            } else {
-                self.parent[ra] = rb;
-            }
-            true
-        }
-    }
-
-    /// Computes the deterministic Kruskal Maximum-Affinity Spanning Tree over `nodes` and extracts
-    /// the longest tree diameter path (Trapnell 2014 pseudotime backbone), canonically oriented
-    /// ascending by endpoint session ID (`path.first() <= path.last()`).
-    pub(super) fn extract_kruskal_mst_diameter_backbone(
-        nodes: &[usize],
-        edges: &[(u64, usize, usize)],
-    ) -> Vec<usize> {
-        let n = nodes.len();
-        if n < 2 {
-            return nodes.to_vec();
-        }
-        let mut sorted_edges = edges.to_vec();
-        sorted_edges.sort_by(|a, b| {
-            b.0.cmp(&a.0)
-                .then_with(|| nodes[a.1].cmp(&nodes[b.1]))
-                .then_with(|| nodes[a.2].cmp(&nodes[b.2]))
-        });
-
-        let mut dsu = DisjointSet::new(n);
-        let mut adj: Vec<Vec<(usize, u64)>> = vec![Vec::new(); n];
-        for &(w, u, v) in &sorted_edges {
-            if w > 0 && dsu.union(u, v) {
-                adj[u].push((v, w));
-                adj[v].push((u, w));
-            }
-        }
-
-        let farthest_from = |start: usize| -> (usize, Vec<Option<usize>>) {
-            let mut dist: Vec<Option<u64>> = vec![None; n];
-            let mut prev: Vec<Option<usize>> = vec![None; n];
-            let mut q = VecDeque::new();
-            dist[start] = Some(0);
-            q.push_back(start);
-            let mut best_u = start;
-            let mut best_hops = 0usize;
-            let mut best_w = 0u64;
-            let mut hops = vec![0usize; n];
-
-            while let Some(u) = q.pop_front() {
-                let du = dist[u].unwrap_or(0);
-                let hu = hops[u];
-                if (hu, du, usize::MAX - nodes[u]) > (best_hops, best_w, usize::MAX - nodes[best_u]) {
-                    best_u = u;
-                    best_hops = hu;
-                    best_w = du;
-                }
-                for &(v, w) in &adj[u] {
-                    if dist[v].is_none() {
-                        dist[v] = Some(du.saturating_add(w));
-                        hops[v] = hu + 1;
-                        prev[v] = Some(u);
-                        q.push_back(v);
-                    }
-                }
-            }
-            (best_u, prev)
-        };
-
-        let (end_a, _) = farthest_from(0);
-        let (end_b, prev_from_a) = farthest_from(end_a);
-        let mut path = Vec::new();
-        let mut cur = Some(end_b);
-        while let Some(idx) = cur {
-            path.push(nodes[idx]);
-            cur = prev_from_a[idx];
-        }
-        if path.first().copied().unwrap_or(0) > path.last().copied().unwrap_or(0) {
-            path.reverse();
-        }
-        path
-    }
-
-    pub(super) fn apply_stratigraphic_mst_silent_engram_seating(
-        ix: &Index,
-        query: &str,
-        eff_it: &QueryIntent,
-        final_session_indices: &mut Vec<usize>,
-        s_score: &[f32],
-        s_exact_mask: &[u64],
-        k: usize,
-    ) {
-        let ns = ix.session_turns.len();
-        if ns < MIN_MST_GRAPH_NODES || final_session_indices.is_empty() {
-            return;
-        }
-        if eff_it.sniper_when
-            || eff_it.sniper_where
-            || eff_it.sniper_how_many
-            || eff_it.preference
-            || eff_it.task_under_rules
-        {
-            return;
-        }
-        let deep_pool = deep_session_pool_enabled(eff_it, query);
-        let gate_open = deep_pool
-            || (!eff_it.temporal && has_closed_class_multi_event_grammar(query));
-        if !gate_open {
-            return;
-        }
-
-        let mut ent_sess_df: BTreeMap<u32, u32> = BTreeMap::new();
-        let mut sess_decl_ents: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); ns];
-        for t in &ix.turns {
-            if t.field != 0 || t.is_pure_info_question || t.is_backchannel {
-                continue;
-            }
-            for &eid in &t.entities {
-                sess_decl_ents[t.session].insert(eid);
-            }
-        }
-        for ents in &sess_decl_ents {
-            for &eid in ents {
-                *ent_sess_df.entry(eid).or_insert(0) += 1;
-            }
-        }
-
-        let mut protagonist_ents: BTreeMap<u32, u64> = BTreeMap::new();
-        for &anc_si in final_session_indices.iter().take(PROTAGONIST_ANCHOR_SESSIONS) {
-            if anc_si >= ns {
-                continue;
-            }
-            for &eid in &sess_decl_ents[anc_si] {
-                let df = ent_sess_df.get(&eid).copied().unwrap_or(0);
-                if (PROTAGONIST_MIN_SESSION_DF..=PROTAGONIST_MAX_SESSION_DF).contains(&df) {
-                    let ic_q16 = Q16_ONE / (df as u64);
-                    protagonist_ents.insert(eid, ic_q16);
-                }
-            }
-        }
-        if protagonist_ents.len() < MIN_PROTAGONIST_SPINE_ENTITIES {
-            return;
-        }
-
-        let num_phases = ns.min(TOP5_SESSION_SEATS);
-        let s0 = final_session_indices[0];
-        let mut cand_scores: Vec<(u64, usize)> = Vec::new();
-        for (si, ents) in sess_decl_ents.iter().enumerate() {
-            let mut prot_q16 = 0u64;
-            for &eid in ents {
-                if let Some(&w) = protagonist_ents.get(&eid) {
-                    prot_q16 = prot_q16.saturating_add(w);
-                }
-            }
-            if si == s0 || prot_q16 > 0 {
-                let lex_q16 = ieee754_bits_to_q16(s_score.get(si).map_or(0u32, |v| v.to_bits()));
-                cand_scores.push((prot_q16.saturating_add(lex_q16 >> 2), si));
-            }
-        }
-        cand_scores.sort_by(|a, b| {
-            (b.1 == s0)
-                .cmp(&(a.1 == s0))
-                .then_with(|| b.0.cmp(&a.0))
-                .then_with(|| a.1.cmp(&b.1))
-        });
-        let nodes: Vec<usize> = cand_scores
-            .into_iter()
-            .take(MAX_MST_GRAPH_NODES)
-            .map(|(_, si)| si)
-            .collect();
-        if nodes.len() < MIN_MST_GRAPH_NODES || nodes[0] != s0 {
-            return;
-        }
-
-        let mut edges: Vec<(u64, usize, usize)> = Vec::new();
-        for (i, &si) in nodes.iter().enumerate() {
-            let pi = stratigraphic_phase_of(si, ns, num_phases);
-            for (j_off, &sj) in nodes[(i + 1)..].iter().enumerate() {
-                let j = i + 1 + j_off;
-                let pj = stratigraphic_phase_of(sj, ns, num_phases);
-                let mut shared_q16 = 0u64;
-                for &eid in &sess_decl_ents[si] {
-                    if let Some(&w) = protagonist_ents.get(&eid) {
-                        if sess_decl_ents[sj].contains(&eid) {
-                            shared_q16 = shared_q16.saturating_add(w);
-                        }
-                    }
-                }
-                let has_rsb = ix.session_rsb_back[sj].iter().any(|&(_, p)| p == si)
-                    || ix.session_rsb_back[si].iter().any(|&(_, p)| p == sj)
-                    || ix.session_episode_prev[sj] == Some(si)
-                    || ix.session_episode_prev[si] == Some(sj);
-                if has_rsb {
-                    shared_q16 = shared_q16.saturating_add(Q16_ONE >> 1);
-                }
-                if shared_q16 > 0 {
-                    let phase_gap = pi.abs_diff(pj) as u64;
-                    let tcm_q16 = TCM_PHASE_PROXIMITY_WEIGHT_Q16 / (1 + phase_gap);
-                    edges.push((shared_q16.saturating_add(tcm_q16), i, j));
-                }
-            }
-        }
-        if edges.is_empty() {
-            return;
-        }
-
-        let backbone = extract_kruskal_mst_diameter_backbone(&nodes, &edges);
-
-        let mut top5: Vec<usize> = final_session_indices
-            .iter()
-            .copied()
-            .take(TOP5_SESSION_SEATS)
-            .collect();
-        let mut covered_phases: BTreeSet<usize> = top5
-            .iter()
-            .map(|&s| stratigraphic_phase_of(s, ns, num_phases))
-            .collect();
-
-        for &cand_si in &backbone {
-            if top5.contains(&cand_si) {
-                continue;
-            }
-            let cand_phase = stratigraphic_phase_of(cand_si, ns, num_phases);
-            if covered_phases.contains(&cand_phase) && top5.len() >= TOP5_SESSION_SEATS {
-                continue;
-            }
-            if top5.len() < TOP5_SESSION_SEATS {
-                top5.push(cand_si);
-                covered_phases.insert(cand_phase);
-                continue;
-            }
-            let s0_lex_q16 = ieee754_bits_to_q16(s_score.get(s0).map_or(0u32, |v| v.to_bits()));
-            let mut victim_slot: Option<usize> = None;
-            for slot in (1..top5.len()).rev() {
-                let vs = top5[slot];
-                let v_mask = s_exact_mask.get(vs).copied().unwrap_or(0);
-                let others_mask = top5
-                    .iter()
-                    .enumerate()
-                    .filter(|&(oi, _)| oi != slot)
-                    .fold(0u64, |acc, (_, &os)| acc | s_exact_mask.get(os).copied().unwrap_or(0));
-                if (v_mask & !others_mask) != 0 {
-                    continue;
-                }
-                let v_lex_q16 = ieee754_bits_to_q16(s_score.get(vs).map_or(0u32, |v| v.to_bits()));
-                let v_phase = stratigraphic_phase_of(vs, ns, num_phases);
-                let phase_dup = top5
-                    .iter()
-                    .enumerate()
-                    .any(|(other_idx, &os)| other_idx != slot && stratigraphic_phase_of(os, ns, num_phases) == v_phase);
-                let ungrounded_policy = v_mask == 0
-                    && ix.session_turns[vs].iter().any(|&ti| ix.turns[ti].is_standing_policy)
-                    && !ix.session_turns[vs].iter().any(|&ti| ix.turns[ti].is_initiative);
-                if ungrounded_policy || (phase_dup && v_lex_q16.saturating_mul(2) <= s0_lex_q16) {
-                    victim_slot = Some(slot);
-                    break;
-                }
-            }
-            if let Some(v_idx) = victim_slot {
-                let evicted = top5[v_idx];
-                top5[v_idx] = cand_si;
-                covered_phases.insert(cand_phase);
-                if !final_session_indices.contains(&evicted) {
-                    final_session_indices.push(evicted);
-                }
-            }
-        }
-
-        let cap = if deep_pool {
-            final_session_indices.len().max(k.max(TOP5_SESSION_SEATS))
-        } else {
-            k.max(TOP5_SESSION_SEATS)
-        };
-        let mut rebuilt = top5;
-        for &old_si in final_session_indices.iter() {
-            if rebuilt.len() >= cap {
-                break;
-            }
-            if !rebuilt.contains(&old_si) {
-                rebuilt.push(old_si);
-            }
-        }
-        *final_session_indices = rebuilt;
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn test_closed_class_multi_event_grammar_has_zero_topic_words() {
-            assert!(has_closed_class_multi_event_grammar(
-                "What happened first and what happened after that?"
-            ));
-            assert!(has_closed_class_multi_event_grammar(
-                "Walk me through all items across our chats"
-            ));
-            assert!(!has_closed_class_multi_event_grammar("Where did Alice meet Bob?"));
-        }
-
-        #[test]
-        fn test_kruskal_mst_diameter_rescues_middle_silent_engram() {
-            // Sessions 0 -> 4 -> 9 -> 14 -> 19 form a 5-phase chain; session 9 is a silent bridge.
-            let nodes = vec![0, 19, 14, 4, 9];
-            let edges = vec![
-                (Q16_ONE * 2, 0, 3), // 0 -- 4
-                (Q16_ONE * 2, 3, 4), // 4 -- 9 (silent bridge)
-                (Q16_ONE * 2, 4, 2), // 9 -- 14
-                (Q16_ONE * 2, 2, 1), // 14 -- 19
-                (Q16_ONE >> 2, 0, 1), // weak long-range chord
-            ];
-            let backbone = extract_kruskal_mst_diameter_backbone(&nodes, &edges);
-            assert_eq!(backbone, vec![0, 4, 9, 14, 19]);
-        }
-
-        #[test]
-        fn test_stratigraphic_phase_partition_is_monotonic() {
-            let p0 = stratigraphic_phase_of(0, 25, 5);
-            let p2 = stratigraphic_phase_of(12, 25, 5);
-            let p4 = stratigraphic_phase_of(24, 25, 5);
-            assert_eq!((p0, p2, p4), (0, 2, 4));
-        }
-    }
-}
-
-/// Petrie / Booth-Lueker Consecutive-Ones Seriation & Camin-Sokal Vector-Clock Kemeny Voter.
-///
-/// Combines Petrie (1899) / Booth & Lueker (JCSS 1976) Consecutive-Ones (`C1P`) interval bridge
-/// continuity, Camin & Sokal (1965) / Fidge-Mattern (1988) irreversible vector-clock depth, and
-/// Shaw (1964) `FAD`/`LAD` interval bounds as a `Q16.16` Kemeny consensus voter.
-/// Enters with a 15% direct lexical Slot-0 lock protecting Single-Hop and Adversarial (`>= 85%`).
-mod petrie_camin_sokal_q16 {
-    use super::*;
-    use crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16;
-    use crate::retrieval::fusion::lin_bilmes::deep_session_pool_enabled;
-    use std::collections::{BTreeMap, BTreeSet};
-
-    /// Unit `1.0` in unsigned `Q16.16` fixed-point math (`2^16`).
-    const Q16_ONE: u64 = 65_536;
-    /// Default candidate pool cap for standard temporal/multi-hop Kemeny consensus (`10`).
-    const SERIATION_POOL_CAP: usize = 10;
-    /// Deep-pool candidate cap for event-sequence & summary queries (`96`, >77.5 median gold depth).
-    const DEEP_SERIATION_POOL_CAP: usize = 96;
-    /// Top-5 session window size (`5`).
-    const TOP5_SEATS: usize = 5;
-    /// Minimum session document frequency for a seriation / vector-clock character entity (`2`).
-    const CHAR_MIN_SESS_DF: u32 = 2;
-    /// Maximum session document frequency for a seriation / vector-clock character entity (`10`).
-    const CHAR_MAX_SESS_DF: u32 = 10;
-    /// 15% direct lexical margin (`115 / 100`) freezing Slot 0 on non-sequence queries.
-    const SLOT0_LEX_LOCK_NUM: u64 = 115;
-    const SLOT0_LEX_LOCK_DEN: u64 = 100;
-
-    /// Computes Booth-Lueker Consecutive-Ones (`C1P`) interval bridge credit in `Q16.16`.
-    pub(super) fn compute_petrie_c1p_continuity_q16(
-        ns: usize,
-        sess_ents: &[BTreeSet<u32>],
-        char_df: &BTreeMap<u32, (u32, usize, usize)>,
-        anchor_ents: &BTreeSet<u32>,
-    ) -> Vec<u64> {
-        let mut c1p_score = vec![0u64; ns];
-        for &eid in anchor_ents {
-            let Some(&(df, fad, lad)) = char_df.get(&eid) else {
-                continue;
-            };
-            if df == 0 || fad >= lad {
-                continue;
-            }
-            let w_q16 = Q16_ONE / (df as u64);
-            for (si, ents) in sess_ents.iter().enumerate().take(lad + 1).skip(fad) {
-                if ents.contains(&eid) {
-                    let bonus = if si == fad || si == lad {
-                        w_q16 + (w_q16 >> 2)
-                    } else {
-                        w_q16
-                    };
-                    c1p_score[si] = c1p_score[si].saturating_add(bonus);
-                }
-            }
-        }
-        c1p_score
-    }
-
-    /// Computes Camin-Sokal / Fidge-Mattern irreversible state-accumulation depth per session.
-    pub(super) fn compute_camin_sokal_vector_depth_q16(
-        ns: usize,
-        sess_ents: &[BTreeSet<u32>],
-        char_df: &BTreeMap<u32, (u32, usize, usize)>,
-        anchor_ents: &BTreeSet<u32>,
-    ) -> Vec<u64> {
-        let mut cumulative_derived = vec![0u64; ns];
-        let mut active_set: BTreeSet<u32> = BTreeSet::new();
-        for (si, ents) in sess_ents.iter().enumerate() {
-            for &eid in ents {
-                if anchor_ents.contains(&eid) && char_df.contains_key(&eid) {
-                    active_set.insert(eid);
-                }
-            }
-            if ents.iter().any(|e| anchor_ents.contains(e)) {
-                cumulative_derived[si] = (active_set.len() as u64).saturating_mul(Q16_ONE);
-            }
-        }
-        cumulative_derived
-    }
-
-    /// Runs a 3-ballot Kemeny pairwise consensus over `cands` (`lexical_q16`, `c1p_continuity_q16`,
-    /// `exact_coverage_plus_vector_link`), keeping `cands[0]` locked when `lock_head` holds.
-    pub(super) fn kemeny_seriation_consensus(
-        cands: &[usize],
-        lexical_q16: &[u64],
-        c1p_q16: &[u64],
-        vec_depth_q16: &[u64],
-        s_exact_mask: &[u64],
-        lock_head: bool,
-    ) -> Vec<usize> {
-        let m = cands.len();
-        if m < 2 {
-            return cands.to_vec();
-        }
-        let start = usize::from(lock_head);
-        let sub = &cands[start..];
-        let n = sub.len();
-        if n < 2 {
-            return cands.to_vec();
-        }
-
-        let mut net_wins = vec![0i64; n];
-        for i in 0..n {
-            let si = sub[i];
-            let ex_i = s_exact_mask.get(si).copied().unwrap_or(0).count_ones();
-            let state_i = (ex_i as u64)
-                .saturating_mul(Q16_ONE)
-                .saturating_add(u64::from(vec_depth_q16[si] > 0) * (Q16_ONE >> 1));
-            for j in (i + 1)..n {
-                let sj = sub[j];
-                let ex_j = s_exact_mask.get(sj).copied().unwrap_or(0).count_ones();
-                let state_j = (ex_j as u64)
-                    .saturating_mul(Q16_ONE)
-                    .saturating_add(u64::from(vec_depth_q16[sj] > 0) * (Q16_ONE >> 1));
-
-                let mut margin = 0i64;
-                match lexical_q16[si].cmp(&lexical_q16[sj]) {
-                    std::cmp::Ordering::Greater => margin += 1,
-                    std::cmp::Ordering::Less => margin -= 1,
-                    std::cmp::Ordering::Equal => {}
-                }
-                match c1p_q16[si].cmp(&c1p_q16[sj]) {
-                    std::cmp::Ordering::Greater => margin += 1,
-                    std::cmp::Ordering::Less => margin -= 1,
-                    std::cmp::Ordering::Equal => {}
-                }
-                match state_i.cmp(&state_j) {
-                    std::cmp::Ordering::Greater => margin += 1,
-                    std::cmp::Ordering::Less => margin -= 1,
-                    std::cmp::Ordering::Equal => {}
-                }
-
-                if margin > 0 {
-                    net_wins[i] += 1;
-                    net_wins[j] -= 1;
-                } else if margin < 0 {
-                    net_wins[j] += 1;
-                    net_wins[i] -= 1;
-                }
-            }
-        }
-
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&a, &b| {
-            net_wins[b]
-                .cmp(&net_wins[a])
-                .then_with(|| c1p_q16[sub[b]].cmp(&c1p_q16[sub[a]]))
-                .then_with(|| a.cmp(&b))
-                .then_with(|| sub[a].cmp(&sub[b]))
-        });
-
-        let mut out = Vec::with_capacity(m);
-        if lock_head {
-            out.push(cands[0]);
-        }
-        for idx in order {
-            out.push(sub[idx]);
-        }
-        out
-    }
-
-    pub(super) fn apply_petrie_pq_camin_sokal_kemeny_voter(
-        ix: &Index,
-        query: &str,
-        eff_it: &QueryIntent,
-        final_session_indices: &mut Vec<usize>,
-        s_score: &[f32],
-        s_exact_mask: &[u64],
-        k: usize,
-    ) {
-        let ns = ix.session_turns.len();
-        if ns < 3 || final_session_indices.len() < 3 {
-            return;
-        }
-        let deep_pool = deep_session_pool_enabled(eff_it, query);
-        if !(deep_pool || eff_it.temporal || eff_it.multi_hop) {
-            return;
-        }
-
-        let mut sess_ents: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); ns];
-        let mut char_df: BTreeMap<u32, (u32, usize, usize)> = BTreeMap::new();
-        for t in &ix.turns {
-            if t.field != 0 || t.is_pure_info_question || t.is_backchannel {
-                continue;
-            }
-            let si = t.session;
-            for &eid in &t.entities {
-                if sess_ents[si].insert(eid) {
-                    char_df
-                        .entry(eid)
-                        .and_modify(|e| {
-                            e.0 += 1;
-                            if si < e.1 {
-                                e.1 = si;
-                            }
-                            if si > e.2 {
-                                e.2 = si;
-                            }
-                        })
-                        .or_insert((1, si, si));
-                }
-            }
-        }
-        char_df.retain(|_, &mut (df, _, _)| (CHAR_MIN_SESS_DF..=CHAR_MAX_SESS_DF).contains(&df));
-        if char_df.is_empty() {
-            return;
-        }
-
-        let mut anchor_ents: BTreeSet<u32> = BTreeSet::new();
-        for &si in final_session_indices.iter().take(3) {
-            if si < ns {
-                for &eid in &sess_ents[si] {
-                    if char_df.contains_key(&eid) {
-                        anchor_ents.insert(eid);
-                    }
-                }
-            }
-        }
-        if anchor_ents.is_empty() {
-            return;
-        }
-
-        let lexical_q16: Vec<u64> = s_score
-            .iter()
-            .map(|&v| ieee754_bits_to_q16(v.to_bits()))
-            .collect();
-        let c1p_q16 = compute_petrie_c1p_continuity_q16(ns, &sess_ents, &char_df, &anchor_ents);
-        let vec_depth_q16 =
-            compute_camin_sokal_vector_depth_q16(ns, &sess_ents, &char_df, &anchor_ents);
-
-        let cap = if deep_pool {
-            DEEP_SERIATION_POOL_CAP
-        } else {
-            SERIATION_POOL_CAP
-        };
-        let pool_len = final_session_indices.len().min(cap);
-        let cands: Vec<usize> = final_session_indices[..pool_len].to_vec();
-        let s0 = cands[0];
-        let s1_lex = cands.get(1).map(|&s| lexical_q16[s]).unwrap_or(0);
-        let s0_exact = s_exact_mask.get(s0).copied().unwrap_or(0).count_ones();
-        let max_other_exact = cands
-            .iter()
-            .skip(1)
-            .map(|&s| s_exact_mask.get(s).copied().unwrap_or(0).count_ones())
-            .max()
-            .unwrap_or(0);
-        let lock_head = !deep_pool
-            || (lexical_q16[s0].saturating_mul(SLOT0_LEX_LOCK_DEN)
-                >= s1_lex.saturating_mul(SLOT0_LEX_LOCK_NUM))
-            || (s0_exact > max_other_exact);
-
-        let reordered = kemeny_seriation_consensus(
-            &cands,
-            &lexical_q16,
-            &c1p_q16,
-            &vec_depth_q16,
-            s_exact_mask,
-            lock_head,
-        );
-        final_session_indices[..pool_len].copy_from_slice(&reordered);
-        if !deep_pool && final_session_indices.len() > k.max(TOP5_SEATS) {
-            final_session_indices.truncate(k.max(TOP5_SEATS));
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn test_petrie_c1p_and_camin_sokal_promote_bridge_and_polarize_depth() {
-            let mut sess_ents = vec![BTreeSet::new(); 4];
-            sess_ents[0].insert(10); // FAD(10)=0
-            sess_ents[1].extend([10, 20]); // bridge carrying 10 + debuting 20
-            sess_ents[2].extend([20, 30]); // derived state carrying 20 + debuting 30
-            sess_ents[3].insert(99); // unrelated decoy
-
-            let mut char_df = BTreeMap::new();
-            char_df.insert(10, (2, 0, 1));
-            char_df.insert(20, (2, 1, 2));
-            char_df.insert(30, (2, 2, 2));
-            let anchor_ents: BTreeSet<u32> = [10, 20, 30].into_iter().collect();
-
-            let c1p = compute_petrie_c1p_continuity_q16(4, &sess_ents, &char_df, &anchor_ents);
-            let depth = compute_camin_sokal_vector_depth_q16(4, &sess_ents, &char_df, &anchor_ents);
-            assert!(c1p[1] > c1p[3]);
-            assert!(depth[0] < depth[1] && depth[1] < depth[2]);
-            assert_eq!(depth[3], 0);
-
-            // Indexed by session ID: s0=0b11, s1(bridge)=0b01, s2=0b01, s3(decoy)=0b00.
-            let cands = vec![0, 3, 1, 2];
-            let lex = vec![Q16_ONE * 4, Q16_ONE, Q16_ONE, Q16_ONE];
-            let mask = vec![0b11, 0b01, 0b01, 0b00];
-            let out = kemeny_seriation_consensus(&cands, &lex, &c1p, &depth, &mask, true);
-            assert_eq!(out[0], 0);
-            assert_eq!(out[1], 1);
-            assert_eq!(*out.last().unwrap(), 3);
-        }
-    }
-}

@@ -155,8 +155,10 @@ fn resolve_source_key(g: &'static TopoGraph, entity: &str) -> Option<&'static st
             }
         }
         joined.clear();
-        if w1.len() >= 5 {
-            let apoc = format!("{w0}{}", &w1[..w1.len() - 1]);
+        if w1.chars().count() >= 5
+            && let Some((last_idx, _)) = w1.char_indices().next_back()
+        {
+            let apoc = format!("{w0}{}", &w1[..last_idx]);
             if let Some((&seed, _)) = g.fwd.get_key_value(apoc.as_str()) {
                 return Some(seed);
             }
@@ -192,8 +194,22 @@ pub fn is_ambiguous_admin(node: &str) -> bool {
 /// e.g. `"girl with a pearl earring" -> "mauritshuis" -> "the hague" -> "netherlands"`.
 /// Zero floats; deterministic ordering.
 pub fn upward_containers(entity: &str, max_hops: usize) -> Vec<&'static str> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<HashMap<(String, usize), Vec<&'static str>>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+    if let Some(hit) = CACHE.with(|c| c.borrow().get(&(entity.to_string(), max_hops)).cloned()) {
+        return hit;
+    }
     let g = graph();
     let Some(seed) = resolve_source_key(g, entity) else {
+        CACHE.with(|c| {
+            let mut m = c.borrow_mut();
+            if m.len() >= 32_768 {
+                m.clear();
+            }
+            m.insert((entity.to_string(), max_hops), Vec::new());
+        });
         return Vec::new();
     };
     let mut visited: Vec<&'static str> = Vec::new();
@@ -220,6 +236,13 @@ pub fn upward_containers(entity: &str, max_hops: usize) -> Vec<&'static str> {
     }
     visited.sort_unstable();
     visited.dedup();
+    CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        if m.len() >= 32_768 {
+            m.clear();
+        }
+        m.insert((entity.to_string(), max_hops), visited.clone());
+    });
     visited
 }
 

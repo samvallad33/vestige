@@ -604,6 +604,19 @@ fn parse(data: &str) -> Tables {
 /// from `senses(word)` (plus `@i` instance surnames when `word` is an instance proper noun), returning
 /// `(synset_id, desc_count)` strictly filtered to specific informative synsets (`desc_count <= max_desc`).
 pub fn specific_ancestor_synsets(word: &str, max_hops: usize, max_desc: u32) -> Vec<(u32, u32)> {
+    type AncestorKey = (String, usize, u32);
+    type AncestorVal = Vec<(u32, u32)>;
+    thread_local! {
+        static CACHE: std::cell::RefCell<HashMap<AncestorKey, AncestorVal>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+    if let Some(hit) = CACHE.with(|c| {
+        c.borrow()
+            .get(&(word.to_string(), max_hops, max_desc))
+            .cloned()
+    }) {
+        return hit;
+    }
     let t = table();
     let mut seeds: Vec<u32> = senses(word).to_vec();
     if seeds.len() <= 2
@@ -620,6 +633,13 @@ pub fn specific_ancestor_synsets(word: &str, max_hops: usize, max_desc: u32) -> 
         seeds.extend_from_slice(senses(sing));
     }
     if seeds.is_empty() {
+        CACHE.with(|c| {
+            let mut m = c.borrow_mut();
+            if m.len() >= 32_768 {
+                m.clear();
+            }
+            m.insert((word.to_string(), max_hops, max_desc), Vec::new());
+        });
         return Vec::new();
     }
     let mut visited: Vec<u32> = Vec::new();
@@ -657,6 +677,13 @@ pub fn specific_ancestor_synsets(word: &str, max_hops: usize, max_desc: u32) -> 
         })
         .collect();
     out.sort_unstable_by_key(|&(s, dc)| (dc, s));
+    CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        if m.len() >= 32_768 {
+            m.clear();
+        }
+        m.insert((word.to_string(), max_hops, max_desc), out.clone());
+    });
     out
 }
 
@@ -1646,64 +1673,82 @@ pub fn strict_co_hyponym_siblings(word: &str) -> Vec<&'static str> {
 /// - `38`: inverse (`query_word < turn_word`, generic hypernym in turn)
 /// - `0`: unrelated in the 3-hop finite Heyting sublattice.
 pub fn heyting_implication_ic_q16(turn_word: &str, query_word: &str) -> u16 {
-    let tw = turn_word.to_ascii_lowercase();
-    let qw = query_word.to_ascii_lowercase();
-    if tw.len() < 3 || qw.len() < 3 {
+    if turn_word.len() < 3 || query_word.len() < 3 {
         return 0;
     }
-    if tw == qw {
+    if turn_word.eq_ignore_ascii_case(query_word) {
         return 100;
     }
-    let t = table();
-    let (Some(t_syns), Some(q_syns)) = (t.senses.get(&tw), t.senses.get(&qw)) else {
-        return 0;
-    };
-    if t_syns.iter().any(|s| q_syns.contains(s)) {
-        return 98;
+    let tw = turn_word.to_ascii_lowercase();
+    let qw = query_word.to_ascii_lowercase();
+    thread_local! {
+        static CACHE: std::cell::RefCell<HashMap<(String, String), u16>> =
+            std::cell::RefCell::new(HashMap::new());
     }
-    // Check upward closure from `turn_word` (`tw <= qw`: specific turn entails general query facet).
-    let mut frontier: Vec<u32> = t_syns.clone();
-    for hop in 1..=3usize {
-        let mut next: Vec<u32> = Vec::new();
-        for s in frontier {
-            if let Some(ps) = t.parents.get(&s) {
-                for &p in ps {
-                    if q_syns.contains(&p) {
-                        let desc = t.desc_count.get(&p).copied().unwrap_or(500);
-                        let ic_bonus: u16 = if desc <= 25 {
-                            12
-                        } else if desc <= 120 {
-                            8
-                        } else {
-                            2
-                        };
-                        let base: u16 = match hop {
-                            1 => 84,
-                            2 => 76,
-                            _ => 68,
-                        };
-                        return (base + ic_bonus).min(96);
-                    }
-                    if !next.contains(&p) {
-                        next.push(p);
+    let key = (tw, qw);
+    if let Some(hit) = CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let t = table();
+    let res: u16 = 'eval: {
+        let (Some(t_syns), Some(q_syns)) = (t.senses.get(&key.0), t.senses.get(&key.1)) else {
+            break 'eval 0;
+        };
+        if t_syns.iter().any(|s| q_syns.contains(s)) {
+            break 'eval 98;
+        }
+        // Check upward closure from `turn_word` (`tw <= qw`: specific turn entails general query facet).
+        let mut frontier: Vec<u32> = t_syns.clone();
+        for hop in 1..=3usize {
+            let mut next: Vec<u32> = Vec::new();
+            for s in frontier {
+                if let Some(ps) = t.parents.get(&s) {
+                    for &p in ps {
+                        if q_syns.contains(&p) {
+                            let desc = t.desc_count.get(&p).copied().unwrap_or(500);
+                            let ic_bonus: u16 = if desc <= 25 {
+                                12
+                            } else if desc <= 120 {
+                                8
+                            } else {
+                                2
+                            };
+                            let base: u16 = match hop {
+                                1 => 84,
+                                2 => 76,
+                                _ => 68,
+                            };
+                            break 'eval (base + ic_bonus).min(96);
+                        }
+                        if !next.contains(&p) {
+                            next.push(p);
+                        }
                     }
                 }
             }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
         }
-        if next.is_empty() {
-            break;
+        // Check downward (`qw < tw`: turn only has a broader superordinate, much weaker implication).
+        for &qs in q_syns {
+            if let Some(ps) = t.parents.get(&qs)
+                && ps.iter().any(|p| t_syns.contains(p))
+            {
+                break 'eval 38;
+            }
         }
-        frontier = next;
-    }
-    // Check downward (`qw < tw`: turn only has a broader superordinate, much weaker implication).
-    for &qs in q_syns {
-        if let Some(ps) = t.parents.get(&qs)
-            && ps.iter().any(|p| t_syns.contains(p))
-        {
-            return 38;
+        0
+    };
+    CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        if m.len() >= 65_536 {
+            m.clear();
         }
-    }
-    0
+        m.insert(key, res);
+    });
+    res
 }
 
 /// Mutual-Hypernym / Co-Instance Sibling Resonance (#2):

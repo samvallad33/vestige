@@ -99,6 +99,14 @@ fn apply_scene_refinements(
             }
         }
         let t = &ix.turns[ti];
+        if t_scene[ti] > 0.0
+            && crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                ix, ti, &q.text,
+            )
+        {
+            t_scene[ti] *= 0.18;
+            continue;
+        }
         if policy_boost_ok && t.is_standing_policy && live_policy_turns.contains(&ti) && t_scene[ti] > 0.0 {
             t_scene[ti] *= 2.5;
         }
@@ -760,7 +768,25 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             .get(1)
             .is_some_and(|w| w.len() >= 5 && w.ends_with("ing"));
     // hardcode-scan: closed-class (retrospective assistant-recall & episodic interrogation cues)
-    let has_retro_asst_cue = q_trim_low.contains("did you ")
+    let has_gapped_you_report = q_toks_eff.windows(3).any(|w3| {
+        w3[0] == "you"
+            && matches!(
+                w3[1].as_str(),
+                "previously" | "earlier" | "recently" | "already" | "just" | "also" | "once"
+            )
+            && matches!(
+                w3[2].as_str(),
+                "recommended"
+                    | "suggested"
+                    | "provided"
+                    | "told"
+                    | "gave"
+                    | "mentioned"
+                    | "shared"
+            )
+    });
+    let has_retro_asst_cue = has_gapped_you_report
+        || q_trim_low.contains("did you ")
         || q_trim_low.contains("have you ")
         || q_trim_low.contains("remind me")
         || q_trim_low.contains("last time")
@@ -773,6 +799,11 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         || q_trim_low.contains("you gave me")
         || q_trim_low.contains("you mentioned")
         || q_trim_low.contains("you shared")
+        || q_trim_low.contains("i gave you")
+        || q_trim_low.contains("i recommended")
+        || q_trim_low.contains("i suggested")
+        || q_trim_low.contains("i told you")
+        || q_trim_low.contains("i provided")
         || q_trim_low.contains("we talked about")
         || q_trim_low.contains("we discussed");
     let is_factual_retro_query = has_retro_asst_cue
@@ -809,6 +840,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             || q_trim_low.starts_with("can you help me")
             || q_trim_low.starts_with("can you walk me through")
             || q_trim_low.starts_with("can you explain")
+            || q_trim_low.starts_with("can you show me how")
+            || q_trim_low.starts_with("i'm preparing ")
+            || q_trim_low.starts_with("i\u{2019}m preparing ")
+            || q_trim_low.starts_with("i want to set up ")
             || q_trim_low.contains("where do you think i should")
             || q_trim_low.contains("would you suggest")
             || q_trim_low.contains("can you suggest")
@@ -819,10 +854,14 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             || q_trim_low.contains("what would you suggest")
             || q_trim_low.contains("how would you suggest"));
     let is_how_what_task_shape = q_trim_low.starts_with("how should i ")
+        || q_trim_low.starts_with("how do i ")
         || q_trim_low.starts_with("what should i ")
+        || q_trim_low.starts_with("what steps do i ")
+        || q_trim_low.starts_with("what steps should i ")
         || q_trim_low.starts_with("how can i ")
         || q_trim_low.starts_with("what are ")
         || q_trim_low.starts_with("if i")
+        || (q_trim_low.contains("which ") && q_trim_low.contains(" should i"))
         || is_when_participial;
     let has_compact_rule_register = !ix.standing_rules.is_empty();
     // hardcode-scan: closed-class (1st-person possessive pronouns gating personal advice vs general rules)
@@ -858,9 +897,15 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             || q_trim_low.contains("remind me of the date")
             || q_trim_low.starts_with("what is the date")
             || q_trim_low.starts_with("what date"));
+    // hardcode-scan: closed-class (near-future temporal deictics paired with explicit recommendation requests)
+    let is_near_future_rec_q = !it.sniper_when
+        && (q_trim_low.contains("tonight")
+            || q_trim_low.contains("this weekend")
+            || q_trim_low.contains("next week"))
+        && crate::retrieval::step14_is_rec_request(&q.text);
     let pref_live_eff = ix.turns.len() >= 24
         && !past_cue_eff
-        && !it.temporal
+        && (!it.temporal || is_near_future_rec_q)
         && !seq_mode_eff
         && !eff_summary_request(&q.text)
         && !is_factual_retro_query
@@ -895,10 +940,13 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && !is_monologue_corpus
         && ix.turns.len() >= 4
         && has_retro_asst_cue;
-    let closed_class_mh = has_named_speakers_eff
+    let closed_class_mh = !is_monologue_corpus
+        && ix.session_turns.len() >= 3
         && !it.temporal
         && !it.sniper_when
         && !seq_mode_eff
+        && !pref_live_eff
+        && !task_live_eff
         && crate::retrieval::graph::hashimoto_tripartite_q16::closed_class_plural_or_collective_mh(
             &q_toks_eff,
         );

@@ -375,7 +375,7 @@ fn unsupported_walk_actions_are_not_advertised_or_silently_executed() {
     );
     assert_eq!(
         guide["tools"][0]["inputSchema"]["properties"]["action"]["enum"],
-        json!(["walk", "prove"])
+        json!(["walk", "prove", "fence", "why_not", "ablate"])
     );
     for action in ["ingest_repo", "verify", "typo"] {
         let error = s.tool_error("causal_walk", json!({"action":action}));

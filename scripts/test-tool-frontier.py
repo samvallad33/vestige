@@ -289,6 +289,8 @@ def handler_extras(tool, action, ctx):
             "scope": "user",
             "start_points": [{"kind": "failing_test", "name": "fixture_test"}],
         },
+        ("causal_walk", "fence"): {"repoPath": repo},
+        ("causal_walk", "ablate"): {"repoPath": repo},
         ("backfill", "run"): {"trigger_id": mem, "dry_run": True},
         ("backfill", "receipts"): {"trigger_id": mem},
         ("backfill", "undo"): {"receipt_id": "backfill-fixture-missing"},

@@ -116,6 +116,8 @@ pub(in crate::retrieval) struct TurnIx {
     pub(in crate::retrieval) is_backchannel: bool,
     pub(in crate::retrieval) anaphoric: bool,
     pub(in crate::retrieval) is_personal_constraint: bool,
+    /// Closed-class 1st-person prose personal state/disclosure flag (preserves `is_personal_constraint` contract).
+    pub(in crate::retrieval) has_prose_disclosure: bool,
     pub(in crate::retrieval) has_temporal: bool,
     pub(in crate::retrieval) has_numeric: bool,
     pub(in crate::retrieval) has_spatial: bool,
@@ -153,6 +155,10 @@ pub(in crate::retrieval) struct TurnIx {
     /// Step 14 ingest-time closed-class user preference/constraint role-object ids (`prose_body` only).
     pub(in crate::retrieval) role_objs: Vec<u32>,
     pub(in crate::retrieval) raw_links: Vec<TurnLink>,
+    /// Self-Plasticizing Strata Conductance (#854): recorded outcome edges
+    /// `(target_turn_idx, outcome_type, receipt_id)` ingested from `TurnLink`.
+    /// Empty on raw benchmark text (guarantees 0.00% static benchmark drift).
+    pub(in crate::retrieval) outcome_edges: Vec<(usize, String, String)>,
     /// True when the turn contains an executed structured `[tool_call ...]` receipt block.
     pub(in crate::retrieval) has_tool_call: bool,
     /// True when any `[tool_call <fn>(...)]` in this turn invokes a state-mutating CRUD verb.
@@ -357,8 +363,11 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
     // Pre-pass: collect exact single-token proper names evidenced by speakers, mid-clause
     // capitalization, multi-word entity parts, or document header titles so sentence-initial
     // occurrences of the same byte-equal name bind to the same identity node.
+    // Also cache `proper_entity_tokens(&t.content)` per turn to avoid double-scanning every turn.
     let mut known_proper: DetHashSet<String> = DetHashSet::default();
+    let mut cached_proper_ents: Vec<Vec<Vec<String>>> = Vec::with_capacity(sessions.len());
     for s in sessions {
+        let mut s_proper = Vec::with_capacity(s.turns.len());
         for t in &s.turns {
             let sp = t.role.trim().to_lowercase();
             if !sp.is_empty() && sp != "user" && sp != "assistant" {
@@ -368,14 +377,17 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                     }
                 }
             }
-            for ent in proper_entity_tokens(&t.content) {
+            let ents = proper_entity_tokens(&t.content);
+            for ent in &ents {
                 if let Some(body) = ent.strip_prefix("\u{1}ent:") {
                     if !body.contains('_') && body.len() >= 3 {
                         known_proper.insert(body.to_string());
                     }
                 }
             }
+            s_proper.push(ents);
         }
+        cached_proper_ents.push(s_proper);
     }
 
     for (si, s) in sessions.iter().enumerate() {
@@ -388,27 +400,29 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
         let mut s_ents = DetHashSet::default();
         let mut s_cont = DetHashSet::default();
         let mut speaker_names: DetHashSet<String> = DetHashSet::default();
+        let mut named_roles_in_sess: Vec<String> = Vec::new();
         for t in &s.turns {
             let sp = t.role.trim().to_lowercase();
             if !sp.is_empty() && sp != "user" && sp != "assistant" {
+                if !named_roles_in_sess.contains(&sp) {
+                    named_roles_in_sess.push(sp.clone());
+                }
                 for w in raw_tokens(&sp) {
                     speaker_names.insert(w);
                 }
             }
         }
-        // Collect named speakers in this session so vocative address ("Thanks, Caroline!")
-        // is capped at speaker identity parity (0.72) and never outranks Caroline speaking.
-        let mut sess_other_speakers: DetHashMap<usize, DetHashSet<String>> = DetHashMap::default();
-        for (idx_a, ta) in s.turns.iter().enumerate() {
-            let spa = ta.role.trim().to_lowercase();
-            let mut others = DetHashSet::default();
-            for (idx_b, tb) in s.turns.iter().enumerate() {
-                if idx_a == idx_b {
-                    continue;
-                }
-                let spb = tb.role.trim().to_lowercase();
-                if !spb.is_empty() && spb != "user" && spb != "assistant" && spb != spa {
-                    for sw in raw_tokens(&spb) {
+        // Collect named speakers in this session keyed by speaker string (O(S^2) instead of O(T^2))
+        // so vocative address ("Thanks, Caroline!") is capped at speaker identity parity (0.72).
+        let mut other_speakers_by_role: DetHashMap<String, DetHashSet<String>> = DetHashMap::default();
+        if !named_roles_in_sess.is_empty() {
+            for spa in &named_roles_in_sess {
+                let mut others = DetHashSet::default();
+                for spb in &named_roles_in_sess {
+                    if spb == spa {
+                        continue;
+                    }
+                    for sw in raw_tokens(spb) {
                         if let Some(set) = nicks.witnessed.get(&sw) {
                             for nick in set {
                                 others.insert(nick.clone());
@@ -417,8 +431,21 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                         others.insert(sw);
                     }
                 }
+                other_speakers_by_role.insert(spa.clone(), others);
             }
-            sess_other_speakers.insert(idx_a, others);
+        }
+        let mut all_named_speakers_set: DetHashSet<String> = DetHashSet::default();
+        if !named_roles_in_sess.is_empty() {
+            for spb in &named_roles_in_sess {
+                for sw in raw_tokens(spb) {
+                    if let Some(set) = nicks.witnessed.get(&sw) {
+                        for nick in set {
+                            all_named_speakers_set.insert(nick.clone());
+                        }
+                    }
+                    all_named_speakers_set.insert(sw);
+                }
+            }
         }
 
         for (ti, t) in s.turns.iter().enumerate() {
@@ -426,10 +453,15 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
             let (prose_body, tool_receipt_opt) = split_tool_call_receipt(raw_prose_body);
             let has_tool_call = tool_receipt_opt.is_some();
             let raw = raw_tokens(prose_body);
+            let raw_set: DetHashSet<&str> = raw.iter().map(String::as_str).collect();
             let nick_bound = nicks.bindings_in(prose_body);
             let role = t.role.trim();
             let speaker = role.to_lowercase();
-            let vocative_partners = sess_other_speakers.get(&ti);
+            let vocative_partners = if named_roles_in_sess.is_empty() {
+                None
+            } else {
+                other_speakers_by_role.get(&speaker).or(Some(&all_named_speakers_set))
+            };
             let field = usize::from(p.enable_roles && role.eq_ignore_ascii_case("assistant"));
             let mut feats = Vec::new();
             let mut blip_feats = Vec::new();
@@ -445,7 +477,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 content.insert(e);
                 s_cont.insert(e);
                 if let Some(full) = nick_bound.get(w.as_str()) {
-                    if !raw.iter().any(|t_tok| t_tok == full) {
+                    if !raw_set.contains(full.as_str()) {
                         let voc = vocative_partners.is_some_and(|vp| vp.contains(full.as_str()) || vp.contains(w.as_str()));
                         let fid = vocab.intern(full);
                         feats.push(Feat {
@@ -615,11 +647,21 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                     }
                 }
             }
-            for ent in proper_entity_tokens(prose_body) {
+            let turn_proper_ents = if blip_opt.is_none() && tool_receipt_opt.is_none() {
+                std::mem::take(&mut cached_proper_ents[si][ti])
+            } else {
+                proper_entity_tokens(prose_body)
+            };
+            let speaker_toks_cache: Vec<String> = if vocative_partners.is_some() {
+                raw_tokens(&speaker)
+            } else {
+                Vec::new()
+            };
+            for ent in turn_proper_ents {
                 if let Some(body) = ent.strip_prefix("\u{1}ent:") {
                     if !body.contains('_')
                         && (vocative_partners.is_some_and(|vp| vp.contains(body))
-                            || raw_tokens(&speaker).iter().any(|sw| sw == body))
+                            || speaker_toks_cache.iter().any(|sw| sw == body))
                     {
                         continue;
                     }
@@ -635,7 +677,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                     continue;
                 }
                 for (part, aux_w) in surface_aux_tokens(word) {
-                    if raw.iter().any(|t_tok| t_tok == &part) {
+                    if raw_set.contains(part.as_str()) {
                         continue;
                     }
                     let id = vocab.intern(&part);
@@ -898,6 +940,26 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                     }
                 }
             }
+            // Closed-class 1st-person prose personal state/disclosure detector (zero topic words):
+            // hardcode-scan: closed-class (1st-person pronouns and stative/possessive/experiencer auxiliaries)
+            let has_prose_disclosure = field == 0
+                && !is_pure_info_question
+                && !is_backchannel
+                && !is_standing_policy
+                && (is_personal_constraint
+                    || is_habitual
+                    || (raw_refs_idx.iter().take(8).any(|&w| {
+                        matches!(
+                            w,
+                            "i" | "im" | "i'm" | "ive" | "i've" | "id" | "i'd" | "my" | "our" | "we" | "we're" | "we've"
+                        )
+                    }) && raw_refs_idx.iter().any(|&w| {
+                        matches!(
+                            w,
+                            "am" | "im" | "i'm" | "have" | "ive" | "i've" | "had" | "got" | "my" | "our"
+                                | "cant" | "can't" | "cannot" | "dont" | "don't" | "never" | "avoid" | "without"
+                        )
+                    }) && content.len() >= 2));
             let is_initiative = field == 0
                 && !is_standing_policy
                 && !anaphoric
@@ -969,6 +1031,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 is_backchannel,
                 anaphoric,
                 is_personal_constraint,
+                has_prose_disclosure,
                 has_temporal,
                 has_numeric,
                 has_spatial,
@@ -991,6 +1054,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 first_move_num: step9_first_move_num(prose_body),
                 role_objs,
                 raw_links: t.links.clone(),
+                outcome_edges: Vec::new(),
                 has_tool_call,
                 tool_has_mutation,
                 tool_names,
@@ -1046,12 +1110,47 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
     }
     for ti in 0..turns.len() {
         let pending = std::mem::take(&mut turns[ti].raw_links);
+        let from_id = turns[ti].id.clone();
         for link in pending {
             let Some(&target) = id_at.get(&link.to) else { continue };
             if target == ti {
                 continue;
             }
-            turns[ti].exact_edges.push((link.degree.max(2), target));
+            // Self-Plasticizing Strata Conductance (#854): parse exact recorded outcome links
+            // (`"outcome:<type>"`, `"outcome:<type>:<receipt_id>"`, or bare exact outcome type)
+            // symmetrically onto both endpoints without altering static `exact_edges` topology.
+            let parsed_outcome: Option<(String, String)> =
+                if let Some(rest) = link.kind.strip_prefix("outcome:") {
+                    let (otype, rcpt) = match rest.split_once(':') {
+                        Some((o, r)) if !r.is_empty() => (o, r.to_string()),
+                        Some((o, _)) => (o, format!("outcome:{o}:{from_id}->{}", link.to)),
+                        None => (rest, format!("outcome:{rest}:{from_id}->{}", link.to)),
+                    };
+                    if crate::composition::outcome_conductance_delta_q16(otype) != 0 {
+                        Some((otype.to_string(), rcpt))
+                    } else {
+                        None
+                    }
+                } else if crate::composition::outcome_conductance_delta_q16(&link.kind) != 0 {
+                    Some((
+                        link.kind.clone(),
+                        format!("outcome:{}:{from_id}->{}", link.kind, link.to),
+                    ))
+                } else {
+                    None
+                };
+            if let Some((otype, rcpt)) = parsed_outcome {
+                turns[ti].outcome_edges.push((target, otype.clone(), rcpt.clone()));
+                turns[target].outcome_edges.push((ti, otype, rcpt));
+            } else {
+                turns[ti].exact_edges.push((link.degree.max(2), target));
+            }
+        }
+    }
+    for tr in &mut turns {
+        if !tr.outcome_edges.is_empty() {
+            tr.outcome_edges.sort();
+            tr.outcome_edges.dedup();
         }
     }
 
@@ -1305,11 +1404,8 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
             .iter()
             .take(16)
             .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
-    let (torrens_records, torrens_superseded, spatial_events) = if is_monologue_stream {
-        crate::retrieval::graph::torrens::build_torrens_and_spatial_index(&turn_prose_cache, &turns)
-    } else {
-        (Vec::new(), vec![false; turns.len()], Vec::new())
-    };
+    let (torrens_records, torrens_superseded, spatial_events) =
+        crate::retrieval::graph::torrens::build_torrens_and_spatial_index(&turn_prose_cache, &turns);
 
     let mut turn_superseded = if is_monologue_stream {
         torrens_superseded.clone()

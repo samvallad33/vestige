@@ -450,8 +450,16 @@ pub(in crate::retrieval) fn rule_condition_word_matches(cw: &str, qw: &str) -> b
     if qw == cw || (cst.len() >= 4 && stem(qw) == cst) || morph_eq(qw, cw) {
         return true;
     }
+    thread_local! {
+        static COND_PAIR_CACHE: std::cell::RefCell<DetHashMap<(String, String), bool>> =
+            std::cell::RefCell::new(DetHashMap::default());
+    }
+    let key = (cw.to_string(), qw.to_string());
+    if let Some(hit) = COND_PAIR_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
     let c_lemmas = crate::wordnet::expansion_lemmas(cw);
-    lemma_hits(&c_lemmas, qw)
+    let matched = lemma_hits(&c_lemmas, qw)
         || lemma_hits(&crate::wordnet::expansion_lemmas(qw), cw)
         || lemma_hits(&crate::wordnet::upward_hypernyms(qw, 2), cw)
         || lemma_hits(&crate::wordnet::upward_hypernyms(cw, 2), qw)
@@ -470,7 +478,15 @@ pub(in crate::retrieval) fn rule_condition_word_matches(cw: &str, qw: &str) -> b
             .any(|&(cn, _)| morph_eq(cn, cw))
         || crate::conceptnet::two_hop_neighbors(cw, 10)
             .iter()
-            .any(|&(cn, _)| morph_eq(cn, qw))
+            .any(|&(cn, _)| morph_eq(cn, qw));
+    COND_PAIR_CACHE.with(|c| {
+        let mut m = c.borrow_mut();
+        if m.len() >= 65_536 {
+            m.clear();
+        }
+        m.insert(key, matched);
+    });
+    matched
 }
 
 /// Rule-condition gate: does this standing rule's own "when I ask about X"
@@ -536,7 +552,9 @@ pub(in crate::retrieval) fn rule_condition_matches(
     r.condition_words.iter().any(|cw| {
         q_content.iter().any(|&qw| {
             rule_condition_word_matches(cw, qw)
-                || (cw.len() >= 5
+                || (cw.is_ascii()
+                    && qw.is_ascii()
+                    && cw.len() >= 5
                     && qw.len() >= 5
                     && cw.as_bytes()[..5] == qw.as_bytes()[..5]
                     && cw.len().abs_diff(qw.len()) <= 6)

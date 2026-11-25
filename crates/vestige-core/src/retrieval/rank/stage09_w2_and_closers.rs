@@ -15,8 +15,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let is_monologue_corpus = ctx.is_monologue_corpus;
     let cond_rule_turns = &ctx.cond_rule_turns;
     let standing_rules = &ctx.standing_rules;
-    let s_score = &ctx.s_score;
-    let s_mask = &ctx.s_mask;
     let t_own = &ctx.t_own;
     let t_scene = &ctx.t_scene;
     let t_mask = &ctx.t_mask;
@@ -33,9 +31,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     };
     crate::retrieval::seating::apply_w2_milestone_admission(ix, seq_intent, &mut final_turn_indices, &t_scene);
 
-    // [W2-083 / W2-084] Summary Lead & Breadth Seats (Quantile Trajectory Pooling)
-    crate::retrieval::seating::apply_w2_quantile_trajectory_seating(ix, &q.text, seq_intent, &mut final_turn_indices, &t_scene);
-
     // [W2-028 / W2-031] StandingRegister constraint posting & assistant-echo swap
     crate::retrieval::seating::apply_w2_standing_register_seat(ix, &q.text, &plan, &mut final_turn_indices, &t_exact_mask);
 
@@ -50,6 +45,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && !it.sniper_how_many
         && final_turn_indices.len() >= 3
     {
+        // Structural inverse: when `cond_ok` holds, default to `(r_ti, pti)` and only flip
+        // to `(pti, r_ti)` when the query is an explicit preference or recommendation request.
+        let prefer_pref_over_rule =
+            eff_it.preference || crate::retrieval::step14_is_rec_request(&q.text);
         for sr in standing_rules.iter().take(2) {
             if sr.score <= 0.0 {
                 continue;
@@ -112,11 +111,16 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         >= t_exact_mask[final_turn_indices[0]].count_ones()
                     && !q.text.trim_end().ends_with('?'));
             if wants_slot0 && let Some(pti) = topical_pref_ti {
+                let (slot0_ti, slot1_ti) = if prefer_pref_over_rule {
+                    (pti, r_ti)
+                } else {
+                    (r_ti, pti)
+                };
                 if let Some(ppos) = final_turn_indices.iter().position(|&x| x == pti) {
                     final_turn_indices.remove(ppos);
                 }
-                final_turn_indices.insert(0, pti);
-                final_turn_indices.insert(1.min(final_turn_indices.len()), r_ti);
+                final_turn_indices.insert(0, slot0_ti);
+                final_turn_indices.insert(1.min(final_turn_indices.len()), slot1_ti);
             } else {
                 let ins_at = if wants_slot0 {
                     0
@@ -152,23 +156,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         &t_scene,
         &t_own,
         &t_exact_mask,
-    );
-
-    // Consolidated Vault Closers (`S8-002`, `acta_secretary_inversion`, `W2-059`, `W2-075`,
-    // `W2-087`, `S6-003`, `W2-086`, `S8-004`, `S7-041`, `S1-071`, `S8-008`, gated `S8-001`):
-    crate::retrieval::seating::apply_vault_closers(
-        ix,
-        &plan,
-        &eff_it,
-        &q.text,
-        &mut final_turn_indices,
-        &final_session_indices,
-        &t_scene,
-        &t_own,
-        &t_exact_mask,
-        &s_mask,
-        &s_score,
-        k,
     );
 
     // Wave 7 S1-071 Informative Turn Priority: short confirmations yield to substantive declaratives

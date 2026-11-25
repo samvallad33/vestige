@@ -21,6 +21,10 @@ pub(in crate::retrieval) struct QueryPlan {
     /// term id -> group, for proximity scanning
     pub(in crate::retrieval) group_of: DetHashMap<u32, usize>,
     pub(in crate::retrieval) focal_ids: DetHashSet<u32>,
+    /// Closed-class excluded NP term/stem IDs ("other than X", "besides X", "apart from X", "except X")
+    pub(in crate::retrieval) excluded_ids: DetHashSet<u32>,
+    /// Corpus-rare (`1 <= s_df <= 2`) exact proper/hyphenated entity IDs (`Flask-Login`, `\u{1}ent:*`)
+    pub(in crate::retrieval) rare_entity_ids: Vec<u32>,
 }
 
 /// Normalize punctuation (preserving internal apostrophes in contractions like `i'm` / `don't`)
@@ -39,10 +43,22 @@ pub(in crate::retrieval) fn word_padded(text: &str) -> String {
             && idx + 1 < chars.len()
             && chars[idx - 1].is_alphanumeric()
             && chars[idx + 1].is_alphanumeric();
-        // Glue a currency marker to the amount so "$0" stays the literal token "$0".
+        // Glue a currency marker to the amount so "$0" stays the literal token "$0",
+        // and preserve internal colons between digits so "1:1" stays intact.
         let is_currency = ch == '$' && idx + 1 < chars.len() && chars[idx + 1].is_ascii_digit();
-        if lower.is_alphanumeric() || is_currency {
-            out.push(if is_currency { '$' } else { lower });
+        let is_ratio_colon = ch == ':'
+            && idx > 0
+            && idx + 1 < chars.len()
+            && chars[idx - 1].is_ascii_digit()
+            && chars[idx + 1].is_ascii_digit();
+        if lower.is_alphanumeric() || is_currency || is_ratio_colon {
+            out.push(if is_currency {
+                '$'
+            } else if is_ratio_colon {
+                ':'
+            } else {
+                lower
+            });
             prev_space = false;
         } else if is_apos {
             out.push('\'');

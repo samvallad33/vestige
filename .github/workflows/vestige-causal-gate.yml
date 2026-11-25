@@ -1,0 +1,102 @@
+name: Vestige Causal Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+concurrency:
+  group: vestige-causal-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  causal-gate:
+    name: Vestige Causal Gate (Chesterton's Fence + Zombie Patch-ID)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full git history for blame & revert patch-id verification
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vestige-causal-gate
+
+      - name: Build local Vestige CLI (offline, zero cloud, zero LLMs)
+        run: cargo build --release -p vestige-mcp --bin vestige
+
+      - name: Run Vestige PR Causal Audit
+        id: audit
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          ./target/release/vestige pr-audit \
+            --repo "$GITHUB_WORKSPACE" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --markdown \
+            --out vestige-pr-card.md \
+            --sarif-out vestige-causal-gate.sarif \
+            --fail-on-zombie
+          STATUS=$?
+          echo "exit_code=$STATUS" >> "$GITHUB_OUTPUT"
+          cat vestige-pr-card.md
+          exit 0
+
+      - name: Upload SARIF to GitHub Code Scanning (Inline PR Diff Annotations)
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('vestige-causal-gate.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: vestige-causal-gate.sarif
+          category: vestige-causal-gate
+
+      - name: Post or update Vestige Causal Proof Card on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('vestige-pr-card.md', 'utf8');
+            const marker = '<!-- vestige-causal-gate -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+            });
+            const existing = comments.find(
+              (c) => c.user && c.user.type === 'Bot' && c.body && c.body.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
+
+      - name: Enforce Zombie-Regression Gate
+        if: steps.audit.outputs.exit_code != '0'
+        run: |
+          echo "::error::Vestige Causal Gate blocked this PR: a commit matches the canonical git patch-id of a previously reverted commit."
+          exit 1

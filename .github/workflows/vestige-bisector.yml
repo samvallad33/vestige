@@ -1,0 +1,130 @@
+name: Vestige Bisector
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main, feat/vestige-launch]
+  workflow_dispatch:
+    inputs:
+      good_ref:
+        description: "Last-known-good commit SHA or tag"
+        required: true
+      bad_ref:
+        description: "Failing commit SHA"
+        required: true
+        default: "HEAD"
+      failing_file:
+        description: "Optional repo-relative failing file path for BISCEPTER anchor boost"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  bisect-plan:
+    name: Vestige BISCEPTER Q16.16 Red-Main Triage
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve good..bad commit range
+        id: range
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.eventName === 'workflow_dispatch') {
+              core.setOutput('good_sha', context.payload.inputs.good_ref);
+              core.setOutput('bad_sha', context.payload.inputs.bad_ref || 'HEAD');
+              core.setOutput('failing_file', context.payload.inputs.failing_file || '');
+              return;
+            }
+            const badSha = context.payload.workflow_run.head_sha;
+            const branch = context.payload.workflow_run.head_branch;
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: context.payload.workflow_run.workflow_id,
+              branch,
+              status: 'success',
+              per_page: 1,
+            });
+            const goodSha = (data.workflow_runs[0] && data.workflow_runs[0].head_sha) || `${badSha}~10`;
+            core.setOutput('good_sha', goodSha);
+            core.setOutput('bad_sha', badSha);
+            core.setOutput('failing_file', '');
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vestige-causal-gate
+
+      - name: Build local Vestige CLI
+        run: cargo build --release -p vestige-mcp --bin vestige
+
+      - name: Compute BISCEPTER Q16.16 Weighted Bisect Plan
+        shell: bash
+        env:
+          GOOD_SHA: ${{ steps.range.outputs.good_sha }}
+          BAD_SHA: ${{ steps.range.outputs.bad_sha }}
+          FAILING_FILE: ${{ steps.range.outputs.failing_file }}
+        run: |
+          ARGS=(--repo "$GITHUB_WORKSPACE" --good "$GOOD_SHA" --bad "$BAD_SHA" --markdown --out bisect-plan.md)
+          if [ -n "$FAILING_FILE" ]; then
+            ARGS+=(--file "$FAILING_FILE")
+          fi
+          ./target/release/vestige bisect-plan "${ARGS[@]}"
+          SHORT_BAD="${BAD_SHA:0:8}"
+          ./target/release/vestige undo-patch --repo "$GITHUB_WORKSPACE" --commit "$BAD_SHA" --out "fix-${SHORT_BAD}.undo.patch"
+
+      - name: Upload Signed .undo.patch Recovery Artifact
+        if: hashFiles('fix-*.undo.patch') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-undo-patch
+          path: fix-*.undo.patch
+          retention-days: 14
+
+      - name: Open or update Vestige Bisector Triage Issue
+        uses: actions/github-script@v7
+        env:
+          BAD_SHA: ${{ steps.range.outputs.bad_sha }}
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('bisect-plan.md', 'utf8');
+            const marker = '<!-- vestige-bisector -->';
+            const shortBad = (process.env.BAD_SHA || 'HEAD').slice(0, 8);
+            const title = `🎯 Vestige Bisector: Red-Main Triage (${shortBad})`;
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+            });
+            const existing = issues.find((i) => !i.pull_request && i.body && i.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                title,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }

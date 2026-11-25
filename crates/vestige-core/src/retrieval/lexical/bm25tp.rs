@@ -43,7 +43,7 @@ pub(in crate::retrieval) fn compute_session_bm25tp_lifts_q16(
     let ns = ix.session_turns.len();
     let mut out = vec![0u64; ns];
     let n_groups = plan.groups.len().min(64);
-    if ns <= 5 || top0 >= ns || n_groups < 2 || smax_q16 == 0 {
+    if ns < 2 || top0 >= ns || n_groups < 2 || smax_q16 == 0 {
         return out;
     }
 

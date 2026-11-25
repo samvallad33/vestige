@@ -436,15 +436,28 @@ async fn handle_event(
             // is on, consolidate instead — and do not warn every 6h if the
             // sweep has nothing to say.
             if crate::strata_memory::is_strata_backend(storage.as_ref()) {
-                if !crate::tools::backfill::autofire_enabled() {
-                    debug!(
-                        memory_count,
-                        "Autopilot: skipping vector dedup on Strata (similarity_disabled)"
-                    );
-                    return;
-                }
                 let storage = storage.clone();
                 let handle = tokio::spawn(async move {
+                    let drifted =
+                        crate::cognitive_kernel::sweep_anchor_watch(storage.as_ref(), None);
+                    if !drifted.is_empty() {
+                        info!(
+                            drifted_count = drifted.len(),
+                            "Autopilot: Anchor Watch detected drifted code memories on disk"
+                        );
+                    }
+                    let _ = crate::cognitive_kernel::induce_standing_laws(
+                        storage.as_ref(),
+                        "user",
+                        true,
+                    );
+                    if !crate::tools::backfill::autofire_enabled() {
+                        debug!(
+                            memory_count,
+                            "Autopilot: Anchor Watch + Sleep Law Induction complete; backfill autofire off"
+                        );
+                        return;
+                    }
                     match storage.run_consolidation() {
                         Ok(result) => {
                             debug!(
@@ -586,6 +599,7 @@ async fn run_prospective_poller(
             match storage.get_active_intentions() {
                 Ok(intentions) => {
                     let mut due = Vec::new();
+                    let mut due_push: Vec<(String, String)> = Vec::new();
                     for intention in intentions {
                         if intention.snoozed_until.is_some_and(|until| until > now) {
                             continue;
@@ -605,14 +619,17 @@ async fn run_prospective_poller(
                             None => intention.id.clone(),
                         };
                         if announced.insert(key) {
+                            let summary: String = intention.content.chars().take(160).collect();
+                            due_push.push((intention.id.clone(), summary));
                             due.push(intention.id);
                         }
                     }
                     if !due.is_empty() {
+                        crate::cognitive_kernel::push_due_intentions(storage.as_ref(), &due_push);
                         info!(
                             n_triggered = due.len(),
                             ids = ?due,
-                            "Autopilot: Strata intentions due"
+                            "Autopilot: Strata intentions due (queued for live Reflex push)"
                         );
                         surfaced.extend(due);
                     }

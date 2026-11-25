@@ -9,6 +9,8 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
     let mut groups: Vec<String> = Vec::new();
     let mut group_of = DetHashMap::default();
     let mut focal_ids: DetHashSet<u32> = DetHashSet::default();
+    let mut excluded_ids: DetHashSet<u32> = DetHashSet::default();
+    let mut rare_entity_ids: Vec<u32> = Vec::new();
 
     // Strip trailing closed-class output-formatting constraints ("Mention ONLY and ONLY five items.")
     // so constraint words/cardinalities never pollute lexical BM25 groups on ordering/summary queries.
@@ -33,6 +35,74 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
     };
     let raw_q = raw_tokens(plan_text);
     let q_low_plan = plan_text.to_ascii_lowercase();
+    let cap_words_in_q: DetHashSet<String> = plan_text
+        .split_whitespace()
+        .filter_map(|orig| {
+            let clean = orig.trim_matches(|c: char| !c.is_alphanumeric());
+            if clean.len() >= 2 && clean.chars().next().is_some_and(char::is_uppercase) {
+                Some(clean.to_ascii_lowercase())
+            } else {
+                None
+            }
+        })
+        .collect();
+    // Closed-class exclusion prepositions ("other than <NP>", "besides <NP>", "apart from <NP>",
+    // "except for <NP>", "except <NP>"): capture the governed NP tokens up to comma/clause/aux/WH
+    // boundary so excluded items never receive positive exact/focal credit.
+    // hardcode-scan: closed-class (exclusion prepositions and clause/auxiliary boundaries)
+    let mut excluded_words: DetHashSet<String> = DetHashSet::default();
+    let q_is_wh_excl = wh_slots(plan_text) != 0 || q_low_plan.starts_with("other than ") || q_low_plan.starts_with("apart from ") || q_low_plan.starts_with("except ");
+    for pat in ["other than ", "apart from ", "except for ", "besides ", "except "] {
+        if pat == "besides " && (!q_is_wh_excl || q_low_plan.contains(" also")) {
+            continue;
+        }
+        let mut search_from = 0usize;
+        while let Some(rel) = q_low_plan[search_from..].find(pat) {
+            let start = search_from + rel;
+            let word_boundary_ok = start == 0
+                || !q_low_plan.as_bytes()[start - 1].is_ascii_alphanumeric();
+            let after = start + pat.len();
+            search_from = after;
+            if !word_boundary_ok || after >= plan_text.len() {
+                continue;
+            }
+            let tail_clause = plan_text[after..]
+                .split([',', ';', '.', '?', '!', ':', '\n', '(', ')'])
+                .next()
+                .unwrap_or("");
+            let mut captured = 0usize;
+            for tok in raw_tokens(tail_clause) {
+                if matches!(
+                    tok.as_str(),
+                    "did" | "does" | "do" | "is" | "are" | "was" | "were"
+                        | "has" | "have" | "had" | "would" | "could" | "can"
+                        | "should" | "will" | "might" | "may"
+                        | "what" | "which" | "who" | "where" | "when" | "why" | "how"
+                        | "that" | "in" | "on" | "at" | "during" | "for" | "with"
+                        | "from" | "to" | "by" | "about" | "before" | "after" | "while"
+                ) {
+                    break;
+                }
+                if matches!(tok.as_str(), "a" | "an" | "the" | "his" | "her" | "their" | "my" | "your" | "our" | "and" | "or") {
+                    continue;
+                }
+                if is_content(&tok) {
+                    excluded_words.insert(tok.clone());
+                    if let Some(id) = ix.vocab.get(&tok) {
+                        excluded_ids.insert(id);
+                    }
+                    let st_tok = stem(&tok);
+                    if let Some(sid) = ix.vocab.get(&stem_term(&st_tok)) {
+                        excluded_ids.insert(sid);
+                    }
+                    captured += 1;
+                    if captured >= 3 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
     let episodic_past_recall = wh_slots(&q.text) != 0
         || intent.sniper_how_many
         || intent.multi_hop
@@ -229,7 +299,7 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
     let asks_nickname = raw_q.iter().any(|w| w == "nickname" || w == "nicknames");
 
     for (idx, w) in raw_q.iter().enumerate() {
-        if !is_content(w) {
+        if !is_content(w) || excluded_words.contains(w) {
             continue;
         }
         if idx < 64 && (taxonomic_drop_mask & (1u64 << idx)) != 0 {
@@ -417,6 +487,7 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
                 let mut nick_ids: Vec<u32> = Vec::new();
                 for plen in [2usize, 3, 4] {
                     if plen < w.len()
+                        && w.is_char_boundary(plen)
                         && let Some(nid) = ix.vocab.get(&w[..plen])
                         && (1..=nick_df_max).contains(&corpus_df(nid))
                     {
@@ -439,7 +510,14 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
                 }
             }
         }
-        step9_push_typo_fallback(ix, w, &st, nick_bind.get(w).is_some(), g, &mut terms, &mut group_of);
+        step9_push_typo_fallback(
+            ix,
+            (w, &st, nick_bind.get(w).is_some(), cap_words_in_q.contains(w), g),
+            &mut groups,
+            &mut terms,
+            &mut group_of,
+            &mut focal_ids,
+        );
         expandable.push((w.clone(), g));
     }
 
@@ -701,29 +779,54 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
         }
     }
 
-    // CamelCase & snake/hyphen reverse query expansion (`localStorage` -> `local`, `storage` at 0.55).
+    // CamelCase & snake/hyphen reverse query expansion (`localStorage` -> `local`, `storage` at 0.55),
+    // PLUS exact hyphenated/underscored tech-compound focal preservation (`Flask-Login` -> `flasklogin`
+    // at 1.35 + `exact_hit: true` + `focal_ids` when corpus-rare so compound packages beat high-DF parts).
+    let compound_df_cap = ((n_docs / 4) as u32).max(4);
     for raw_word in q.text.split_whitespace() {
         let word = raw_word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
         if word.is_empty() {
             continue;
         }
-        for (part, _) in surface_aux_tokens(word) {
+        let is_hyphen_compound = word.contains('-');
+        for (idx_aux, (part, _)) in surface_aux_tokens(word).into_iter().enumerate() {
             if seen_toks.contains(&part) {
                 continue;
             }
             if let Some(id) = ix.vocab.get(&part) {
-                terms.push(QTerm { id, weight: 0.55, group: None, exact_hit: false });
+                let df = corpus_df(id);
+                let s_df = ix.s_stats.df.get(&id).copied().unwrap_or(0);
+                if is_hyphen_compound && idx_aux == 0 && (1..=compound_df_cap).contains(&df) {
+                    let is_ultra_rare = (1..=2).contains(&s_df) && ns_plan >= 10;
+                    let w_comp = if is_ultra_rare { 2.65 } else { 0.95 };
+                    terms.push(QTerm { id, weight: w_comp, group: None, exact_hit: true });
+                    if df <= 2 || is_ultra_rare {
+                        focal_ids.insert(id);
+                    }
+                    if is_ultra_rare && !rare_entity_ids.contains(&id) {
+                        rare_entity_ids.push(id);
+                    }
+                } else {
+                    terms.push(QTerm { id, weight: 0.55, group: None, exact_hit: false });
+                }
             }
         }
     }
 
-    // Capitalized proper-noun entity phrases present in index (e.g. "Local H", "For Against").
+    // Capitalized proper-noun entity phrases present in index (e.g. "Local H", "For Against", "Flask-Login").
+    let has_named_plan = ix
+        .turns
+        .iter()
+        .take(32)
+        .any(|t| !t.speaker.is_empty() && t.speaker != "user" && t.speaker != "assistant");
     let mut seen_ents = DetHashSet::default();
     for ent in proper_entity_tokens(&q.text) {
         if !seen_ents.insert(ent.clone()) {
             continue;
         }
         if let Some(id) = ix.vocab.get(&ent) {
+            let s_df = ix.s_stats.df.get(&id).copied().unwrap_or(0);
+            let is_ultra_rare = !has_named_plan && (1..=2).contains(&s_df) && ns_plan >= 10;
             let parts_body = ent.strip_prefix("\u{1}ent:").unwrap_or("");
             let any_erased = parts_body
                 .split('_')
@@ -731,10 +834,24 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
             if any_erased {
                 let g = groups.len();
                 groups.push(ent);
-                terms.push(QTerm { id, weight: 1.65, group: Some(g), exact_hit: true });
+                let w_ent = if is_ultra_rare { 2.65 } else { 1.65 };
+                terms.push(QTerm { id, weight: w_ent, group: Some(g), exact_hit: true });
                 group_of.insert(id, g);
+                if is_ultra_rare {
+                    focal_ids.insert(id);
+                    if !rare_entity_ids.contains(&id) {
+                        rare_entity_ids.push(id);
+                    }
+                }
             } else {
-                terms.push(QTerm { id, weight: 0.75, group: None, exact_hit: false });
+                let w_ent = if is_ultra_rare { 2.25 } else { 0.75 };
+                terms.push(QTerm { id, weight: w_ent, group: None, exact_hit: is_ultra_rare });
+                if is_ultra_rare {
+                    focal_ids.insert(id);
+                    if !rare_entity_ids.contains(&id) {
+                        rare_entity_ids.push(id);
+                    }
+                }
             }
         }
     }
@@ -795,7 +912,7 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
         }
     }
 
-    QueryPlan { intent, terms, groups, group_of, focal_ids }
+    QueryPlan { intent, terms, groups, group_of, focal_ids, excluded_ids, rare_entity_ids }
 }
 
 pub(in crate::retrieval) fn matched_words(plan: &QueryPlan, mask: u64) -> Vec<String> {
@@ -885,32 +1002,174 @@ pub(crate) fn find_unique_typo_fallback(vocab_names: &[String], w: &str) -> Opti
             }
         }
     }
-    found.map(|(id, _)| id)
+    if let Some((id, _)) = found {
+        return Some(id);
+    }
+    // Step 9B: Unique orthographic prefix-abbreviation fallback (`"educaton"`/`"education"` -> `"edu"`,
+    // `"psychology"` -> `"psych"`, `"department"` -> `"dept"`). Restricted strictly to non-WordNet
+    // 3..=5 char ASCII lowercase abbreviations that are an exact prefix of `w` (`len >= 6`), preventing
+    // false matches against ordinary English words (`"cat"` != `"category"`).
+    let mut abbrev_found: Option<u32> = None;
+    for (id, cand) in vocab_names.iter().enumerate() {
+        let cb = cand.as_bytes();
+        if !(3..=5).contains(&cb.len())
+            || cb[0] != first
+            || cb.starts_with(b"\x01")
+            || !cb.iter().all(|b| b.is_ascii_lowercase())
+        {
+            continue;
+        }
+        if !w.starts_with(cand.as_str()) || !is_content(cand) {
+            continue;
+        }
+        if !crate::wordnet::senses(cand).is_empty() {
+            continue;
+        }
+        if abbrev_found.is_some() {
+            return None;
+        }
+        abbrev_found = Some(id as u32);
+    }
+    abbrev_found
 }
 
-/// Step 9A wiring in plan_query: a zero-DF query word (no exact, stem, or nick hit) maps to
-/// its unique Damerau-Levenshtein-1 vocab neighbour (0.75) and that neighbour's stem (0.65).
+/// Step 9A wiring in plan_query: casing-stratified Damerau-Levenshtein-1 typo snap
+/// (`len >= 4` TitleCase speaker names like `"Andew" -> "Andrew"`, plus `len >= 6` lowercase
+/// OOV words / unique prefix-abbreviations / `>= 8x` DF-dominant neighbours at `weight: 0.85, exact_hit: true`).
 pub(in crate::retrieval) fn step9_push_typo_fallback(
     ix: &Index,
-    w: &str,
-    st: &str,
-    has_nick: bool,
-    g: usize,
+    tok_meta: (&str, &str, bool, bool, usize),
+    groups: &mut [String],
     terms: &mut Vec<QTerm>,
     group_of: &mut DetHashMap<u32, usize>,
+    focal_ids: &mut DetHashSet<u32>,
 ) {
+    let (w, st, has_nick, is_cap_in_query, g) = tok_meta;
     if has_nick || ix.vocab.get(w).is_some() || ix.vocab.get(&stem_term(st)).is_some() {
         return;
     }
-    let Some(typo_id) = find_unique_typo_fallback(&ix.vocab.names, w) else {
+    // 1. Casing-stratified speaker snap (`len >= 4`, TitleCase in query, e.g. `"Andew"` -> `"Andrew"`):
+    if is_cap_in_query && w.len() >= 4 && w.is_ascii() {
+        let wb = w.as_bytes();
+        let mut sp_cands: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for t in ix.turns.iter().take(128) {
+            let sp = t.speaker.trim();
+            if sp.len() >= 4 && !sp.eq_ignore_ascii_case("user") && !sp.eq_ignore_ascii_case("assistant") {
+                let sp_low = sp.to_ascii_lowercase();
+                if sp_low.is_ascii() && damerau_lev_1(wb, sp_low.as_bytes()) {
+                    sp_cands.insert(sp_low);
+                }
+            }
+        }
+        if sp_cands.len() == 1
+            && let Some(sp_low) = sp_cands.into_iter().next()
+            && let Some(sp_id) = ix.vocab.get(&sp_low)
+        {
+            if let Some(slot) = groups.get_mut(g) {
+                *slot = sp_low.clone();
+            }
+            terms.push(QTerm { id: sp_id, weight: 0.90, group: Some(g), exact_hit: true });
+            group_of.insert(sp_id, g);
+            focal_ids.insert(sp_id);
+            if let Some(cs_id) = ix.vocab.get(&stem_term(&stem(&sp_low))) {
+                terms.push(QTerm { id: cs_id, weight: 0.72, group: Some(g), exact_hit: true });
+                group_of.insert(cs_id, g);
+            }
+            return;
+        }
+    }
+
+    // 2. Lowercase `len >= 6` unique DL-1 / prefix-abbrev OR `>= 8x` DF-dominant DL-1 snap:
+    let typo_opt = find_unique_typo_fallback(&ix.vocab.names, w).or_else(|| {
+        let wb = w.as_bytes();
+        if wb.len() < 6 || !wb.iter().all(|b| b.is_ascii_lowercase()) {
+            return None;
+        }
+        if !crate::wordnet::senses(w).is_empty() {
+            return None;
+        }
+        let first = wb[0];
+        let mut cands: Vec<(u32, u32)> = Vec::new();
+        for (id, cand) in ix.vocab.names.iter().enumerate() {
+            let cb = cand.as_bytes();
+            if cb.is_empty()
+                || cb[0] != first
+                || cb.starts_with(b"\x01")
+                || !cb.iter().all(|b| b.is_ascii_lowercase())
+            {
+                continue;
+            }
+            if damerau_lev_1(wb, cb) {
+                let df = ix.t_own_stats.df.get(&(id as u32)).copied().unwrap_or(0);
+                if df > 0 {
+                    cands.push((df, id as u32));
+                }
+            }
+        }
+        cands.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        match cands.as_slice() {
+            [(df0, id0)] if *df0 > 0 => Some(*id0),
+            [(df0, id0), (df1, _), ..] if *df0 >= df1.saturating_mul(8).max(8) => Some(*id0),
+            _ => None,
+        }
+    });
+    let Some(typo_id) = typo_opt else {
         return;
     };
-    terms.push(QTerm { id: typo_id, weight: 0.75, group: Some(g), exact_hit: false });
+    terms.push(QTerm { id: typo_id, weight: 0.85, group: Some(g), exact_hit: true });
     group_of.insert(typo_id, g);
+    focal_ids.insert(typo_id);
     if let Some(cand_str) = ix.vocab.names.get(typo_id as usize) {
         if let Some(cs_id) = ix.vocab.get(&stem_term(&stem(cand_str))) {
-            terms.push(QTerm { id: cs_id, weight: 0.65, group: Some(g), exact_hit: false });
+            terms.push(QTerm { id: cs_id, weight: 0.72, group: Some(g), exact_hit: true });
             group_of.insert(cs_id, g);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn orthographic_prefix_abbreviation_resolves_educaton_to_edu_without_english_false_positives() {
+        let vocab = vec!["hello".to_string(), "edu".to_string(), "cat".to_string()];
+        assert_eq!(find_unique_typo_fallback(&vocab, "educaton"), Some(1));
+        assert_eq!(find_unique_typo_fallback(&vocab, "category"), None);
+    }
+
+    #[test]
+    fn hyphenated_tech_compound_becomes_exact_focal_anchor() {
+        let sessions = vec![
+            Session {
+                id: "s0".into(),
+                date: String::new(),
+                timestamp: 1000,
+                turns: vec![Turn {
+                    id: "t0".into(),
+                    role: "user".into(),
+                    content: "We configured Flask-Login for session auth.".into(),
+                    ..Default::default()
+                }],
+            },
+            Session {
+                id: "s1".into(),
+                date: String::new(),
+                timestamp: 2000,
+                turns: vec![Turn {
+                    id: "t1".into(),
+                    role: "user".into(),
+                    content: "Flask routing works for static pages.".into(),
+                    ..Default::default()
+                }],
+            },
+        ];
+        let p = Params::default();
+        let ix = build_index(&sessions, &p);
+        let q = Query { text: "How did we configure Flask-Login?".into(), date: String::new() };
+        let plan = plan_query(&ix, &q, &p);
+        let compound_id = ix.vocab.get("flasklogin").expect("flasklogin indexed");
+        assert!(plan.focal_ids.contains(&compound_id));
+        assert!(plan.terms.iter().any(|t| t.id == compound_id && t.exact_hit && t.weight >= 0.9));
     }
 }

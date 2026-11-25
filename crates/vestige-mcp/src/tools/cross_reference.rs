@@ -294,15 +294,45 @@ pub async fn execute(
 
     if crate::strata_memory::is_strata_backend(storage.as_ref()) {
         let trimmed = args.query.trim();
+        let scope = args.scope.as_deref().unwrap_or(DEFAULT_MEMORY_SCOPE).trim();
+        let cross_scope = args.include_cross_scope.unwrap_or(false);
         let resolution = storage.resolve_handle(trimmed);
-        if resolution.ids.is_empty() {
+        let mut circuit_diag = Value::Null;
+        let resolved_ids: Vec<String>;
+        let handle_kind: &str;
+        if !resolution.ids.is_empty() {
+            resolved_ids = resolution.ids;
+            handle_kind = resolution.kind.as_str();
+        } else if trimmed.len() >= 2 {
+            // Single unified retrieval spine: multi-word reasoning queries resolve through
+            // the GhostCurrent circuit instead of dying on `similarity_disabled`.
+            let labile = crate::cognitive_kernel::labile_memory_ids(storage.as_ref());
+            let circuit = crate::circuit_index::query_circuit(
+                storage.as_ref(),
+                &crate::circuit_index::CircuitQuery {
+                    query: trimmed,
+                    scope: if cross_scope { None } else { Some(scope) },
+                    include_superseded: false,
+                    valid_at,
+                    top_k: depth,
+                    labile_ids: &labile,
+                },
+            );
+            circuit_diag = crate::circuit_index::epistemic_json(&circuit);
+            resolved_ids = circuit.hits.into_iter().map(|h| h.id).collect();
+            handle_kind = "ghostcurrent_circuit";
+            if resolved_ids.is_empty() {
+                return Err(format!(
+                    "{}: cross_reference found no circuit match for '{trimmed}'",
+                    crate::tools::unavailable::SIMILARITY_DISABLED
+                ));
+            }
+        } else {
             return Err(format!(
                 "{}: cross_reference requires exact handles in 4.0",
                 crate::tools::unavailable::SIMILARITY_DISABLED
             ));
         }
-        let scope = args.scope.as_deref().unwrap_or(DEFAULT_MEMORY_SCOPE).trim();
-        let cross_scope = args.include_cross_scope.unwrap_or(false);
         let check_ts = valid_at.unwrap_or_else(Utc::now);
         let min_ret = args.min_retention.unwrap_or(0.0);
 
@@ -343,7 +373,7 @@ pub async fn execute(
         let mut evidence_nodes: Vec<(vestige_core::KnowledgeNode, &'static str, f64)> = Vec::new();
         let mut contradiction_pairs: Vec<Value> = Vec::new();
 
-        for (idx, seed_id) in resolution.ids.iter().enumerate() {
+        for (idx, seed_id) in resolved_ids.iter().enumerate() {
             if evidence_nodes.len() >= depth {
                 break;
             }
@@ -476,13 +506,14 @@ pub async fn execute(
 
         return Ok(serde_json::json!({
             "query": args.query,
-            "handleKind": resolution.kind.as_str(),
-            "intent": "exact_handle_reason",
+            "handleKind": handle_kind,
+            "intent": if handle_kind == "ghostcurrent_circuit" { "ghostcurrent_circuit_reason" } else { "exact_handle_reason" },
             "memoriesAnalyzed": total_analyzed,
             "confidence": avg_conf,
             "recommended": recommended,
             "evidence": evidence_json,
             "contradictions": contradiction_pairs,
+            "circuit": circuit_diag,
         }));
     }
 

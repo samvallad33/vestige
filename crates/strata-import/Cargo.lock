@@ -218,7 +218,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "strata-gate"
-version = "6.2.2"
+version = "7.0.0"
 dependencies = [
  "blake3",
  "borsh",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "strata-import"
-version = "6.2.3"
+version = "7.0.0"
 dependencies = [
  "blake3",
  "borsh",
