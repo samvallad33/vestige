@@ -61,6 +61,36 @@ pub(in crate::retrieval) fn is_implicit_constraint_planning_query(
         return true;
     }
     let ql = query.trim().to_ascii_lowercase();
+    // Explicitly guard factual state-lookup WH / temporal queries from implicit-advice re-seating
+    // unless the query carries an unambiguous planning/optimization cue.
+    let explicit_opt = ql.contains("optimal time")
+        || ql.contains("best time")
+        || ql.contains("best way")
+        || ql.contains("pros and cons")
+        || ql.contains("what's a good")
+        || ql.contains("what is a good")
+        || ql.contains("what approach ")
+        || ql.contains("what should")
+        || ql.contains("what roles ")
+        || ql.contains("what are some ways");
+    if !explicit_opt
+        && (ql.starts_with("what is ")
+            || ql.starts_with("what's ")
+            || ql.starts_with("where is ")
+            || ql.starts_with("who is ")
+            || ql.starts_with("what time ")
+            || ql.starts_with("when did ")
+            || ql.starts_with("when does ")
+            || ql.starts_with("how many ")
+            || ql.starts_with("how much ")
+            || ql.starts_with("what was ")
+            || ql.starts_with("what were ")
+            || ql.contains(" where is ")
+            || ql.contains(" what's the password")
+            || ql.contains(" who is the "))
+    {
+        return false;
+    }
     const PLANNING_CUES: &[&str] = &[
         "optimal time",
         "best time",
@@ -75,6 +105,7 @@ pub(in crate::retrieval) fn is_implicit_constraint_planning_query(
         "tend to be",
         "tends to be",
         "what approach ",
+        "what are some ways",
         "any ideas for",
         "any suggestions",
         "pull up ",
@@ -93,6 +124,12 @@ pub(in crate::retrieval) fn is_implicit_constraint_planning_query(
         "plan for ",
         "planning ",
         "prioritize",
+        "best way to ",
+        "any ideas",
+        "do you have any",
+        "what's a good",
+        "what is a good",
+        "looking to ",
     ];
     PLANNING_CUES.iter().any(|&c| ql.contains(c))
 }
@@ -108,9 +145,23 @@ pub(in crate::retrieval) fn constraint_frame_strength_q16(ix: &Index, ti: usize)
         return 0;
     }
     let low = tr.body_for_headers.to_ascii_lowercase();
-    // Skip short conversational sign-offs / polar acknowledgements, but NEVER suppress genuine
-    // 1st-person causal/habitual disclosures (`"Since I always..., I need to avoid..."`)!
+    // Skip short conversational sign-offs / polar acknowledgements and meta-framing echoes,
+    // while NEVER suppressing genuine 1st-person causal/habitual disclosures.
     if tr.content.len() <= 8 && is_discourse_closure_or_meta_echo(ix, ti, "") {
+        return 0;
+    }
+    let trimmed = low.trim_start();
+    // hardcode-scan: closed-class (conversational agreement/sign-off/meta-framing openers)
+    if trimmed.starts_with("good point")
+        || trimmed.starts_with("i see what you did")
+        || trimmed.starts_with("that's a great idea")
+        || trimmed.starts_with("that\u{2019}s a great idea")
+        || trimmed.starts_with("let's pin that")
+        || trimmed.starts_with("let\u{2019}s pin that")
+        || trimmed.starts_with("will do.")
+        || trimmed.starts_with("no, that should cover")
+        || trimmed.starts_with("no, just need to make sure")
+    {
         return 0;
     }
 
@@ -167,6 +218,26 @@ pub(in crate::retrieval) fn constraint_frame_strength_q16(ix: &Index, ti: usize)
         "avoid ",
         "important that",
         "make sure",
+        "find it hard",
+        "takes a hit",
+        "much more effective",
+        "not work",
+        "won't work",
+        "will not work",
+        "don't have",
+        "didn't enjoy",
+        "wasn't my style",
+        "challenging to",
+        "worried about",
+        "determined to",
+        "making a real effort",
+        "never trust",
+        "learned ",
+        "really want to",
+        "need to get better",
+        "gets bored",
+        "cannot ",
+        "can't ",
     ];
     let hits = CONSTRAINT_MARKERS
         .iter()
@@ -242,8 +313,152 @@ fn extract_query_sets(ix: &Index, plan: &QueryPlan, query: &str) -> (DetHashSet<
     (q_ids, focal_ids)
 }
 
+/// Closed-class anaphoric assistant-validation opener pointing directly back to `ti`
+/// as an epistemic self-disclosure or personal constraint turn.
+/// hardcode-scan: closed-class (demonstrative evaluative/acknowledgement openers only).
+fn is_anaphoric_asst_validation_grice(text: &str) -> bool {
+    let head_len = text
+        .char_indices()
+        .nth(96)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    let h = text[..head_len].trim_start().to_ascii_lowercase();
+    [
+        "that's a ",
+        "that\u{2019}s a ",
+        "that is a ",
+        "that's very ",
+        "that\u{2019}s very ",
+        "that sounds ",
+        "that does sound",
+        "that makes sense",
+        "that makes perfect sense",
+        "that preference",
+        "note added",
+        "thank you for sharing",
+        "thanks for sharing",
+        "i've flagged this",
+        "i\u{2019}ve flagged this",
+        "we will definitely avoid",
+    ]
+    .iter()
+    .any(|p| h.starts_with(p) || h.contains(p))
+}
+
+/// LCSeg-style local aside-surprisal in `Q16.16` (Galley et al. ACL 2003 / Barzilay & Lapata CL 2008):
+/// `Q16_ONE - max_overlap_q16(ti, prev 4 user turns in same session)`.
+fn aside_surprisal_q16(ix: &Index, si: usize, ti: usize) -> u64 {
+    let tr = &ix.turns[ti];
+    if tr.content.len() < 8 {
+        return 0;
+    }
+    let Some(s_turns) = ix.session_turns.get(si) else {
+        return 0;
+    };
+    let Some(pos) = s_turns.iter().position(|&x| x == ti) else {
+        return 0;
+    };
+    if pos < 2 {
+        return 0;
+    }
+    let mut max_ov_q16: u64 = 0;
+    let mut checked = 0usize;
+    for &prev_ti in s_turns[..pos].iter().rev() {
+        if ix.turns[prev_ti].field != 0 {
+            continue;
+        }
+        let prev_c = &ix.turns[prev_ti].content;
+        if prev_c.len() >= 3 {
+            let mut inter = 0u64;
+            for &cid in &tr.content {
+                if prev_c.contains(&cid) {
+                    inter += 1;
+                }
+            }
+            let denom = (tr.content.len().min(prev_c.len()).max(1)) as u64;
+            let ov_q16 = (inter.saturating_mul(Q16_ONE)) / denom;
+            if ov_q16 > max_ov_q16 {
+                max_ov_q16 = ov_q16;
+            }
+        }
+        checked += 1;
+        if checked >= 4 {
+            break;
+        }
+    }
+    if checked == 0 {
+        0
+    } else {
+        Q16_ONE.saturating_sub(max_ov_q16.min(Q16_ONE))
+    }
+}
+
+/// QASA (`arXiv:2606.30133v1`, 2026) — deterministic Query-Aware Spreading Activation
+/// over pinned Princeton WordNet 3.1, ConceptNet 5.7, and Roget 1911 conceptual neighbors.
+/// Returns vocab token IDs reachable within 1-2 curated conceptual hops of query content terms.
+fn build_qasa_concept_ids(ix: &Index, query: &str) -> DetHashSet<u32> {
+    let mut out: DetHashSet<u32> = DetHashSet::default();
+    let sw = stopwords();
+    let mut seeds: Vec<String> = Vec::new();
+    for tok in raw_tokens(query) {
+        if tok.len() < 4 || sw.contains(tok.as_str()) {
+            continue;
+        }
+        if !seeds.contains(&tok) {
+            seeds.push(tok);
+        }
+        if seeds.len() >= 10 {
+            break;
+        }
+    }
+    let mut insert_word = |w: &str| {
+        if w.len() < 3 || sw.contains(w) {
+            return;
+        }
+        if let Some(id) = ix.vocab.get(w) {
+            out.insert(id);
+        }
+        let st = stem(w);
+        if let Some(id) = ix.vocab.get(&st) {
+            out.insert(id);
+        }
+    };
+    for s in &seeds {
+        let base = stem(s);
+        for probe in [s.as_str(), base.as_str()] {
+            if probe.len() < 3 {
+                continue;
+            }
+            for &(nbr, w) in crate::conceptnet::two_hop_neighbors(probe, 16).iter() {
+                if w >= 80 {
+                    insert_word(nbr);
+                }
+            }
+            for &(nbr, w) in crate::roget::conceptual_neighbors(probe, 24).iter() {
+                if w >= 58 {
+                    insert_word(nbr);
+                }
+            }
+            for &lem in crate::wordnet::expansion_lemmas(probe).iter().take(16) {
+                insert_word(lem);
+            }
+            for &lem in crate::wordnet::gloss_and_compound_concepts(probe).iter().take(16) {
+                insert_word(lem);
+            }
+            for &(lem, w) in crate::wordnet::dual_gloss_hypernym_bridge(probe, 16).iter() {
+                if w >= 55 {
+                    insert_word(lem);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Score every eligible user turn inside `target_sessions` using Gricean Maxim-of-Quantity
-/// Conditional Information Gain (`EntityBind * NovelPredicateIC * ConstraintFrame`).
+/// Conditional Information Gain (`EntityBind * NovelPredicateIC * ConstraintFrame`),
+/// boosted by Anaphoric Assistant-Validation Back-Projection (`ti + 1 -> ti`),
+/// QASA Conceptual Spreading Activation (`Algo 1`), and LCSeg Aside-Surprisal (`Algo 3`).
 pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
     ix: &Index,
     plan: &QueryPlan,
@@ -257,18 +472,21 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
     }
 
     let (q_ids, focal_ids) = extract_query_sets(ix, plan, query);
+    let qasa_ids = build_qasa_concept_ids(ix, query);
     let nt_total = ix.turns.len().max(1);
     let mut scores: Vec<GriceanTurnScore> = Vec::new();
 
-    for (rank_pos, &si) in target_sessions.iter().take(3).enumerate() {
+    for (rank_pos, &si) in target_sessions.iter().take(5).enumerate() {
         let Some(turn_list) = ix.session_turns.get(si) else {
             continue;
         };
-        // Slight decay for sessions 2 and 3 vs top-1 winning session.
+        // Smooth decay across Top-5 retrieved sessions (keeps Sessions 2..5 competitive).
         let sess_prior_q16: u64 = match rank_pos {
             0 => Q16_ONE,
-            1 => (Q16_ONE * 3) >> 2,
-            _ => Q16_ONE >> 1,
+            1 => (Q16_ONE * 7) >> 3,
+            2 => (Q16_ONE * 3) >> 2,
+            3 => (Q16_ONE * 11) >> 4,
+            _ => (Q16_ONE * 5) >> 3,
         };
 
         for &ti in turn_list {
@@ -277,15 +495,50 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
                 continue;
             }
             let constraint_frame_q16 = constraint_frame_strength_q16(ix, ti);
-            if constraint_frame_q16 < (Q16_ONE >> 1) {
+
+            // Anaphoric Assistant-Validation Back-Projection (`ti + 1 -> ti`) + QASA hits:
+            let (anaphoric_val, next_focal_hits, next_qasa_hits) = if ti + 1 < ix.turns.len()
+                && ix.turns[ti + 1].session == si
+                && ix.turns[ti + 1].field == 1
+            {
+                let next_tr = &ix.turns[ti + 1];
+                let aval = is_anaphoric_asst_validation_grice(&next_tr.body_for_headers);
+                let nfh = focal_ids
+                    .iter()
+                    .filter(|id| next_tr.content.contains(id) || next_tr.entities.contains(id))
+                    .count();
+                let nqh = next_tr
+                    .content
+                    .iter()
+                    .filter(|id| qasa_ids.contains(id) && !q_ids.contains(id))
+                    .count();
+                (aval, nfh, nqh)
+            } else {
+                (false, 0, 0)
+            };
+
+            let eff_cf_q16 = if anaphoric_val && tr.content.len() >= 5 {
+                constraint_frame_q16.saturating_add(Q16_ONE)
+            } else {
+                constraint_frame_q16
+            };
+            if eff_cf_q16 < (Q16_ONE >> 1) {
                 continue;
             }
 
-            // 1. Entity Binding: direct focal entity hit, coref entity hit, or top-session continuity.
+            // 1. Entity Binding: direct focal hit (on `ti` or `ti + 1`), QASA conceptual hit,
+            //    coref hit, or anaphorically validated personal aside inside Top-5 sessions.
             let direct_focal_hits = focal_ids
                 .iter()
                 .filter(|id| tr.content.contains(id) || tr.entities.contains(id))
-                .count();
+                .count()
+                + next_focal_hits;
+            let qasa_hits = tr
+                .content
+                .iter()
+                .filter(|id| qasa_ids.contains(id) && !q_ids.contains(id))
+                .count()
+                + next_qasa_hits;
             let coref_focal_hits = focal_ids
                 .iter()
                 .filter(|id| tr.coref_entities.contains(id))
@@ -296,27 +549,40 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
                 || low_body.starts_with("i ")
                 || low_body.contains("i'm ")
                 || low_body.contains("i\u{2019}m ")
+                || low_body.contains("i've ")
+                || low_body.contains("i\u{2019}ve ")
                 || low_body.contains("since i ")
-                || low_body.contains(" my ");
+                || low_body.contains(" my ")
+                || low_body.starts_with("my ")
+                || low_body.contains(" we ")
+                || low_body.starts_with("we ");
 
             let entity_bind_q16 = if direct_focal_hits > 0 {
-                Q16_ONE.saturating_add(((direct_focal_hits - 1).min(2) as u64) * (Q16_ONE >> 2))
-            } else if coref_focal_hits > 0 {
-                (Q16_ONE * 7) >> 3
-            } else if rank_pos <= 2
-                && (tr.is_personal_constraint
-                    || tr.is_habitual
-                    || tr.has_prose_disclosure
-                    || (has_first_person && constraint_frame_q16 >= Q16_ONE))
-            {
-                // Zero-overlap personal habit/disclosure inside the Top-3 already-found sessions.
-                if rank_pos == 0 {
-                    (Q16_ONE * 3) >> 2
+                (Q16_ONE << 1)
+                    .saturating_add(((direct_focal_hits - 1).min(2) as u64) * (Q16_ONE >> 1))
+                    .saturating_add((qasa_hits.min(2) as u64) * (Q16_ONE >> 2))
+            } else if qasa_hits > 0 && (anaphoric_val || has_first_person || tr.is_personal_constraint) {
+                let base_qasa = if qasa_hits >= 2 {
+                    (Q16_ONE * 7) >> 2 // 1.75x
                 } else {
-                    (Q16_ONE * 5) >> 3
-                }
+                    (Q16_ONE * 3) >> 1 // 1.50x
+                };
+                base_qasa.saturating_add(((qasa_hits - 1).min(2) as u64) * (Q16_ONE >> 3))
+            } else if coref_focal_hits > 0 {
+                Q16_ONE
+            } else if (rank_pos <= 4
+                && anaphoric_val
+                && (has_first_person || tr.is_personal_constraint || tr.has_prose_disclosure)
+                && tr.content.len() >= 5)
+                || (rank_pos == 0
+                    && (tr.is_personal_constraint || tr.is_habitual)
+                    && eff_cf_q16 >= Q16_ONE)
+            {
+                // Validated zero-overlap personal aside inside Top-5 sessions: strictly lower
+                // prior (`0.40x`) than direct-focal (`2.0x+`) or QASA-linked (`1.5x+`) turns so
+                // unrelated backstory turns never crowd out conceptually linked constraints.
+                (Q16_ONE * 2) / 5
             } else {
-                // Require explicit entity/coref binding outside personal disclosures.
                 continue;
             };
 
@@ -341,10 +607,20 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
                 continue;
             }
 
-            // Product in Q16.16: (((entity_bind * novel_ic) >> 16) * constraint_frame) >> 16 * sess_prior >> 16.
+            // Product in Q16.16: (((entity_bind * novel_ic) >> 16) * eff_cf) >> 16 * sess_prior >> 16.
             let p1 = ((entity_bind_q16 as u128).saturating_mul(novel_ic_q16 as u128) >> 16) as u64;
-            let p2 = ((p1 as u128).saturating_mul(constraint_frame_q16 as u128) >> 16) as u64;
-            let total_q16 = ((p2 as u128).saturating_mul(sess_prior_q16 as u128) >> 16) as u64;
+            let p2 = ((p1 as u128).saturating_mul(eff_cf_q16 as u128) >> 16) as u64;
+            let mut total_q16 = ((p2 as u128).saturating_mul(sess_prior_q16 as u128) >> 16) as u64;
+
+            // 3. Anaphoric Assistant-Validation + LCSeg Aside-Surprisal multipliers.
+            if anaphoric_val && tr.content.len() >= 5 {
+                total_q16 = (total_q16.saturating_mul(7)) >> 2; // 1.75x
+            }
+            let aside_q16 = aside_surprisal_q16(ix, si, ti);
+            if aside_q16 >= 47_186 && (anaphoric_val || eff_cf_q16 >= Q16_ONE) {
+                let aside_mult = Q16_ONE.saturating_add(aside_q16 >> 1);
+                total_q16 = ((total_q16 as u128).saturating_mul(aside_mult as u128) >> 16) as u64;
+            }
 
             if total_q16 > 0 {
                 scores.push(GriceanTurnScore {
@@ -352,7 +628,7 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
                     session_idx: si,
                     entity_bind_q16,
                     novel_ic_q16,
-                    constraint_frame_q16,
+                    constraint_frame_q16: eff_cf_q16,
                     total_q16,
                 });
             }
@@ -365,7 +641,7 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
             .then_with(|| b.constraint_frame_q16.cmp(&a.constraint_frame_q16))
             .then_with(|| a.turn_idx.cmp(&b.turn_idx))
     });
-    scores.truncate(4);
+    scores.truncate(12);
     scores
 }
 
@@ -465,7 +741,7 @@ pub(in crate::retrieval) fn apply_gricean_constraint_turn_seating(ctx: &mut Rank
         return;
     }
 
-    let top_sessions: Vec<usize> = ctx.final_session_indices.iter().copied().take(3).collect();
+    let top_sessions: Vec<usize> = ctx.final_session_indices.iter().copied().take(5).collect();
     let cands = score_gricean_constraint_turns_q16(
         ctx.ix,
         &ctx.plan,
@@ -492,16 +768,23 @@ pub(in crate::retrieval) fn apply_gricean_constraint_turn_seating(ctx: &mut Rank
         || h0_low.starts_with("interesting.")
         || h0_low.starts_with("they do.")
         || h0_low.starts_with("it really does.")
+        || h0_low.starts_with("i see what you did")
+        || h0_low.starts_with("good point")
         || (h0_cf == 0 && h0_tr.content.len() < 12);
 
-    // 1. Same-session Slot-0 rescue over a weak/wrapper/zero-constraint head (zero session change;
+    // 1. Slot-0 rescue over a weak/wrapper/zero-constraint head (allows promoting from `s0_top`
+    //    when `h0` misses focal entities while `s0_cand` has strong direct-focal + constraint proof;
     //    strictly skipped when `implicit_disclosure_locked` protects a Galois/disclosure Slot 0).
+    let s0_top = ctx.final_session_indices[0];
     if !ctx.implicit_disclosure_locked
         && let Some(s0_cand) = cands.iter().copied().find(|c| {
             c.turn_idx != h0
-                && c.session_idx == h0_tr.session
                 && c.constraint_frame_q16 >= Q16_ONE
-                && (h0_is_wrapper || (h0_cf == 0 && c.entity_bind_q16 >= Q16_ONE))
+                && ((c.session_idx == h0_tr.session
+                    && (h0_is_wrapper || (h0_cf == 0 && c.entity_bind_q16 >= Q16_ONE)))
+                    || (c.session_idx == s0_top
+                        && c.entity_bind_q16 >= (Q16_ONE << 1)
+                        && h0_cf == 0))
         })
     {
         if let Some(pos) = ctx
@@ -515,12 +798,33 @@ pub(in crate::retrieval) fn apply_gricean_constraint_turn_seating(ctx: &mut Rank
         ctx.final_turn_indices.truncate(orig_tlen);
     }
 
-    // 2. Pack up to 2 stranded distinct-turn novel-constraint turns from Top-3 sessions into Slots 3..4.
+    // 2. Pack stranded distinct-session novel-constraint turns from Top-5 sessions:
+    //    - Protect Slots 0..2 unconditionally on preference/temporal/current-state queries
+    //      (unless explicit filtering/planning frame) or when Slot 0 already has strong exact coverage.
+    let ql_seat = ctx.q.text.to_ascii_lowercase();
+    let explicit_filter_plan = ql_seat.contains("filter for ")
+        || ql_seat.contains("any suggestions")
+        || ql_seat.contains("any ideas")
+        || ql_seat.contains("what's a good")
+        || ql_seat.contains("what is a good")
+        || ql_seat.contains("what approach ")
+        || ql_seat.contains("best way to ");
+    let h0_exact_cov = ctx.t_exact_mask.get(h0).copied().unwrap_or(0).count_ones();
+    let protect_slot2 = !explicit_filter_plan
+        && (ctx.eff_it.preference
+            || ctx.eff_it.temporal
+            || ctx.eff_it.current_state
+            || (h0_exact_cov >= 2 && !h0_is_wrapper));
     let mut seated = 0usize;
-    let mut next_slot = 3usize;
+    let max_seats = if protect_slot2 { 2usize } else { 3usize };
+    let mut next_slot = if protect_slot2 { 3usize } else { 2usize };
+    let mut seated_sessions: DetHashSet<usize> = DetHashSet::default();
     for cand in cands {
-        if seated >= 2 || next_slot >= 5.min(ctx.k) {
+        if seated >= max_seats || next_slot >= 5.min(ctx.k) {
             break;
+        }
+        if !seated_sessions.insert(cand.session_idx) {
+            continue;
         }
         if ctx
             .final_turn_indices

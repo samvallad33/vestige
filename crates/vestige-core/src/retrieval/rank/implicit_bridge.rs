@@ -388,6 +388,11 @@ fn is_implicit_advice_frame(q_text: &str) -> bool {
         "keep it ",
         "keeping it ",
         "optimal time",
+        "best way to ",
+        "help me draft",
+        "can you draft",
+        "pull up the latest",
+        "filter for ",
     ]
     .iter()
     .any(|p| ql.contains(p))
@@ -1217,6 +1222,12 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     if !advice_q && !profile_q {
         return false;
     }
+    // On dense multi-session chats (`!is_sparse_haystack`), open-ended advice queries are
+    // handled by Regime C (`apply_dense_advice_user_rescue`) and downstream Gricean seating —
+    // never let an ambient `"I'll make a note"` pair hijack Slots 0..1 here.
+    if !is_sparse_haystack && advice_q {
+        return false;
+    }
 
     let empty_sp = DetHashSet::default();
     let maps = build_fst_concept_map(ctx, &empty_sp);
@@ -1242,7 +1253,18 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
             * 1.4;
         // Strong conceptual / hazard / Galois alignment (never triggered by a single ambient
         // temporal word like "week" or a loose 2-hop neighbor on dense multi-session chats).
-        let has_strong_concept_link = (ud + ad) >= 1.0 || haz > 0.0 || g_meet > 0.0;
+        let pair_in_top5_sess = ctx
+            .final_session_indices
+            .iter()
+            .take(5)
+            .any(|&s| s == ctx.ix.turns[u_idx].session);
+        let has_strong_concept_link = if is_sparse_haystack {
+            (ud + ad) >= 1.0 || haz > 0.0 || g_meet > 0.0
+        } else {
+            (ud + ad) >= 2.2
+                || haz >= 2.5
+                || (pair_in_top5_sess && ((ud + ad) >= 1.1 || g_meet >= 1.4))
+        };
         let ack_bonus = if mem_ack { 18.0 } else { 1.5 };
         let sc = (ud + ad) * 2.0
             + (uf + af) * 1.15
@@ -1323,8 +1345,10 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
         ctx.final_session_indices.remove(pos);
     }
     ctx.final_session_indices.insert(0, win_sess);
-    ctx.implicit_disclosure_locked = true;
-    true
+    if is_sparse_haystack || profile_q {
+        ctx.implicit_disclosure_locked = true;
+    }
+    is_sparse_haystack || profile_q
 }
 
 /// Regime B: Named-speaker Open-Domain FST ConceptNet + WordNet + Wikidata + Roget + GeoNames
@@ -1858,6 +1882,23 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
 
     let mut galois_pool = pool.clone();
     galois_pool.push(t0);
+    // Include adjacent same-session assistant replies (`ti + 1`) for Top-5 session user turns
+    // so anaphoric validation & mirrored-concept signals back-project cleanly onto `ti`.
+    let mut galois_seen: DetHashSet<usize> = galois_pool.iter().copied().collect();
+    for &ti in &pool {
+        if ti + 1 < ctx.nt
+            && ctx.ix.turns[ti + 1].session == ctx.ix.turns[ti].session
+            && ctx.ix.turns[ti + 1].field == 1
+            && ctx
+                .final_session_indices
+                .iter()
+                .take(5)
+                .any(|&s| s == ctx.ix.turns[ti].session)
+            && galois_seen.insert(ti + 1)
+        {
+            galois_pool.push(ti + 1);
+        }
+    }
     let galois_scores =
         score_signed_galois_candidates_q16(ctx.ix, &ctx.q.text, &galois_pool, &BTreeSet::new());
     let sheaf_scores = crate::retrieval::graph::sheaf_mobius_q16::evaluate_sheaf_mobius_pool_q16(
@@ -1866,6 +1907,86 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
         &galois_pool,
         &BTreeSet::new(),
     );
+
+    // Closed-class helper: detects anaphoric assistant epistemic validation openings pointing
+    // directly back to the immediately preceding user turn (`ti`) as a core disclosure/constraint.
+    // hardcode-scan: closed-class (demonstrative evaluative/acknowledgement discourse openers).
+    let is_anaphoric_asst_validation = |text: &str| -> bool {
+        let head_len = text
+            .char_indices()
+            .nth(96)
+            .map(|(i, _)| i)
+            .unwrap_or(text.len());
+        let h = text[..head_len].trim_start().to_ascii_lowercase();
+        [
+            "that's a ",
+            "that\u{2019}s a ",
+            "that is a ",
+            "that's very ",
+            "that\u{2019}s very ",
+            "that sounds ",
+            "that does sound",
+            "that makes sense",
+            "that makes perfect sense",
+            "that preference",
+            "note added",
+            "thank you for sharing",
+            "thanks for sharing",
+            "i've flagged this",
+            "i\u{2019}ve flagged this",
+            "we will definitely avoid",
+            "i'll make a note",
+            "i\u{2019}ll make a note",
+        ]
+        .iter()
+        .any(|p| h.starts_with(p) || h.contains(p))
+    };
+
+    // LCSeg-style local aside-surprisal (Galley et al. ACL 2003 / Barzilay & Lapata CL 2008):
+    // measures how orthogonal user turn `ti` is to the preceding 4 same-session user turns.
+    let compute_aside_surprisal = |ti: usize| -> f32 {
+        let tr = &ctx.ix.turns[ti];
+        if tr.content.len() < 4 {
+            return 0.0;
+        }
+        let s_turns = &ctx.ix.session_turns[tr.session];
+        let Some(pos) = s_turns.iter().position(|&x| x == ti) else {
+            return 0.0;
+        };
+        if pos < 2 {
+            return 0.0;
+        }
+        let mut max_ov = 0.0f32;
+        let mut checked = 0usize;
+        for &prev_ti in s_turns[..pos].iter().rev() {
+            if ctx.ix.turns[prev_ti].field != 0 {
+                continue;
+            }
+            let prev_c = &ctx.ix.turns[prev_ti].content;
+            if prev_c.len() >= 3 {
+                let mut inter = 0usize;
+                for &cid in &tr.content {
+                    if prev_c.contains(&cid) {
+                        inter += 1;
+                    }
+                }
+                let denom = tr.content.len().min(prev_c.len()).max(1) as f32;
+                let ov = (inter as f32) / denom;
+                if ov > max_ov {
+                    max_ov = ov;
+                }
+            }
+            checked += 1;
+            if checked >= 4 {
+                break;
+            }
+        }
+        if checked == 0 {
+            0.0
+        } else {
+            (1.0 - max_ov).clamp(0.0, 1.0)
+        }
+    };
 
     let base_t0_sc = if tr0.field == 1 {
         0.45 * d0 + 0.50 * f0
@@ -1922,6 +2043,23 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
         let g_meet =
             ((g_sc.galois_meet_q16 as f32) / 65_536.0).min(4.0) * 0.85 + heyting_pos + sheaf_pos;
         let haz_res = ((g_sc.hazard_resonance_q16 as f32) / 65_536.0).min(3.5) * 1.15 + neg_pos;
+
+        // Anaphoric assistant-validation back-projection (`ti + 1` -> `ti`):
+        let (next_d, next_f, next_dh, next_fh, next_g, next_haz, anaphoric_val) = if ti + 1 < ctx.nt
+            && ctx.ix.turns[ti + 1].session == tr.session
+            && ctx.ix.turns[ti + 1].field == 1
+        {
+            let next_tr = &ctx.ix.turns[ti + 1];
+            let (nd, nf, ndh, nfh) = score_turn_concepts(next_tr, &maps);
+            let ng_sc = galois_scores.get(&(ti + 1)).copied().unwrap_or_default();
+            let ng = ((ng_sc.galois_meet_q16 as f32) / 65_536.0).min(3.5) * 0.65;
+            let nhaz = ((ng_sc.hazard_resonance_q16 as f32) / 65_536.0).min(3.5) * 0.85;
+            let aval = is_anaphoric_asst_validation(&next_tr.body_for_headers);
+            (nd, nf, ndh, nfh, ng, nhaz, aval)
+        } else {
+            (0.0, 0.0, 0, 0, 0.0, 0.0, false)
+        };
+
         // hardcode-scan: closed-class (1st-person personal pronouns and contractions)
         let has_leading_1sg = toks.iter().take(8).any(|w| {
             matches!(
@@ -1929,7 +2067,20 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
                 "i" | "i'm" | "i've" | "i'd" | "i'll" | "my" | "me" | "mine" | "we" | "we're" | "we've" | "our" | "ours"
             )
         });
-        if !tr.is_personal_constraint && !tr.has_prose_disclosure && !has_leading_1sg {
+        let has_any_1sg = has_leading_1sg
+            || toks.iter().any(|w| {
+                matches!(
+                    w.as_str(),
+                    "i" | "i'm" | "i've" | "i'd" | "my" | "me" | "we" | "we're" | "we've" | "our"
+                )
+            });
+        if !tr.is_personal_constraint
+            && !tr.has_prose_disclosure
+            && !has_leading_1sg
+            && !(s_rank.is_some()
+                && anaphoric_val
+                && ((has_any_1sg && toks.len() >= 8) || (dh > 0 || next_dh > 0)))
+        {
             continue;
         }
         // hardcode-scan: closed-class (1st-person deontic, habit, and constraint stance modals/verbs)
@@ -1950,31 +2101,74 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
                 "top priority",
                 "learned",
                 "focus on",
+                "not work",
+                "won't work",
+                "will not work",
+                "cannot",
+                "can't",
+                "don't have",
+                "didn't enjoy",
+                "wasn't my style",
+                "challenging to",
+                "nervous",
+                "stressed",
+                "making a real effort",
+                "need to get better",
+                "determined to",
+                "really want to",
+                "as a ",
             ]
             .iter()
             .any(|p| low.contains(p));
         let in_top3_sess = s_rank.is_some_and(|r| r < 3);
+        let aside_surprisal = if s_rank.is_some() && toks.len() >= 12 {
+            compute_aside_surprisal(ti)
+        } else {
+            0.0
+        };
         let has_concept_link = dh > 0
+            || next_dh > 0
             || fh >= 2
+            || (fh + next_fh) >= 2
             || g_sc.galois_meet_q16 > 0
             || g_sc.hazard_resonance_q16 > 0
+            || next_g > 0.0
+            || next_haz > 0.0
             || has_sheaf_proof
-            || (in_top3_sess && fh >= 1 && (has_stance || tr.has_prose_disclosure));
+            || (in_top3_sess
+                && (fh >= 1 || next_fh >= 1 || (anaphoric_val && aside_surprisal >= 0.72))
+                && (has_stance || tr.has_prose_disclosure));
         if !has_concept_link {
             continue;
         }
         let sess_prior = match s_rank {
-            Some(0) => 0.85,
-            Some(1) | Some(2) => 0.55,
-            Some(3) | Some(4) => 0.25,
+            Some(0) => 1.05,
+            Some(1) | Some(2) => 0.70,
+            Some(3) | Some(4) => 0.35,
             _ => 0.0,
         };
         let deontic_bonus = if has_stance { 1.25 } else { 0.0 };
+        let anaphoric_bonus = if anaphoric_val && toks.len() >= 7 {
+            1.45
+        } else {
+            0.0
+        };
+        let aside_bonus = if aside_surprisal >= 0.72 && (has_stance || anaphoric_val) {
+            1.15 * aside_surprisal
+        } else {
+            0.0
+        };
         let sc = d * 1.45
             + f * 1.15
+            + next_d * 0.80
+            + next_f * 0.60
             + g_meet
             + haz_res
+            + next_g
+            + next_haz
             + deontic_bonus
+            + anaphoric_bonus
+            + aside_bonus
             + sess_prior
             + 0.10 * ctx.t_scene[ti].max(0.0);
         ranked_cands.push((sc, ti, tr.session));
@@ -2007,39 +2201,44 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
         seated_slot0 = true;
     }
 
-    // 2. Non-destructive Top-5 disclosure packing (Slots 2..4): seat up to 2 runner-up
-    //    distinct-session 1st-person personal disclosures from `final_session_indices[0..5]`
-    //    without ever disturbing Slot 0 or Slot 1 (lifts @5/@10 on implicit advice queries
-    //    where Session R@5 is already high while protecting @1 with zero regression).
+    // 2. Non-destructive Top-5 disclosure packing: protect Slots 0..2 on preference/temporal/
+    //    current-state queries (Slots 3..4 only); on advice queries pack up to 3 distinct-session
+    //    personal disclosures from `final_session_indices[0..5]` into Slots 2..4.
+    let protect_slot2 = ctx.eff_it.preference || ctx.eff_it.temporal || ctx.eff_it.current_state;
+    let base_slot = if protect_slot2 { 3usize } else { 2usize };
+    let max_pack = if protect_slot2 { 2usize } else { 3usize };
     let start_idx = usize::from(seated_slot0);
     let mut packed = 0usize;
-    let mut packed_sessions: BTreeSet<usize> = BTreeSet::new();
+    let mut sess_counts: DetHashMap<usize, usize> = DetHashMap::default();
+    let s0_win = ctx.final_session_indices.first().copied();
     if let Some(&h0) = ctx.final_turn_indices.first() {
-        packed_sessions.insert(ctx.ix.turns[h0].session);
+        *sess_counts.entry(ctx.ix.turns[h0].session).or_insert(0) += 1;
     }
     let orig_len = ctx.final_turn_indices.len();
     for &(sc, cti, csess) in ranked_cands.iter().skip(start_idx) {
-        if packed >= 2 || sc < 2.1 {
+        if packed >= max_pack || sc < 2.1 {
             break;
         }
         if ctx.final_turn_indices.iter().take(5).any(|&x| x == cti) {
-            packed_sessions.insert(csess);
+            *sess_counts.entry(csess).or_insert(0) += 1;
             continue;
         }
         let in_top5_sess = ctx.final_session_indices.iter().take(5).any(|&s| s == csess);
         if !in_top5_sess {
             continue;
         }
-        if packed_sessions.contains(&csess) && packed >= 1 {
+        let cur_cnt = sess_counts.get(&csess).copied().unwrap_or(0);
+        let cap = if Some(csess) == s0_win { 2 } else { 1 };
+        if cur_cnt >= cap {
             continue;
         }
         if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == cti) {
             ctx.final_turn_indices.remove(pos);
         }
-        let ins_slot = (2 + packed).min(4).min(ctx.final_turn_indices.len());
+        let ins_slot = (base_slot + packed).min(4).min(ctx.final_turn_indices.len());
         ctx.final_turn_indices.insert(ins_slot, cti);
         ctx.final_turn_indices.truncate(orig_len);
-        packed_sessions.insert(csess);
+        *sess_counts.entry(csess).or_insert(0) += 1;
         packed += 1;
     }
 }
@@ -2065,17 +2264,21 @@ pub(in crate::retrieval) fn apply_unified_implicit_bridge(ctx: &mut RankCtx<'_>)
         && !ctx.torrens_locked_head
         && is_implicit_advice_frame(&ctx.q.text);
     let pre_galois_h0 = ctx.final_turn_indices.first().copied();
-    apply_signed_galois_hazard_seat_q16(
+    let _galois_seated = apply_signed_galois_hazard_seat_q16(
         ctx.ix,
         &ctx.q.text,
         galois_advice_eligible,
         &mut ctx.final_turn_indices,
         &mut ctx.final_session_indices,
     );
-    if galois_advice_eligible && ctx.final_turn_indices.first().copied() != pre_galois_h0 {
+    // Only lock out dense advice rescue on sparse haystacks; on dense multi-session chats
+    // allow Regime C to pack Slots 2..4 (while Slot 0 stays protected if Galois won).
+    let galois_changed_head =
+        galois_advice_eligible && ctx.final_turn_indices.first().copied() != pre_galois_h0;
+    apply_dense_advice_user_rescue(ctx);
+    if galois_changed_head {
         ctx.implicit_disclosure_locked = true;
     }
-    apply_dense_advice_user_rescue(ctx);
 }
 
 #[cfg(test)]

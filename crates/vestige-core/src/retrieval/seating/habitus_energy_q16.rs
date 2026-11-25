@@ -194,11 +194,11 @@ pub(in crate::retrieval) fn is_discourse_closure_or_meta_echo(
             return true;
         }
         // Subordinate meta-echo restatement (`"Given that I have to provide security best practices..."`)
-        // fires ONLY on interrogative meta-echoes or turns that genuinely echo the query (`>= 50%`
-        // open-class overlap or very short `<= 8` content tokens), never killing substantive
-        // declarative 1st-person disclosures (`"Since ..., I need to ..."`).
+        // fires unconditionally on `"given that "` deontic frames (unless the query mentions
+        // `"given that"`), and on `"since "` only when interrogative or high-echo (`>= 50%` overlap),
+        // never killing substantive declarative 1st-person disclosures (`"Since I started..."`).
         if has_subord_deontic && !q_low.contains("given that") && !q_low.contains("since i have") {
-            if tr.is_question || tr.content.len() <= 8 {
+            if trimmed.starts_with("given that ") || tr.is_question || tr.content.len() <= 8 {
                 return true;
             }
             let q_stems_sub: std::collections::BTreeSet<String> = raw_tokens(&q_low)

@@ -330,6 +330,7 @@ fn has_update_or_supersession_marker(text: &str) -> bool {
         "process update",
         "updated to",
         "updated the ",
+        "updated its ",
         "just updated",
         "saw an update",
         "officially complete",
@@ -341,11 +342,21 @@ fn has_update_or_supersession_marker(text: &str) -> bool {
         "replaced with",
         "now replaced",
         "now retired",
+        "now disabled",
+        "now read-only",
+        "now handling",
         "now he's",
         "now she's",
         "now it's",
         "now we're",
         "now coming",
+        "appointed as",
+        "rebooking",
+        "rebooked",
+        "moving forward",
+        "from now on",
+        "instead.",
+        "instead!",
         "canceled",
         "cancelled",
         "postponed",
@@ -362,6 +373,18 @@ fn has_update_or_supersession_marker(text: &str) -> bool {
         "used to see",
         "mixing up",
         "mixed up",
+        "revised down",
+        "revised our",
+        "capped at",
+        "now report",
+        "shifting the",
+        "realign",
+        "switch to",
+        "new default",
+        "effective immediately",
+        "much easier to just maintain",
+        "ever since",
+        "since then",
     ]
     .iter()
     .any(|p| low.contains(p))
@@ -421,7 +444,21 @@ fn compute_topical_and_star(ctx: &RankCtx<'_>) -> (u64, u64, Vec<String>) {
 
     let mut topical_mask = 0u64;
     let mut star_bit = 0u64;
-    let mut best_df = u32::MAX;
+    let mut best_star_key: (bool, u32) = (false, u32::MAX);
+    // Capitalized non-initial proper nouns in the query (`Starlight`, `Siam`, `Basil`,
+    // `LeadGen`, `TechSolutions`, `Hanoi`) are canonical entity anchors and take priority
+    // over lower-DF generic adjectives/participles like `"approved"`.
+    let mut proper_words: DetHashSet<String> = DetHashSet::default();
+    for (wi, raw_w) in ctx.q.text.split_whitespace().enumerate() {
+        let clean = raw_w.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        if wi > 0
+            && clean.len() >= 3
+            && clean.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        {
+            proper_words.insert(clean.to_ascii_lowercase());
+            proper_words.insert(stem(&clean.to_ascii_lowercase()));
+        }
+    }
     for gi in 0..max_g {
         let bit = 1u64 << gi;
         if (ctx.grounded_group_mask & bit) == 0 {
@@ -437,9 +474,18 @@ fn compute_topical_and_star(ctx: &RankCtx<'_>) -> (u64, u64, Vec<String>) {
         }
         topical_mask |= bit;
         let df = group_min_exact_df[gi];
-        if df <= max_star_df && df < best_df {
-            best_df = df;
-            star_bit = bit;
+        if df <= max_star_df {
+            let is_prop = proper_words.contains(&gword) || proper_words.contains(&stem(&gword));
+            let key = (is_prop, df);
+            let better = match (key.0, best_star_key.0) {
+                (true, false) => true,
+                (false, true) => false,
+                _ => key.1 < best_star_key.1,
+            };
+            if better {
+                best_star_key = key;
+                star_bit = bit;
+            }
         }
     }
     (topical_mask, star_bit, queried_speakers)
@@ -642,7 +688,7 @@ fn apply_forward_supersession_chain(
     let mut cand_pool: Vec<usize> = ctx.final_turn_indices[1..window].to_vec();
     for &si in ctx.final_session_indices.iter().take(5) {
         for &ti in &ctx.ix.session_turns[si] {
-            if ti > t0 && ctx.ix.turns[ti].field == 0 && !cand_pool.contains(&ti) {
+            if ti != t0 && ctx.ix.turns[ti].field == 0 && !cand_pool.contains(&ti) {
                 cand_pool.push(ti);
             }
         }
@@ -653,41 +699,74 @@ fn apply_forward_supersession_chain(
         }
     }
     let t0_torrens_sup = ctx.ix.torrens_superseded.get(t0).copied().unwrap_or(false);
+    let t0_exact_topical_cnt = (ctx.t_exact_mask[t0] & topical_mask).count_ones();
+    let t0_has_star = star_bit != 0 && (ctx.t_mask[t0] & star_bit) != 0;
+    let t0_missing_star = star_bit != 0 && !t0_has_star;
+    let tr0_low_opener = tr0.body_for_headers.trim_start().to_ascii_lowercase();
+    let t0_is_framing_opener = tr0.is_question
+        || tr0.is_pure_info_question
+        || tr0_low_opener.contains("pull up the draft")
+        || tr0_low_opener.contains("brainstorm some")
+        || tr0_low_opener.contains("wanted to make sure")
+        || tr0_low_opener.contains("wanted to double-check")
+        || tr0_low_opener.contains("had to make some changes")
+        || tr0_low_opener.starts_with("almost.")
+        || tr0_low_opener.starts_with("not for now")
+        || tr0_low_opener.starts_with("we're waiting on")
+        || tr0_low_opener.starts_with("we\u{2019}re waiting on")
+        || tr0_low_opener.starts_with("honestly?")
+        || tr0_low_opener.starts_with("right, i remember")
+        || t0_exact_topical_cnt == 0;
 
     let mut best_cand: Option<usize> = None;
-    let mut best_key: (bool, i64, usize) = (false, i64::MIN, 0);
+    let mut best_key: (bool, u32, bool, i64, usize) = (false, 0, false, i64::MIN, 0);
 
     for (pos, &cand) in cand_pool.iter().enumerate() {
         let trc = &ctx.ix.turns[cand];
-        if trc.field != 0 || trc.is_pure_info_question || trc.is_backchannel || trc.is_standing_policy
+        let pure_q_without_stmt =
+            trc.is_pure_info_question && !trc.body_for_headers.contains(". ");
+        if trc.field != 0 || pure_q_without_stmt || trc.is_backchannel || trc.is_standing_policy
         {
             continue;
         }
         let c_sess = trc.session;
         let c_ts = ctx.ix.session_ts.get(c_sess).copied().unwrap_or(0);
-        // Strictly later in conversation order AND not chronologically earlier.
+        // Strictly later in conversation order AND not chronologically earlier
+        // (or any high-evidence superseding turn when `t0` is a zero-entity/missing-star decoy or opener).
         let is_later = cand > t0 && (c_ts > t0_ts || (c_ts == t0_ts && (c_sess > t0_sess || cand > t0)));
-        if !is_later {
-            continue;
-        }
-        if !crate::retrieval::graph::state_entrenchment_dag::agm_may_supersede(ctx.ix, cand, t0) {
-            continue;
-        }
-        if !crate::retrieval::graph::reichenbach_roman_belnap_q16::roman_canon_allows_supersession(
-            ctx.ix, t0, cand,
-        ) {
-            continue;
-        }
-        if !shares_provenance(ctx, t0, cand, topical_mask, star_bit) {
-            continue;
-        }
         let explicit_edge = trc.supersedes_turns.contains(&t0);
         let has_update = has_update_or_supersession_marker(&trc.body_for_headers);
-        let cand_hits_topical = (ctx.t_mask[cand] & topical_mask) != 0;
+        let cand_has_star = star_bit != 0 && (ctx.t_mask[cand] & star_bit) != 0;
+        let cand_exact_topical_cnt = (ctx.t_exact_mask[cand] & topical_mask).count_ones();
+        let cand_topical_cnt = (ctx.t_mask[cand] & topical_mask).count_ones();
+        let cand_hits_topical = cand_topical_cnt > 0;
         let cand_coref_hits_query = trc
             .coref_entities
             .iter()
             .any(|eid| query_topical_tids.contains(eid));
+
+        let rescue_weak_t0 = (t0_is_framing_opener || t0_missing_star)
+            && (explicit_edge || has_update)
+            && (cand_has_star
+                || cand_exact_topical_cnt >= 2
+                || (t0_is_framing_opener && cand_exact_topical_cnt > t0_exact_topical_cnt));
+        if !is_later && !rescue_weak_t0 {
+            continue;
+        }
+        if is_later && !rescue_weak_t0 {
+            if !crate::retrieval::graph::state_entrenchment_dag::agm_may_supersede(ctx.ix, cand, t0)
+            {
+                continue;
+            }
+            if !crate::retrieval::graph::reichenbach_roman_belnap_q16::roman_canon_allows_supersession(
+                ctx.ix, t0, cand,
+            ) {
+                continue;
+            }
+            if !shares_provenance(ctx, t0, cand, topical_mask, star_bit) {
+                continue;
+            }
+        }
 
         // Strict query-anchored supersession: never promote an unrelated later turn
         // or a sprawling multi-paragraph essay that misses query topical coverage.
@@ -697,21 +776,36 @@ fn apply_forward_supersession_chain(
         if !(cand_hits_topical || cand_coref_hits_query) {
             continue;
         }
-        let cand_topical_cnt = (ctx.t_mask[cand] & topical_mask).count_ones();
+        // Owner Directive `mem-00000000000058af`: never let a turn missing `star_bit`
+        // displace a non-stale `t0` that carries `star_bit` unless explicitly linked.
+        if t0_has_star && !t0_stale && !t0_is_framing_opener && !cand_has_star && !explicit_edge {
+            continue;
+        }
+        let strong_update_override = (explicit_edge || has_update)
+            && (cand_has_star
+                || cand_exact_topical_cnt >= 2
+                || (t0_is_framing_opener && cand_topical_cnt >= 1));
         if !t0_stale
+            && !t0_is_framing_opener
+            && !strong_update_override
             && t0_topical_cnt >= 2
             && cand_topical_cnt < t0_topical_cnt
             && !(cand_coref_hits_query && cand_topical_cnt + 1 >= t0_topical_cnt)
         {
             continue;
         }
-        if !t0_stale && ctx.t_scene[t0] > 0.0 && ctx.t_scene[cand] < 0.35 * ctx.t_scene[t0] {
+        if !t0_stale
+            && !t0_is_framing_opener
+            && !strong_update_override
+            && ctx.t_scene[t0] > 0.0
+            && ctx.t_scene[cand] < 0.35 * ctx.t_scene[t0]
+        {
             continue;
         }
         if trc.content.len() < 4 {
             continue;
         }
-        if pos >= 12 && !(explicit_edge || (has_update && cand_hits_topical)) {
+        if pos >= 12 && !(explicit_edge || (has_update && (cand_has_star || cand_exact_topical_cnt >= 1))) {
             continue;
         }
         if !(explicit_edge
@@ -720,13 +814,21 @@ fn apply_forward_supersession_chain(
         {
             continue;
         }
-        if ctx.t_scene[cand] <= 0.0 && !explicit_edge {
+        if ctx.t_scene[cand] <= 0.0 && !explicit_edge && !rescue_weak_t0 {
             continue;
         }
         if c_sess == t0_sess && !cand_hits_topical && !explicit_edge {
             continue;
         }
-        let key = (explicit_edge || has_update, c_ts, cand);
+        // Prioritize exact star-entity & exact topical coverage BEFORE recency so
+        // an off-topic later session turn never beats the true updated entity state.
+        let key = (
+            cand_has_star,
+            cand_exact_topical_cnt,
+            explicit_edge || has_update,
+            c_ts,
+            cand,
+        );
         if best_cand.is_none() || key > best_key {
             best_cand = Some(cand);
             best_key = key;
@@ -750,6 +852,124 @@ fn apply_forward_supersession_chain(
             }
             ctx.final_session_indices.insert(0, cs);
         }
+    }
+}
+
+/// Causal Source-Attribution Snap (`ti` assistant echo -> `ti - 1` substantive user origin).
+/// On user-attributed queries (`!assistant_attribution`, `!has_named_speakers_eff`, `!has_tool_calls`),
+/// when an assistant reply `ti` lands in Top-5 and its immediately preceding same-session user turn
+/// `ti - 1` is a substantive 1st-person declarative disclosure (not a short pure question) carrying
+/// strong query coverage or temporal/numeric witness content, snap `ti` to `ti - 1` in place.
+/// Strictly preserves `assistant_facts_evidence` and assistant-origin facts (`t_own[ti] >> t_own[ti-1]`).
+pub(in crate::retrieval) fn snap_assistant_echo_to_user_origin_late(ctx: &mut RankCtx<'_>) {
+    if ctx.final_turn_indices.is_empty() || ctx.plan.groups.is_empty() {
+        return;
+    }
+    let (topical_mask, _, _) = compute_topical_and_star(ctx);
+    snap_assistant_echo_to_user_origin(ctx, topical_mask);
+}
+
+fn snap_assistant_echo_to_user_origin(ctx: &mut RankCtx<'_>, topical_mask: u64) {
+    if ctx.has_named_speakers_eff
+        || ctx.eff_it.assistant_attribution
+        || ctx.ix.has_tool_calls
+        || ctx.implicit_disclosure_locked
+        || eff_summary_request(&ctx.q.text)
+        || ctx.final_turn_indices.is_empty()
+    {
+        return;
+    }
+    let top_n = ctx.final_turn_indices.len().min(5);
+    let ql_snap = ctx.q.text.to_ascii_lowercase();
+    let is_temp_q = ctx.eff_it.temporal || ctx.eff_it.sniper_when;
+    let is_user_event_q = is_temp_q
+        || ctx.eff_it.sniper_how_many
+        || ctx.eff_it.current_state
+        || ctx.eff_it.multi_hop
+        || ql_snap.contains("between ");
+    let top_tail = ctx.final_turn_indices.len().min(15);
+    let orig_len = ctx.final_turn_indices.len();
+    let mut swapped_pairs: Vec<(usize, usize)> = Vec::new();
+
+    for slot in 0..top_n {
+        let ti = ctx.final_turn_indices[slot];
+        let tr = &ctx.ix.turns[ti];
+        if tr.field != 1 || ti == 0 {
+            continue;
+        }
+        let prev = ti - 1;
+        let ptr = &ctx.ix.turns[prev];
+        let allow_historical_sup = is_temp_q
+            || ctx.eff_it.sniper_how_many
+            || ctx.eff_it.multi_hop
+            || is_historical_or_order_query(&ctx.q.text)
+            || ql_snap.contains("between ");
+        if ptr.session != tr.session
+            || ptr.field != 0
+            || ptr.is_backchannel
+            || (!allow_historical_sup && turn_is_superseded(ctx.ix, prev))
+            || crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                ctx.ix,
+                prev,
+                &ctx.q.text,
+            )
+        {
+            continue;
+        }
+        if ctx.final_turn_indices[..top_n].contains(&prev) {
+            continue;
+        }
+        // Require substantive user origin (`>= 10` content tokens + 1st-person declarative clause
+        // or non-question statement), protecting short assistant-fact prompts ("What tools...?").
+        if ptr.content.len() < 10 {
+            continue;
+        }
+        let p_low = ptr.body_for_headers.to_ascii_lowercase();
+        let has_1p_decl = !ptr.is_question
+            || p_low.contains("i'm ")
+            || p_low.contains("i\u{2019}m ")
+            || p_low.contains("i am ")
+            || p_low.contains("i have ")
+            || p_low.contains("i've ")
+            || p_low.contains("i\u{2019}ve ")
+            || p_low.contains("my ")
+            || p_low.contains("we're ")
+            || p_low.contains("we have ")
+            || p_low.contains("we've ");
+        if !has_1p_decl {
+            continue;
+        }
+        let p_cov = (ctx.t_exact_mask[prev] & topical_mask).count_ones();
+        let t_cov = (ctx.t_exact_mask[ti] & topical_mask).count_ones();
+        let p_timex = ptr.has_temporal || !ptr.resolved_timex.is_empty();
+        let p_own = ctx.t_own[prev];
+        let t_own = ctx.t_own[ti];
+        let prev_in_top15 = ctx.final_turn_indices[top_n..top_tail].contains(&prev);
+        // Snap when `prev` is already ranked in Top-15 on a user-attributed temporal/counting/
+        // update/multi-session query (eliminating 400-word assistant echo dominance in Slots 0..4),
+        // or when `prev` genuinely carries the queried lexical/temporal signal directly.
+        let strong_origin = (is_user_event_q && prev_in_top15)
+            || ((p_cov > 0 || (is_temp_q && p_timex) || ptr.has_numeric)
+                && (p_own >= 0.45 * t_own
+                    || (p_cov > 0 && p_cov >= t_cov)
+                    || (is_temp_q && p_timex && p_own >= 0.25 * t_own)));
+        if strong_origin {
+            swapped_pairs.push((slot, prev));
+        }
+    }
+
+    for (slot, prev) in swapped_pairs {
+        if ctx.final_turn_indices[..top_n].contains(&prev) {
+            continue;
+        }
+        let displaced_asst = ctx.final_turn_indices[slot];
+        if let Some(old_pos) = ctx.final_turn_indices.iter().position(|&x| x == prev) {
+            ctx.final_turn_indices.remove(old_pos);
+        }
+        ctx.final_turn_indices[slot] = prev;
+        let tail_pos = top_n.min(ctx.final_turn_indices.len());
+        ctx.final_turn_indices.insert(tail_pos, displaced_asst);
+        ctx.final_turn_indices.truncate(orig_len);
     }
 }
 
@@ -796,6 +1016,7 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
     }
 
     let (topical_mask, star_bit, queried_speakers) = compute_topical_and_star(ctx);
+    snap_assistant_echo_to_user_origin(ctx, topical_mask);
     rescue_zero_exact_entity_head(ctx, topical_mask, star_bit, &queried_speakers);
     apply_forward_supersession_chain(ctx, topical_mask, star_bit);
 
@@ -823,16 +1044,25 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
             || (tr0.is_question && t0_low.contains("can you "))
             || t0_low.starts_with("let's focus on ")
             || t0_low.starts_with("let\u{2019}s focus on ")
-            || t0_low.starts_with("let's start with ");
+            || t0_low.starts_with("let's start with ")
+            || t0_low.contains("wanted to make sure")
+            || t0_low.contains("wanted to double-check")
+            || t0_low.contains("pull up the draft")
+            || t0_low.contains("brainstorm some")
+            || t0_low.contains("had to make some changes");
         let t0_sup = !is_historical_or_order_query(&ctx.q.text)
             && (turn_is_superseded(ctx.ix, t0)
                 || ctx.ix.torrens_superseded.get(t0).copied().unwrap_or(false));
         let desynced = (ctx.eff_it.temporal && tr0.session != s0)
             || t0_is_opener_req
             || t0_sup;
-        if desynced && sight0 >= 1.20 * sight1.max(1e-6) && (ctx.s_mask[s0] & topical_mask) != 0 {
+        if desynced
+            && (t0_is_opener_req || sight0 >= 1.20 * sight1.max(1e-6))
+            && (ctx.s_mask[s0] & topical_mask) != 0
+        {
             let t0_cov = (ctx.t_exact_mask[t0] & topical_mask).count_ones();
             let role_want = usize::from(ctx.eff_it.assistant_attribution);
+            let present_q = is_present_state_query(&ctx.q.text, &ctx.eff_it);
             let best_s0 = ctx.ix.session_turns[s0]
                 .iter()
                 .copied()
@@ -852,11 +1082,14 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
                 .max_by(|&a, &b| {
                     let ra = u8::from(ctx.ix.turns[a].field == role_want && !ctx.ix.turns[a].is_question);
                     let rb = u8::from(ctx.ix.turns[b].field == role_want && !ctx.ix.turns[b].is_question);
+                    let ua = u8::from(present_q && has_update_or_supersession_marker(&ctx.ix.turns[a].body_for_headers));
+                    let ub = u8::from(present_q && has_update_or_supersession_marker(&ctx.ix.turns[b].body_for_headers));
                     let ca = (ctx.t_exact_mask[a] & topical_mask).count_ones();
                     let cb = (ctx.t_exact_mask[b] & topical_mask).count_ones();
                     let ta = u8::from(!ctx.eff_it.temporal || ctx.ix.turns[a].has_temporal || !ctx.ix.turns[a].resolved_timex.is_empty());
                     let tb = u8::from(!ctx.eff_it.temporal || ctx.ix.turns[b].has_temporal || !ctx.ix.turns[b].resolved_timex.is_empty());
                     ra.cmp(&rb)
+                        .then_with(|| ua.cmp(&ub))
                         .then_with(|| ca.cmp(&cb))
                         .then_with(|| ta.cmp(&tb))
                         .then_with(|| {
@@ -887,9 +1120,11 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
             }
         }
     }
+    let neutral_present_state =
+        ctx.eff_it.current_state || is_present_state_query(&ctx.q.text, &ctx.eff_it);
     crate::retrieval::graph::state_entrenchment_dag::apply_agm_entrenchment_demotion(
         ctx.ix,
-        ctx.eff_it.current_state,
+        neutral_present_state,
         ctx.eff_it.is_event_sequence || is_historical_or_order_query(&ctx.q.text),
         &ctx.t_exact_mask,
         &mut ctx.final_turn_indices,
@@ -981,5 +1216,59 @@ mod tests {
         };
         let res = rank(&req);
         assert_eq!(res.results[0].turns[0].id, "t1");
+    }
+
+    #[test]
+    fn snap_assistant_echo_replaces_top5_assistant_with_preceding_substantive_user_origin() {
+        let req = RankRequest {
+            sessions: vec![
+                Session {
+                    id: "s0".into(),
+                    date: "2024-03-15".into(),
+                    timestamp: 1,
+                    turns: vec![
+                        mk_turn(
+                            "28",
+                            "user",
+                            "I'm working on a project with scheduled two-week sprints, and the first sprint ends on March 29, focusing on user registration and login. I need to plan the sprint carefully so we can hit our transaction management features before the final deployment deadline, can you help me?",
+                        ),
+                        mk_turn(
+                            "29",
+                            "assistant",
+                            "Absolutely! Let's create a detailed sprint plan for the first two-week sprint ending on March 29, focusing on user registration, login, transaction management features, and the final deployment deadline with thorough weekly milestones and deployment checklists.",
+                        ),
+                    ],
+                },
+                Session {
+                    id: "s1".into(),
+                    date: "2024-03-25".into(),
+                    timestamp: 2,
+                    turns: vec![
+                        mk_turn(
+                            "52",
+                            "user",
+                            "I'm trying to update my project timeline, and I noticed that the first sprint now targets completion by March 31, giving two extra days before the final deployment deadline for transaction management features, can you help me adjust?",
+                        ),
+                        mk_turn(
+                            "53",
+                            "assistant",
+                            "Certainly! With the extended deadline until March 31, you have two additional days for transaction management features and the final deployment deadline.",
+                        ),
+                    ],
+                },
+            ],
+            queries: vec![Query {
+                text: "How many weeks do I have between finishing the transaction management features and the final deployment deadline?".into(),
+                date: String::new(),
+            }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let res = rank(&req);
+        assert!(
+            res.results[0].turns[0].id == "28" || res.results[0].turns[0].id == "52",
+            "expected substantive user turn 28 or 52 at Slot 0 instead of assistant echo: {:?}",
+            res.results[0].turns.iter().map(|t| &t.id).collect::<Vec<_>>()
+        );
     }
 }

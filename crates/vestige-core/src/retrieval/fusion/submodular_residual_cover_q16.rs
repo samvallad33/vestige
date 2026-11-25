@@ -377,15 +377,27 @@ fn run_multi_session_instance_cover(
     final_turn_indices: &mut Vec<usize>,
     final_session_indices: &mut Vec<usize>,
 ) {
-    let Some(&h0) = final_turn_indices.first() else {
+    let Some(&raw_h0) = final_turn_indices.first() else {
         return;
     };
     let target_k = inp.k.min(5);
+    let user_preferred = !inp.eff_it.assistant_attribution;
+    // If Slot 0 is an assistant echo on a user-attributed temporal/multi-session query and its
+    // own session has a stronger substantive user turn, promote that user turn to Slot 0.
+    let h0 = if user_preferred && inp.ix.turns[raw_h0].field == 1 {
+        let h0_sess = inp.ix.turns[raw_h0].session;
+        best_substantive_turn_in_session(inp, h0_sess)
+            .filter(|&cand| inp.ix.turns[cand].field == 0)
+            .unwrap_or(raw_h0)
+    } else {
+        raw_h0
+    };
     let mut selected: Vec<usize> = vec![h0];
     let mut used_sessions: DetHashSet<usize> = DetHashSet::default();
     used_sessions.insert(inp.ix.turns[h0].session);
 
-    // Pass 1: align turns with the globally-optimized Top-`target_k` distinct sessions first.
+    // Pass 1: align turns with the globally-optimized Top-`target_k` distinct sessions first,
+    // preferring Berberich TIMEX + user-attributed substantive turns over assistant echoes.
     for &si in final_session_indices.iter().take(target_k) {
         if selected.len() >= target_k {
             break;
@@ -393,7 +405,15 @@ fn run_multi_session_instance_cover(
         if used_sessions.contains(&si) {
             continue;
         }
-        if let Some(&ti) = final_turn_indices.iter().find(|&&ti| {
+        let best_in_s = if inp.s_score.get(si).copied().unwrap_or(0.0) > 0.0 {
+            best_substantive_turn_in_session(inp, si)
+        } else {
+            None
+        };
+        if let Some(best_ti) = best_in_s {
+            selected.push(best_ti);
+            used_sessions.insert(si);
+        } else if let Some(&ti) = final_turn_indices.iter().find(|&&ti| {
             let tr = &inp.ix.turns[ti];
             tr.session == si
                 && !tr.is_backchannel
@@ -402,11 +422,6 @@ fn run_multi_session_instance_cover(
                     || inp.t_scene.get(ti).copied().unwrap_or(0.0) > 0.0)
         }) {
             selected.push(ti);
-            used_sessions.insert(si);
-        } else if inp.s_score.get(si).copied().unwrap_or(0.0) > 0.0
-            && let Some(best_ti) = best_substantive_turn_in_session(inp, si)
-        {
-            selected.push(best_ti);
             used_sessions.insert(si);
         }
     }
@@ -542,14 +557,22 @@ fn run_chronological_stratified_spine(
     *final_session_indices = merged_s;
 }
 
-/// Pick the strongest non-backchannel, non-superseded substantive turn inside session `si`.
+/// Pick the strongest non-backchannel, non-superseded substantive turn inside session `si`,
+/// incorporating Berberich TIMEX × event-coverage weighting on temporal queries and
+/// role preference for user assertions on non-assistant-attributed queries.
 fn best_substantive_turn_in_session(inp: &SubmodularCoverInput<'_>, si: usize) -> Option<usize> {
     let turn_list = inp.ix.session_turns.get(si)?;
+    let is_temp_q = inp.eff_it.temporal || inp.eff_it.sniper_when;
+    let prefer_user = !inp.eff_it.assistant_attribution;
+    let allow_hist_sup = inp.eff_it.temporal
+        || inp.eff_it.sniper_when
+        || inp.eff_it.sniper_how_many
+        || inp.eff_it.multi_hop;
     let mut best: Option<(usize, i64)> = None;
     for &ti in turn_list {
         let tr = &inp.ix.turns[ti];
         if tr.is_backchannel
-            || turn_is_superseded(inp.ix, ti)
+            || (!allow_hist_sup && turn_is_superseded(inp.ix, ti))
             || is_discourse_closure_or_meta_echo(inp.ix, ti, inp.query)
         {
             continue;
@@ -557,11 +580,36 @@ fn best_substantive_turn_in_session(inp: &SubmodularCoverInput<'_>, si: usize) -
         let cov = (inp.t_exact_mask.get(ti).copied().unwrap_or(0) & inp.q_group_mask).count_ones()
             as i64;
         let rel = (inp.t_scene.get(ti).copied().unwrap_or(0.0).max(0.0) * 16_384.0) as i64;
-        let user_bonus = if tr.field == 0 { 16_384 } else { 0 };
+        let is_substantive_user = tr.field == 0 && tr.content.len() >= 10;
+        let user_bonus = if prefer_user && tr.field == 0 {
+            if is_substantive_user && (cov > 0 || tr.has_temporal || tr.has_numeric) {
+                Q16_ONE.saturating_mul(2)
+            } else {
+                49_152
+            }
+        } else if !prefer_user && tr.field == 1 {
+            32_768
+        } else {
+            0
+        };
+        let timex_bonus = if is_temp_q && (tr.has_temporal || !tr.resolved_timex.is_empty()) {
+            if cov > 0 { Q16_ONE } else { Q16_ONE >> 1 }
+        } else {
+            0
+        };
+        // Never penalize substantive multi-clause user context turns that end with a trailing
+        // help request (`"I'm working on sprint 2... can you help me?"`).
+        let decl_penalty = if tr.is_pure_info_question && tr.content.len() < 10 {
+            -24_576
+        } else {
+            0
+        };
         let sc = cov
             .saturating_mul(Q16_ONE)
             .saturating_add(rel)
-            .saturating_add(user_bonus);
+            .saturating_add(user_bonus)
+            .saturating_add(timex_bonus)
+            .saturating_add(decl_penalty);
         let better = match best {
             None => true,
             Some((prev_ti, prev_sc)) => sc > prev_sc || (sc == prev_sc && ti < prev_ti),

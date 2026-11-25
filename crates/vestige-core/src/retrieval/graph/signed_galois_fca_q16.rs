@@ -356,8 +356,19 @@ pub(in crate::retrieval) fn apply_signed_galois_hazard_seat_q16(
         if tr.field != 0 || tr.is_question || tr.is_standing_policy {
             continue;
         }
+        let in_top5_sess = final_session_indices
+            .iter()
+            .take(5)
+            .any(|&s| s == tr.session);
+        // Outside the already-retrieved Top-5 sessions on dense multi-session chats, require a
+        // decisive `>= 2.0x` hazard resonance so weak generic `"instead of"` matches never hijack Slot 0.
+        let min_haz = if in_top5_sess || ix.turns.len() <= 200 {
+            Q16_ONE
+        } else {
+            Q16_ONE.saturating_mul(2)
+        };
         if sc.has_exclusion_conflict
-            && sc.hazard_resonance_q16 >= Q16_ONE
+            && sc.hazard_resonance_q16 >= min_haz
             && sc.hazard_resonance_q16 > t0_haz
         {
             let key = (sc.hazard_resonance_q16, sc.galois_meet_q16);

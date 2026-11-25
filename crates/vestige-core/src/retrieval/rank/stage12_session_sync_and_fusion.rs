@@ -4553,6 +4553,12 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         crate::retrieval::seating::gricean_constraint_turn_q16::apply_gricean_constraint_turn_seating(
             ctx,
         );
+        // Post-Submodular Causal Source-Attribution Snap: ensure Mode B / C distinct-session
+        // cover never leaves assistant echo turns (`2k+1`) seated ahead of their substantive
+        // originating user turns (`2k`) on user-attributed temporal/counting/update queries.
+        crate::retrieval::rank::supersession_and_guard::snap_assistant_echo_to_user_origin_late(
+            ctx,
+        );
     }
     // Breakthrough #4A: Post-Gatekeeper Official Top-5 Standing-Rule Co-Seating.
     // Protects Slots 0..2 unconditionally (and Slot 3 for single-rule seating) while ensuring
