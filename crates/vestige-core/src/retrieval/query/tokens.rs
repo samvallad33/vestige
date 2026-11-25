@@ -154,6 +154,19 @@ pub(in crate::retrieval) fn raw_tokens(text: &str) -> Vec<String> {
             emit_token(&mut out, cleaned);
         }
     }
+    // Preserve compact single-digit ratio / meeting tokens (`1:1`, `2:1`, `3:2`) that would
+    // otherwise split into 1-char digits dropped by `is_content`.
+    for ws in lower.split_whitespace() {
+        let trimmed = ws.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != ':');
+        let bytes = trimmed.as_bytes();
+        if bytes.len() == 3
+            && bytes[0].is_ascii_digit()
+            && bytes[1] == b':'
+            && bytes[2].is_ascii_digit()
+        {
+            emit_token(&mut out, trimmed);
+        }
+    }
     out
 }
 

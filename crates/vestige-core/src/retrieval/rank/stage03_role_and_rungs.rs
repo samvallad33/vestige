@@ -768,7 +768,25 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             .get(1)
             .is_some_and(|w| w.len() >= 5 && w.ends_with("ing"));
     // hardcode-scan: closed-class (retrospective assistant-recall & episodic interrogation cues)
-    let has_retro_asst_cue = q_trim_low.contains("did you ")
+    let has_gapped_you_report = q_toks_eff.windows(3).any(|w3| {
+        w3[0] == "you"
+            && matches!(
+                w3[1].as_str(),
+                "previously" | "earlier" | "recently" | "already" | "just" | "also" | "once"
+            )
+            && matches!(
+                w3[2].as_str(),
+                "recommended"
+                    | "suggested"
+                    | "provided"
+                    | "told"
+                    | "gave"
+                    | "mentioned"
+                    | "shared"
+            )
+    });
+    let has_retro_asst_cue = has_gapped_you_report
+        || q_trim_low.contains("did you ")
         || q_trim_low.contains("have you ")
         || q_trim_low.contains("remind me")
         || q_trim_low.contains("last time")
@@ -781,6 +799,11 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         || q_trim_low.contains("you gave me")
         || q_trim_low.contains("you mentioned")
         || q_trim_low.contains("you shared")
+        || q_trim_low.contains("i gave you")
+        || q_trim_low.contains("i recommended")
+        || q_trim_low.contains("i suggested")
+        || q_trim_low.contains("i told you")
+        || q_trim_low.contains("i provided")
         || q_trim_low.contains("we talked about")
         || q_trim_low.contains("we discussed");
     let is_factual_retro_query = has_retro_asst_cue
@@ -876,7 +899,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             || q_trim_low.starts_with("what date"));
     let pref_live_eff = ix.turns.len() >= 24
         && !past_cue_eff
-        && !it.temporal
+        && !it.sniper_when
         && !seq_mode_eff
         && !eff_summary_request(&q.text)
         && !is_factual_retro_query

@@ -43,10 +43,22 @@ pub(in crate::retrieval) fn word_padded(text: &str) -> String {
             && idx + 1 < chars.len()
             && chars[idx - 1].is_alphanumeric()
             && chars[idx + 1].is_alphanumeric();
-        // Glue a currency marker to the amount so "$0" stays the literal token "$0".
+        // Glue a currency marker to the amount so "$0" stays the literal token "$0",
+        // and preserve internal colons between digits so "1:1" stays intact.
         let is_currency = ch == '$' && idx + 1 < chars.len() && chars[idx + 1].is_ascii_digit();
-        if lower.is_alphanumeric() || is_currency {
-            out.push(if is_currency { '$' } else { lower });
+        let is_ratio_colon = ch == ':'
+            && idx > 0
+            && idx + 1 < chars.len()
+            && chars[idx - 1].is_ascii_digit()
+            && chars[idx + 1].is_ascii_digit();
+        if lower.is_alphanumeric() || is_currency || is_ratio_colon {
+            out.push(if is_currency {
+                '$'
+            } else if is_ratio_colon {
+                ':'
+            } else {
+                lower
+            });
             prev_space = false;
         } else if is_apos {
             out.push('\'');

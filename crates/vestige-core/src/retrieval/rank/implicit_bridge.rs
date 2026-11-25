@@ -335,6 +335,15 @@ fn is_implicit_advice_frame(q_text: &str) -> bool {
         "like to learn",
         "like to understand",
         "help me plan",
+        "help me ",
+        "can you help me",
+        "pros and cons",
+        "what roles ",
+        "tend to be",
+        "tends to be",
+        "what approach ",
+        "any ideas for",
+        "any suggestions",
         "what should i",
         "are there any",
         "do you have any",
@@ -1186,10 +1195,9 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     // Preserve synthetic sparse haystack behavior (`1..=6` pairs & `< 1.8%` density);
     // on denser real chats (ConvoMem / LME), retain explicit memory-ack pairs if `1..=8` exist,
     // otherwise fall through cleanly to Regime C without locking out dense rescue.
-    let pairs: Vec<(usize, usize, bool)> = if !raw_pairs.is_empty()
-        && raw_pairs.len() <= 6
-        && raw_pairs.len() * 55 <= ctx.nt
-    {
+    let is_sparse_haystack =
+        !raw_pairs.is_empty() && raw_pairs.len() <= 6 && raw_pairs.len() * 55 <= ctx.nt;
+    let pairs: Vec<(usize, usize, bool)> = if is_sparse_haystack {
         raw_pairs
     } else {
         let ack_only: Vec<(usize, usize, bool)> = raw_pairs
@@ -1210,15 +1218,6 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
         return false;
     }
 
-    if pairs.iter().any(|&(_, _, ack)| ack)
-        || (!ctx.final_turn_indices.is_empty()
-            && pairs
-                .iter()
-                .any(|&(u, a, _)| u == ctx.final_turn_indices[0] || a == ctx.final_turn_indices[0]))
-    {
-        ctx.implicit_disclosure_locked = true;
-    }
-
     let empty_sp = DetHashSet::default();
     let maps = build_fst_concept_map(ctx, &empty_sp);
     let mut pair_turns: Vec<usize> = Vec::with_capacity(pairs.len() * 2);
@@ -1229,8 +1228,7 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     let galois_scores =
         score_signed_galois_candidates_q16(ctx.ix, &ctx.q.text, &pair_turns, &BTreeSet::new());
 
-    let mut scored_pairs: Vec<(usize, usize, f32, bool, f32, f32, f32, f32)> =
-        Vec::with_capacity(pairs.len());
+    let mut scored_pairs: Vec<(usize, usize, f32, bool, bool)> = Vec::with_capacity(pairs.len());
     for &(u_idx, a_idx, mem_ack) in &pairs {
         let (ud, uf, _, _) = score_turn_concepts(&ctx.ix.turns[u_idx], &maps);
         let (ad, af, _, _) = score_turn_concepts(&ctx.ix.turns[a_idx], &maps);
@@ -1242,6 +1240,11 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
         let g_meet = ((ug.galois_meet_q16.saturating_add(ag.galois_meet_q16) as f32) / 65_536.0)
             .min(6.0)
             * 1.4;
+        let has_resonance = (ud + ad + uf + af) > 0.0
+            || haz > 0.0
+            || g_meet > 0.0
+            || ctx.t_own.get(u_idx).copied().unwrap_or(0.0) > 0.0
+            || ctx.t_exact_mask.get(u_idx).copied().unwrap_or(0) != 0;
         let ack_bonus = if mem_ack { 18.0 } else { 1.5 };
         let sc = (ud + ad) * 2.0
             + (uf + af) * 1.15
@@ -1249,7 +1252,7 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
             + g_meet
             + ack_bonus
             + 0.10 * ctx.t_scene[u_idx].max(0.0);
-        scored_pairs.push((u_idx, a_idx, sc, mem_ack, ud, uf, ad, af));
+        scored_pairs.push((u_idx, a_idx, sc, mem_ack, has_resonance));
     }
     scored_pairs.sort_by(|a, b| {
         b.2.partial_cmp(&a.2)
@@ -1257,17 +1260,34 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
             .then_with(|| a.0.cmp(&b.0))
     });
 
+    // On dense real chats (`!is_sparse_haystack`), require genuine query/concept/hazard/galois
+    // resonance on the winning `ack_only` pair so unrelated `"make a note"` distractors never
+    // hijack Slots 0..1 or lock out Regime C / Revealed-Preference / Gricean rescue!
+    if !is_sparse_haystack && !scored_pairs[0].4 {
+        return false;
+    }
+
     if profile_q {
-        let (_, _, _, best_ack, _, _, _, _) = scored_pairs[0];
+        let (_, _, _, best_ack, _) = scored_pairs[0];
         if !best_ack {
             return false;
         }
     }
 
+    if is_sparse_haystack
+        && (pairs.iter().any(|&(_, _, ack)| ack)
+            || (!ctx.final_turn_indices.is_empty()
+                && pairs.iter().any(|&(u, a, _)| {
+                    u == ctx.final_turn_indices[0] || a == ctx.final_turn_indices[0]
+                })))
+    {
+        ctx.implicit_disclosure_locked = true;
+    }
+
     // Seat winning disclosure pair(s) cleanly at the front of `final_turn_indices`
     // while demoting questions/wrappers within Top-10 and syncing `final_session_indices[0]`.
     let mut front: Vec<usize> = Vec::with_capacity(pairs.len() * 2);
-    for &(u_idx, a_idx, _, _, _, _, _, _) in &scored_pairs {
+    for &(u_idx, a_idx, _, _, _) in &scored_pairs {
         front.push(u_idx);
         front.push(a_idx);
     }

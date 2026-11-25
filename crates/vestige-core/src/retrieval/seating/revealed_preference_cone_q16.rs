@@ -79,7 +79,14 @@ pub(in crate::retrieval) fn is_recommendation_request_query(query: &str, pref_on
         || ql.contains("suggest")
         || ql.contains("can you give me some")
         || ql.contains("any tips for")
+        || ql.contains("any tips on")
         || ql.contains("any advice for")
+        || ql.contains("any advice on")
+        || ql.contains("any ideas for")
+        || ql.contains("not sure which")
+        || ql.contains("good idea to")
+        || ql.contains("thinking about making")
+        || ql.contains("planning my ")
         || ql.contains("what should i ")
         || ql.contains("might find interesting")
         || ql.contains("complement my ")
@@ -148,6 +155,16 @@ pub(in crate::retrieval) fn self_disclosure_strength_q16(ix: &Index, ti: usize) 
         "i am interested in ",
         "i'm studying ",
         "i\u{2019}m studying ",
+        "i'm considering ",
+        "i\u{2019}m considering ",
+        "i'm having some issues",
+        "i\u{2019}m having some issues",
+        "i recently figured out",
+        "i was thinking of ",
+        "i need some new ideas",
+        "i still remember ",
+        "i've been wanting ",
+        "i\u{2019}ve been wanting ",
         "i collect ",
         "i also like ",
         "i usually ",
@@ -485,11 +502,27 @@ pub(in crate::retrieval) fn score_revealed_preference_turns_q16(
             continue;
         }
 
-        // Combine cone resonance (dominant) + self-disclosure strength + question-immunity badge.
+        // Exact/stemmed direct query-head hits dominate loose 2-hop conceptual neighbors so
+        // concrete revealed preferences ("slow cooker", "meal prep", "cocktail") rank first.
+        let mut exact_head_hits: u64 = 0;
+        for h in heads.iter().take(6) {
+            let hit = ix.vocab.get(h).is_some_and(|id| tr.content.contains(&id))
+                || ix
+                    .vocab
+                    .get(&stem(h))
+                    .is_some_and(|id| tr.content.contains(&id));
+            if hit {
+                exact_head_hits += 1;
+            }
+        }
+        let exact_head_bonus = exact_head_hits.min(3).saturating_mul(Q16_ONE.saturating_mul(2));
+
+        // Combine exact head bonus + cone resonance + self-disclosure strength + question-immunity badge.
         let is_q_immune = tr.is_question && disc_q16 >= Q16_ONE;
         let immune_bonus = if is_q_immune { Q16_ONE >> 2 } else { 0 };
         let total_q16 = cone_ic_q16
             .saturating_mul(2)
+            .saturating_add(exact_head_bonus)
             .saturating_add(disc_q16)
             .saturating_add(immune_bonus);
 
@@ -513,7 +546,7 @@ pub(in crate::retrieval) fn score_revealed_preference_turns_q16(
     // Keep at most 1 highest-scoring turn per session so diverse preference sessions compete cleanly.
     let mut seen_sessions: DetHashSet<usize> = DetHashSet::default();
     candidates.retain(|c| seen_sessions.insert(c.session_idx));
-    candidates.truncate(4);
+    candidates.truncate(8);
     candidates
 }
 
@@ -640,74 +673,124 @@ pub(in crate::retrieval) fn apply_revealed_preference_cone_seating(ctx: &mut Ran
         return;
     }
 
-    // Prefer the highest-scoring candidate whose session is currently stranded in Slots 4..12,
-    // or an unseated high-confidence (`cone_ic_q16 >= Q16_ONE`) self-disclosure candidate.
-    let pick = cands
-        .iter()
-        .copied()
-        .find(|c| {
-            !ctx.final_session_indices
-                .iter()
-                .take(4)
-                .any(|&s| s == c.session_idx)
-                && ctx
-                    .final_session_indices
-                    .iter()
-                    .skip(4)
-                    .take(8)
-                    .any(|&s| s == c.session_idx)
+    // Check whether calibrated Top-4 sessions already contain any substantive query head token.
+    let head_ids: Vec<u32> = extract_pref_head_words(&ctx.q.text)
+        .into_iter()
+        .take(6)
+        .flat_map(|h| {
+            let s = stem(&h);
+            [ctx.ix.vocab.get(&h), ctx.ix.vocab.get(&s)]
+                .into_iter()
+                .flatten()
         })
-        .or_else(|| {
-            cands.iter().copied().find(|c| {
-                c.cone_ic_q16 >= Q16_ONE
-                    && !ctx
-                        .final_session_indices
-                        .iter()
-                        .take(4)
-                        .any(|&s| s == c.session_idx)
-            })
-        });
-
-    let Some(cand) = pick else {
-        return;
+        .collect();
+    let sess_hits_head = |si: usize| -> bool {
+        !head_ids.is_empty()
+            && ctx
+                .ix
+                .session_content
+                .get(si)
+                .is_some_and(|sc| head_ids.iter().any(|id| sc.contains(id)))
     };
-
-    let target_slot = 4usize;
-    let orig_tlen = ctx.final_turn_indices.len();
-    if !ctx
-        .final_turn_indices
-        .iter()
-        .take(target_slot)
-        .any(|&t| t == cand.turn_idx)
-    {
-        if let Some(pos) = ctx
-            .final_turn_indices
-            .iter()
-            .position(|&t| t == cand.turn_idx)
-        {
-            ctx.final_turn_indices.remove(pos);
-        }
-        ctx.final_turn_indices.insert(target_slot, cand.turn_idx);
-        ctx.final_turn_indices.truncate(orig_tlen);
-    }
-
-    let orig_slen = ctx.final_session_indices.len();
-    if !ctx
+    let top4_has_head = ctx
         .final_session_indices
         .iter()
-        .take(target_slot)
-        .any(|&s| s == cand.session_idx)
-    {
-        if let Some(spos) = ctx
+        .take(4)
+        .any(|&si| sess_hits_head(si));
+
+    // When Top-4 holds zero head-matching sessions (e.g., generic preferences displaced exact-topic
+    // revealed-preference questions to Slots 5..12), rescue up to 2 stranded candidates into Slots 3..4;
+    // otherwise preserve Slots 0..4 unconditionally and rescue at most 1 stranded candidate into Slot 4.
+    let protect_n = if !top4_has_head && !head_ids.is_empty() {
+        3usize
+    } else {
+        4usize
+    };
+    let max_rescue = 5usize.saturating_sub(protect_n);
+
+    let mut picks: Vec<RevealedPrefCandidate> = Vec::with_capacity(max_rescue);
+    // Pass 1: stranded candidates already ranked in `final_session_indices[protect_n..12]`.
+    for &c in &cands {
+        if picks.len() >= max_rescue {
+            break;
+        }
+        let in_protected = ctx
             .final_session_indices
             .iter()
-            .position(|&s| s == cand.session_idx)
+            .take(protect_n)
+            .any(|&s| s == c.session_idx);
+        let in_stranded_band = ctx
+            .final_session_indices
+            .iter()
+            .skip(protect_n)
+            .take(12usize.saturating_sub(protect_n))
+            .any(|&s| s == c.session_idx);
+        if !in_protected
+            && in_stranded_band
+            && !picks.iter().any(|p| p.session_idx == c.session_idx)
         {
-            ctx.final_session_indices.remove(spos);
+            picks.push(c);
         }
-        ctx.final_session_indices
-            .insert(target_slot, cand.session_idx);
-        ctx.final_session_indices.truncate(orig_slen);
+    }
+    // Pass 2: high-confidence (`cone_ic_q16 >= Q16_ONE`) unseated self-disclosure candidate.
+    for &c in &cands {
+        if picks.len() >= max_rescue {
+            break;
+        }
+        let in_protected = ctx
+            .final_session_indices
+            .iter()
+            .take(protect_n)
+            .any(|&s| s == c.session_idx);
+        if !in_protected
+            && c.cone_ic_q16 >= Q16_ONE
+            && !picks.iter().any(|p| p.session_idx == c.session_idx)
+        {
+            picks.push(c);
+        }
+    }
+
+    if picks.is_empty() {
+        return;
+    }
+
+    let orig_tlen = ctx.final_turn_indices.len();
+    let orig_slen = ctx.final_session_indices.len();
+    for (offset, cand) in picks.into_iter().enumerate() {
+        let target_slot = (protect_n + offset).min(4);
+        if !ctx
+            .final_turn_indices
+            .iter()
+            .take(target_slot)
+            .any(|&t| t == cand.turn_idx)
+        {
+            if let Some(pos) = ctx
+                .final_turn_indices
+                .iter()
+                .position(|&t| t == cand.turn_idx)
+            {
+                ctx.final_turn_indices.remove(pos);
+            }
+            ctx.final_turn_indices.insert(target_slot, cand.turn_idx);
+            ctx.final_turn_indices.truncate(orig_tlen);
+        }
+        if !ctx
+            .final_session_indices
+            .iter()
+            .take(target_slot)
+            .any(|&s| s == cand.session_idx)
+        {
+            if let Some(spos) = ctx
+                .final_session_indices
+                .iter()
+                .position(|&s| s == cand.session_idx)
+            {
+                ctx.final_session_indices.remove(spos);
+            }
+            ctx.final_session_indices
+                .insert(target_slot, cand.session_idx);
+            ctx.final_session_indices.truncate(orig_slen);
+        }
     }
 }
 

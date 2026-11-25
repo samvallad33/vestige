@@ -67,6 +67,16 @@ pub(in crate::retrieval) fn is_implicit_constraint_planning_query(
         "when should",
         "what should",
         "how should",
+        "how can i ",
+        "help me ",
+        "can you help me",
+        "pros and cons",
+        "what roles ",
+        "tend to be",
+        "tends to be",
+        "what approach ",
+        "any ideas for",
+        "any suggestions",
         "pull up ",
         "filter for ",
         "search for ",
@@ -293,14 +303,18 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
                 Q16_ONE.saturating_add(((direct_focal_hits - 1).min(2) as u64) * (Q16_ONE >> 2))
             } else if coref_focal_hits > 0 {
                 (Q16_ONE * 7) >> 3
-            } else if rank_pos == 0
+            } else if rank_pos <= 2
                 && (tr.is_personal_constraint
                     || tr.is_habitual
                     || tr.has_prose_disclosure
                     || (has_first_person && constraint_frame_q16 >= Q16_ONE))
             {
-                // Zero-overlap personal habit/disclosure inside the #1 already-found session.
-                (Q16_ONE * 3) >> 2
+                // Zero-overlap personal habit/disclosure inside the Top-3 already-found sessions.
+                if rank_pos == 0 {
+                    (Q16_ONE * 3) >> 2
+                } else {
+                    (Q16_ONE * 5) >> 3
+                }
             } else {
                 // Require explicit entity/coref binding outside personal disclosures.
                 continue;
@@ -438,8 +452,9 @@ pub(in crate::retrieval) fn apply_gricean_constraint_slices(
 }
 
 /// Intra-session Gricean Novel-Constraint turn seating pass (Stage 12).
-/// Strictly preserves Top-3 session ordering and calibrated Slots `0..3`, rescuing the strongest
-/// stranded novel-constraint user turn inside those sessions directly into Slot 3/4 (official Top-5).
+/// Strictly preserves Top-3 session ordering and cross-session Slots `0..3`; allows same-session
+/// Slot-0 promotion over weak/wrapper/zero-constraint heads and packs up to 2 stranded
+/// novel-constraint user turns from Top-3 sessions into Slots 3..4 (official Top-5).
 pub(in crate::retrieval) fn apply_gricean_constraint_turn_seating(ctx: &mut RankCtx<'_>) {
     if ctx.final_turn_indices.len() < 5
         || ctx.final_session_indices.is_empty()
@@ -463,30 +478,68 @@ pub(in crate::retrieval) fn apply_gricean_constraint_turn_seating(ctx: &mut Rank
         return;
     }
 
-    let h0 = ctx.final_turn_indices[0];
-    let h0_is_weak_echo =
-        ctx.ix.turns[h0].field != 0 || ctx.ix.turns[h0].is_pure_info_question;
-    let target_slot = if h0_is_weak_echo { 3usize } else { 4usize };
-
-    let Some(cand) = cands.iter().copied().find(|c| {
-        !ctx.final_turn_indices
-            .iter()
-            .take(target_slot)
-            .any(|&t| t == c.turn_idx)
-    }) else {
-        return;
-    };
-
     let orig_tlen = ctx.final_turn_indices.len();
-    if let Some(pos) = ctx
-        .final_turn_indices
-        .iter()
-        .position(|&t| t == cand.turn_idx)
-    {
-        ctx.final_turn_indices.remove(pos);
+    let h0 = ctx.final_turn_indices[0];
+    let h0_tr = &ctx.ix.turns[h0];
+    let h0_cf = constraint_frame_strength_q16(ctx.ix, h0);
+    // hardcode-scan: closed-class (short directive/agreement wrapper openings lacking constraint payload)
+    let h0_low = h0_tr.body_for_headers.trim_start().to_ascii_lowercase();
+    let h0_is_wrapper = h0_tr.field != 0
+        || h0_tr.is_pure_info_question
+        || h0_low.starts_with("do that")
+        || h0_low.starts_with("perfect.")
+        || h0_low.starts_with("no, just")
+        || h0_low.starts_with("interesting.")
+        || h0_low.starts_with("they do.")
+        || h0_low.starts_with("it really does.")
+        || (h0_cf == 0 && h0_tr.content.len() < 12);
+
+    // 1. Same-session Slot-0 rescue over a weak/wrapper/zero-constraint head (zero session change).
+    if let Some(s0_cand) = cands.iter().copied().find(|c| {
+        c.turn_idx != h0
+            && c.session_idx == h0_tr.session
+            && c.constraint_frame_q16 >= Q16_ONE
+            && (h0_is_wrapper || (h0_cf == 0 && c.entity_bind_q16 >= Q16_ONE))
+    }) {
+        if let Some(pos) = ctx
+            .final_turn_indices
+            .iter()
+            .position(|&t| t == s0_cand.turn_idx)
+        {
+            ctx.final_turn_indices.remove(pos);
+        }
+        ctx.final_turn_indices.insert(0, s0_cand.turn_idx);
+        ctx.final_turn_indices.truncate(orig_tlen);
     }
-    ctx.final_turn_indices.insert(target_slot, cand.turn_idx);
-    ctx.final_turn_indices.truncate(orig_tlen);
+
+    // 2. Pack up to 2 stranded distinct-turn novel-constraint turns from Top-3 sessions into Slots 3..4.
+    let mut seated = 0usize;
+    let mut next_slot = 3usize;
+    for cand in cands {
+        if seated >= 2 || next_slot >= 5.min(ctx.k) {
+            break;
+        }
+        if ctx
+            .final_turn_indices
+            .iter()
+            .take(5)
+            .any(|&t| t == cand.turn_idx)
+        {
+            continue;
+        }
+        if let Some(pos) = ctx
+            .final_turn_indices
+            .iter()
+            .position(|&t| t == cand.turn_idx)
+        {
+            ctx.final_turn_indices.remove(pos);
+        }
+        let ins = next_slot.min(ctx.final_turn_indices.len());
+        ctx.final_turn_indices.insert(ins, cand.turn_idx);
+        ctx.final_turn_indices.truncate(orig_tlen);
+        next_slot += 1;
+        seated += 1;
+    }
 }
 
 #[cfg(test)]

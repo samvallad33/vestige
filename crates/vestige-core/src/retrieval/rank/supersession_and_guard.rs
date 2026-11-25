@@ -317,15 +317,24 @@ fn has_update_or_supersession_marker(text: &str) -> bool {
         "switch over",
         "changed to",
         "change to",
+        "decided to change",
+        "change my ",
         "changed my mind",
         "changing the rules",
         "changed the rules",
+        "finally changing",
         "assigned a new",
         "update:",
         "update on",
         "team update",
         "process update",
         "updated to",
+        "updated the ",
+        "just updated",
+        "saw an update",
+        "officially complete",
+        "officially live",
+        "had to cancel",
         "no longer",
         "not anymore",
         "replaced by",
@@ -608,7 +617,10 @@ fn apply_forward_supersession_chain(
 
     let t0 = ctx.final_turn_indices[0];
     let tr0 = &ctx.ix.turns[t0];
-    if tr0.is_standing_policy {
+    // Past-tense habitual descriptions ("my alarm was always set for...") are factual states,
+    // not active standing instructions, so a newer revision turn may still supersede them.
+    let tr0_past_habit = tr0.body_for_headers.to_ascii_lowercase().contains("was always ");
+    if tr0.is_standing_policy && !tr0_past_habit {
         return;
     }
     let t0_sess = tr0.session;
@@ -805,11 +817,18 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
         let sight1 = ctx.s_score[s1] + ctx.bridge_boost[s1];
         let t0 = ctx.final_turn_indices[0];
         let tr0 = &ctx.ix.turns[t0];
+        let t0_low = tr0.body_for_headers.trim_start().to_ascii_lowercase();
+        // hardcode-scan: closed-class (request/brainstorm/opener wrappers lacking declarative state facts)
+        let t0_is_opener_req = tr0.is_pure_info_question
+            || (tr0.is_question && t0_low.contains("can you "))
+            || t0_low.starts_with("let's focus on ")
+            || t0_low.starts_with("let\u{2019}s focus on ")
+            || t0_low.starts_with("let's start with ");
         let t0_sup = !is_historical_or_order_query(&ctx.q.text)
             && (turn_is_superseded(ctx.ix, t0)
                 || ctx.ix.torrens_superseded.get(t0).copied().unwrap_or(false));
         let desynced = (ctx.eff_it.temporal && tr0.session != s0)
-            || tr0.is_pure_info_question
+            || t0_is_opener_req
             || t0_sup;
         if desynced && sight0 >= 1.20 * sight1.max(1e-6) && (ctx.s_mask[s0] & topical_mask) != 0 {
             let t0_cov = (ctx.t_exact_mask[t0] & topical_mask).count_ones();
@@ -819,6 +838,7 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
                 .copied()
                 .filter(|&ti| {
                     let tr = &ctx.ix.turns[ti];
+                    let exact_cov = (ctx.t_exact_mask[ti] & topical_mask).count_ones();
                     !tr.is_backchannel
                         && !tr.is_standing_policy
                         && !tr.is_pure_info_question
@@ -826,6 +846,8 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
                             || (!turn_is_superseded(ctx.ix, ti)
                                 && !ctx.ix.torrens_superseded.get(ti).copied().unwrap_or(false)))
                         && ctx.t_scene[ti] > 0.0
+                        && ctx.t_own[ti] > 0.0
+                        && exact_cov >= 1
                 })
                 .max_by(|&a, &b| {
                     let ra = u8::from(ctx.ix.turns[a].field == role_want && !ctx.ix.turns[a].is_question);
@@ -846,9 +868,12 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
                 });
             if let Some(win_s0_ti) = best_s0 {
                 let win_cov = (ctx.t_exact_mask[win_s0_ti] & topical_mask).count_ones();
+                let t0_zero_own = ctx.t_own[t0] <= 0.0 || t0_cov == 0;
                 if win_s0_ti != t0
-                    && (t0_sup
-                        || tr0.is_pure_info_question
+                    && win_cov >= 1
+                    && (t0_zero_own
+                        || t0_is_opener_req
+                        || (t0_sup && win_cov >= t0_cov)
                         || (win_cov >= t0_cov && ctx.t_scene[win_s0_ti] >= 0.78 * ctx.t_scene[t0]))
                 {
                     if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == win_s0_ti) {

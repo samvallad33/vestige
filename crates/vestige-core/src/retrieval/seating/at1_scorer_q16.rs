@@ -3826,10 +3826,24 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
     //     and a User turn sits at Slot 0, promote a matching Assistant reply from Top-7.
     //     Conversely when the query asks `"did i ..."` and an Assistant turn sits at Slot 0,
     //     promote a matching substantive User turn from Top-6.
+    // hardcode-scan: closed-class (assistant recommendation/suggestion speech-act openings)
+    let asst_has_rec_act = |body: &str| -> bool {
+        let bl = body.to_ascii_lowercase();
+        bl.contains("i recommend")
+            || bl.contains("i'd recommend")
+            || bl.contains("i\u{2019}d recommend")
+            || bl.contains("i suggest")
+            || bl.contains("i'd suggest")
+            || bl.contains("i\u{2019}d suggest")
+            || bl.contains("try saying")
+            || bl.contains("you could say")
+            || bl.contains("you might say")
+            || bl.contains("my recommendation")
+    };
     if ctx.eff_it.assistant_attribution && ix.turns[t0].field == 0 {
         let own0_a = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
         let scan = final_turn_indices.len().min(10);
-        let mut best_asst: Option<(u32, u64, usize)> = None;
+        let mut best_asst: Option<(bool, u32, u64, usize)> = None;
         for (slot, &tc) in final_turn_indices.iter().enumerate().take(scan).skip(1) {
             let trc = &ix.turns[tc];
             if trc.field != 1 || trc.is_question || trc.is_backchannel {
@@ -3841,14 +3855,18 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
             let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
             let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
             let in_top2_sess = final_session_indices.iter().take(2).any(|&s| s == trc.session);
-            if (exc >= 1 || in_top2_sess) && ownc.saturating_mul(100) >= own0_a.saturating_mul(45) {
-                let key = (exc, ownc, slot);
-                if best_asst.is_none_or(|b| (key.0, key.1) > (b.0, b.1)) {
+            let adj_reply = trc.session == s0 && (tc + 1 == t0 || t0 + 1 == tc);
+            let rec_act = asst_has_rec_act(&trc.body_for_headers);
+            let score_ok = ownc.saturating_mul(100) >= own0_a.saturating_mul(45)
+                || (adj_reply && (exc >= 1 || rec_act));
+            if (exc >= 1 || in_top2_sess) && score_ok {
+                let key = (rec_act || adj_reply, exc, ownc, slot);
+                if best_asst.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
                     best_asst = Some(key);
                 }
             }
         }
-        if let Some((_, _, win_slot)) = best_asst {
+        if let Some((_, _, _, win_slot)) = best_asst {
             if win_slot < 5 {
                 final_turn_indices[..=win_slot].rotate_right(1);
             } else {
@@ -3857,6 +3875,39 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
                 final_turn_indices.truncate(k.max(5));
             }
             return;
+        }
+        // Check immediate adjacent same-session `field == 1` replies (`t0 - 1` or `t0 + 1`)
+        // before broad lexical scan (handles user gratitude/follow-up turns like "Oh, that's perfect!").
+        let members_s0 = &ix.session_turns[s0];
+        if let Some(pos_t0) = members_s0.iter().position(|&m| m == t0) {
+            let mut adj_pick: Option<(bool, u32, u64, usize)> = None;
+            for adj_pos in [pos_t0.checked_sub(1), pos_t0.checked_add(1)]
+                .into_iter()
+                .flatten()
+            {
+                let Some(&tc) = members_s0.get(adj_pos) else {
+                    continue;
+                };
+                let trc = &ix.turns[tc];
+                if trc.field != 1 || trc.is_question || trc.is_backchannel {
+                    continue;
+                }
+                let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+                let scnc = ieee754_bits_to_q16(ctx.t_scene.get(tc).copied().unwrap_or(0.0).to_bits());
+                let rec_act = asst_has_rec_act(&trc.body_for_headers);
+                if exc >= 1 || rec_act {
+                    let key = (rec_act, exc, scnc, tc);
+                    if adj_pick.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                        adj_pick = Some(key);
+                    }
+                }
+            }
+            if let Some((_, _, _, win_ti)) = adj_pick {
+                final_turn_indices.retain(|&x| x != win_ti);
+                final_turn_indices.insert(0, win_ti);
+                final_turn_indices.truncate(k.max(5));
+                return;
+            }
         }
         // Fallback: scan substantive `field == 1` replies inside Top-2 sessions with WordNet/ConceptNet
         // lexical expansion so paraphrased assistant recommendations ("flow of requests" <-> "rate limits") promote.
@@ -3881,7 +3932,7 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
             }
         }
         let scn0_a = ieee754_bits_to_q16(ctx.t_scene.get(t0).copied().unwrap_or(0.0).to_bits());
-        let mut sess_asst: Option<(u32, usize, u64, usize)> = None;
+        let mut sess_asst: Option<(bool, u32, usize, u64, usize)> = None;
         for &si in final_session_indices.iter().take(2) {
             if sight_of(si).saturating_mul(100) < sight_of(s0).saturating_mul(65) {
                 continue;
@@ -3901,28 +3952,62 @@ fn apply_anonymous_dialogue_at1_condorcet_q16(
                     .iter()
                     .filter(|id| trc.content.contains(id) || trc.feats.iter().any(|f| f.id == **id))
                     .count();
-                let bridge_ok = exc >= 1 || lex_h >= 1;
+                let rec_act = asst_has_rec_act(&trc.body_for_headers);
+                let bridge_ok = exc >= 1 || lex_h >= 1 || rec_act;
                 if (bridge_ok && scnc.saturating_mul(100) >= scn0_a.saturating_mul(40))
                     || ownc.saturating_mul(100) >= own0_a.saturating_mul(45)
                 {
-                    let key = (exc, lex_h, scnc.max(ownc), tc);
-                    if sess_asst.is_none_or(|b| (key.0, key.1, key.2) > (b.0, b.1, b.2)) {
+                    let key = (rec_act, exc, lex_h, scnc.max(ownc), tc);
+                    if sess_asst
+                        .is_none_or(|b| (key.0, key.1, key.2, key.3) > (b.0, b.1, b.2, b.3))
+                    {
                         sess_asst = Some(key);
                     }
                 }
             }
         }
-        if let Some((_, _, _, win_ti)) = sess_asst {
+        if let Some((_, _, _, _, win_ti)) = sess_asst {
             final_turn_indices.retain(|&x| x != win_ti);
             final_turn_indices.insert(0, win_ti);
             final_turn_indices.truncate(k.max(5));
+            return;
+        }
+    } else if ctx.eff_it.assistant_attribution
+        && ix.turns[t0].field == 1
+        && (q_low.contains("phrase")
+            || q_low.contains("recommend")
+            || q_low.contains("suggest"))
+        && !asst_has_rec_act(&ix.turns[t0].body_for_headers)
+        && !ix.turns[t0].body_for_headers.contains('"')
+    {
+        let ex0_a = (ctx.t_exact_mask.get(t0).copied().unwrap_or(0) & q_mask_full).count_ones();
+        let own0_a = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
+        let scan = final_turn_indices.len().min(5);
+        if let Some(win_slot) = (1..scan).find(|&slot| {
+            let tc = final_turn_indices[slot];
+            let trc = &ix.turns[tc];
+            let exc = (ctx.t_exact_mask.get(tc).copied().unwrap_or(0) & q_mask_full).count_ones();
+            let ownc = ieee754_bits_to_q16(ctx.t_own.get(tc).copied().unwrap_or(0.0).to_bits());
+            trc.field == 1
+                && trc.session == s0
+                && !trc.is_question
+                && !trc.is_backchannel
+                && (asst_has_rec_act(&trc.body_for_headers) || trc.body_for_headers.contains('"'))
+                && exc >= ex0_a
+                && ownc.saturating_mul(100) >= own0_a.saturating_mul(65)
+        }) {
+            final_turn_indices[..=win_slot].rotate_right(1);
             return;
         }
     } else if !ctx.eff_it.assistant_attribution
         && (q_low.contains("did i ")
             || q_low.contains("did we ")
             || q_low.contains("have i ")
-            || q_low.contains("was i "))
+            || q_low.contains("was i ")
+            || q_low.contains("i mentioned")
+            || q_low.contains("i told you")
+            || q_low.contains("i said ")
+            || q_low.contains("i shared"))
         && ix.turns[t0].field == 1
     {
         let own0_u = ieee754_bits_to_q16(ctx.t_own.get(t0).copied().unwrap_or(0.0).to_bits());
