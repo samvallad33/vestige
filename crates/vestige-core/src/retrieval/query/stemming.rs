@@ -124,7 +124,7 @@ pub(in crate::retrieval) fn map_our(w: &str) -> Option<String> {
             let tail = &w[i + root.len()..];
             let prefix_ok = prefix.is_empty() || prefix.bytes().all(|b| b.is_ascii_alphabetic());
             if prefix_ok && our_tail(tail) && best.as_ref().is_none_or(|(n, _)| tail.len() > *n) {
-                let head = &root[..root.len() - 3];
+                let head = root.strip_suffix("our").unwrap_or(root);
                 best = Some((tail.len(), format!("{prefix}{head}or{tail}")));
             }
             from = i + 1;

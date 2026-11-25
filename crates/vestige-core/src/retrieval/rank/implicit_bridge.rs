@@ -2044,6 +2044,7 @@ pub(in crate::retrieval) fn apply_unified_implicit_bridge(ctx: &mut RankCtx<'_>)
         && !eff_summary_request(&ctx.q.text)
         && !ctx.torrens_locked_head
         && is_implicit_advice_frame(&ctx.q.text);
+    let pre_galois_h0 = ctx.final_turn_indices.first().copied();
     apply_signed_galois_hazard_seat_q16(
         ctx.ix,
         &ctx.q.text,
@@ -2051,6 +2052,9 @@ pub(in crate::retrieval) fn apply_unified_implicit_bridge(ctx: &mut RankCtx<'_>)
         &mut ctx.final_turn_indices,
         &mut ctx.final_session_indices,
     );
+    if galois_advice_eligible && ctx.final_turn_indices.first().copied() != pre_galois_h0 {
+        ctx.implicit_disclosure_locked = true;
+    }
     apply_dense_advice_user_rescue(ctx);
 }
 

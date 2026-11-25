@@ -155,8 +155,10 @@ fn resolve_source_key(g: &'static TopoGraph, entity: &str) -> Option<&'static st
             }
         }
         joined.clear();
-        if w1.len() >= 5 {
-            let apoc = format!("{w0}{}", &w1[..w1.len() - 1]);
+        if w1.chars().count() >= 5
+            && let Some((last_idx, _)) = w1.char_indices().next_back()
+        {
+            let apoc = format!("{w0}{}", &w1[..last_idx]);
             if let Some((&seed, _)) = g.fwd.get_key_value(apoc.as_str()) {
                 return Some(seed);
             }

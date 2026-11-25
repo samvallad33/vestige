@@ -1040,7 +1040,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                         push_nbr(dg_lem, dg_w);
                     }
                     // Orthographic 1-edit / prefix stem fallback for OOV/typo query words (e.g. `educaton` -> `education`):
-                    if w.len() >= 5 && ix.vocab.get(w).is_none() {
+                    if w.is_ascii() && w.len() >= 5 && ix.vocab.get(w).is_none() {
                         let wb = w.as_bytes();
                         let pref = &w[..4];
                         for (vword, &wid) in ix.vocab.map.iter() {

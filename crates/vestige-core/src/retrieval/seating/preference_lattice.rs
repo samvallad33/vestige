@@ -154,7 +154,7 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
         || final_session_indices.is_empty()
         || eff_it.assistant_attribution
         || eff_it.is_event_sequence
-        || eff_it.temporal
+        || eff_it.sniper_when
         || eff_it.sniper_how_many
         || eff_summary_request(query)
         || c2_named_session(ix, final_turn_indices[0])

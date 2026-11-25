@@ -194,9 +194,34 @@ pub(in crate::retrieval) fn is_discourse_closure_or_meta_echo(
             return true;
         }
         // Subordinate meta-echo restatement (`"Given that I have to provide security best practices..."`)
-        // fires unconditionally regardless of turn length unless the query explicitly quotes that clause.
+        // fires ONLY on interrogative meta-echoes or turns that genuinely echo the query (`>= 50%`
+        // open-class overlap or very short `<= 8` content tokens), never killing substantive
+        // declarative 1st-person disclosures (`"Since ..., I need to ..."`).
         if has_subord_deontic && !q_low.contains("given that") && !q_low.contains("since i have") {
-            return true;
+            if tr.is_question || tr.content.len() <= 8 {
+                return true;
+            }
+            let q_stems_sub: std::collections::BTreeSet<String> = raw_tokens(&q_low)
+                .into_iter()
+                .filter(|w| crate::retrieval::is_content(w))
+                .map(|w| crate::retrieval::stem(&w))
+                .collect();
+            let mut open_cnt = 0usize;
+            let mut echo_cnt = 0usize;
+            for &tid in &tr.content {
+                if let Some(name) = ix.vocab.names.get(tid as usize)
+                    && !name.starts_with('\u{1}')
+                    && crate::retrieval::is_content(name)
+                {
+                    open_cnt += 1;
+                    if q_stems_sub.contains(&crate::retrieval::stem(name)) {
+                        echo_cnt += 1;
+                    }
+                }
+            }
+            if echo_cnt >= 2 && echo_cnt.saturating_mul(100) >= open_cnt.max(1).saturating_mul(50) {
+                return true;
+            }
         }
     }
 
