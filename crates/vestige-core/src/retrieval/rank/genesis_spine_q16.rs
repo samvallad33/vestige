@@ -116,12 +116,7 @@ pub(in crate::retrieval) fn detect_temporal_query_polarity(
         || ql.contains("latest ")
         || ql.contains("most recent")
         || ql.contains("updated ")
-        || ql.contains("new ")
-        || ql.starts_with("what is my ")
-        || ql.starts_with("what is the ")
-        || ql.starts_with("how much is ")
-        || ql.starts_with("how many ")
-        || ql.starts_with("where do i ")
+        || ql.contains("as of now")
     {
         return TemporalQueryPolarity::LatestCurrentState;
     }
@@ -347,6 +342,8 @@ pub(in crate::retrieval) fn select_ku_mutation_winner_q16(
         (1u64 << n_groups) - 1
     };
 
+    let t0_ex_cnt = (kctx.t_exact_mask.get(t0).copied().unwrap_or(0) & full_mask).count_ones();
+
     let mut best: Option<(usize, i64, i64, usize)> = None;
     for &ti in cand_turns.iter().skip(1).take(9) {
         let tr = &ix.turns[ti];
@@ -368,8 +365,11 @@ pub(in crate::retrieval) fn select_ku_mutation_winner_q16(
         if ex_m == 0 && !explicitly_supersedes_t0 {
             continue;
         }
+        if ex_m.count_ones() < t0_ex_cnt && !explicitly_supersedes_t0 {
+            continue;
+        }
         let sc = kctx.t_scene.get(ti).copied().unwrap_or(0.0);
-        if t0_scene > 0.0 && sc < 0.35 * t0_scene && !explicitly_supersedes_t0 {
+        if t0_scene > 0.0 && sc < 0.65 * t0_scene && !explicitly_supersedes_t0 {
             continue;
         }
 
@@ -430,6 +430,10 @@ pub(in crate::retrieval) fn apply_genesis_spine_and_ku_polarity(ctx: &mut RankCt
         || ctx.implicit_disclosure_locked
         || ctx.has_named_speakers_eff
         || ctx.is_monologue_corpus
+        || ctx.eff_it.is_event_sequence
+        || ctx.eff_it.preference
+        || ctx.eff_it.task_under_rules
+        || eff_summary_request(&ctx.q.text)
         || ctx.final_turn_indices.len() < 2
     {
         return;
@@ -438,34 +442,21 @@ pub(in crate::retrieval) fn apply_genesis_spine_and_ku_polarity(ctx: &mut RankCt
     let q_pol = detect_temporal_query_polarity(&ctx.q.text, &ctx.eff_it);
     match q_pol {
         TemporalQueryPolarity::ChronologicalSpine => {
-            let prefer_genesis_slot0 =
-                ctx.eff_it.is_event_sequence || !eff_summary_request(&ctx.q.text);
+            // Protect dedicated `event_ordering_stack` & incumbent Slot 0; only stratify
+            // non-event-sequence chronological timeline queries without overwriting Slot 0.
+            let orig_slen = ctx.final_session_indices.len();
             let spined = compute_chronological_genesis_spine_q16(
                 ctx.ix,
                 &ctx.final_session_indices,
                 &ctx.s_score,
                 &ctx.s_exact_mask,
                 ctx.k.max(5),
-                prefer_genesis_slot0,
+                false,
             );
             if !spined.is_empty() {
                 ctx.final_session_indices = spined;
-                if prefer_genesis_slot0
-                    && let Some(&g_si) = ctx.final_session_indices.first()
-                    && ctx.ix.turns[ctx.final_turn_indices[0]].session != g_si
-                    && let Some(&open_ti) = ctx.ix.session_turns[g_si].iter().find(|&&ti| {
-                        let t = &ctx.ix.turns[ti];
-                        t.field == 0
-                            && !t.is_backchannel
-                            && !t.is_standing_policy
-                            && !is_discourse_closure_or_meta_echo(ctx.ix, ti, &ctx.q.text)
-                    })
-                {
-                    if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == open_ti) {
-                        ctx.final_turn_indices.remove(pos);
-                    }
-                    ctx.final_turn_indices.insert(0, open_ti);
-                    ctx.final_turn_indices.truncate(ctx.k.max(5));
+                if orig_slen > 0 {
+                    ctx.final_session_indices.truncate(orig_slen);
                 }
             }
         }
@@ -494,16 +485,42 @@ pub(in crate::retrieval) fn apply_genesis_spine_and_ku_polarity(ctx: &mut RankCt
                 star_bit,
             };
             if let Some(win_ti) = select_ku_mutation_winner_q16(&kctx, &ctx.final_turn_indices) {
+                let t0 = ctx.final_turn_indices[0];
+                let t0_prof = analyze_turn_mutation_polarity_q16(ctx.ix, t0);
+                let proven_supersedes_t0 = ctx.ix.turns[win_ti].supersedes_turns.contains(&t0)
+                    || (q_pol == TemporalQueryPolarity::LatestCurrentState
+                        && t0_prof.stale_q16 > 0)
+                    || (q_pol == TemporalQueryPolarity::GenesisFirst
+                        && t0_prof.has_explicit_revision);
+                let target_slot = if proven_supersedes_t0 { 0usize } else { 1usize };
+
+                let orig_tlen = ctx.final_turn_indices.len();
                 if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == win_ti) {
-                    ctx.final_turn_indices.remove(pos);
-                }
-                ctx.final_turn_indices.insert(0, win_ti);
-                let win_si = ctx.ix.turns[win_ti].session;
-                if !ctx.final_session_indices.is_empty() && ctx.final_session_indices[0] != win_si {
-                    if let Some(spos) = ctx.final_session_indices.iter().position(|&s| s == win_si) {
-                        ctx.final_session_indices.remove(spos);
+                    if pos > target_slot {
+                        ctx.final_turn_indices.remove(pos);
+                        let ins_t = target_slot.min(ctx.final_turn_indices.len());
+                        ctx.final_turn_indices.insert(ins_t, win_ti);
                     }
-                    ctx.final_session_indices.insert(0, win_si);
+                } else {
+                    let ins_t = target_slot.min(ctx.final_turn_indices.len());
+                    ctx.final_turn_indices.insert(ins_t, win_ti);
+                    ctx.final_turn_indices.truncate(orig_tlen);
+                }
+
+                let win_si = ctx.ix.turns[win_ti].session;
+                let orig_slen = ctx.final_session_indices.len();
+                if orig_slen > target_slot {
+                    if let Some(spos) = ctx.final_session_indices.iter().position(|&s| s == win_si) {
+                        if spos > target_slot {
+                            ctx.final_session_indices.remove(spos);
+                            let ins_s = target_slot.min(ctx.final_session_indices.len());
+                            ctx.final_session_indices.insert(ins_s, win_si);
+                        }
+                    } else {
+                        let ins_s = target_slot.min(ctx.final_session_indices.len());
+                        ctx.final_session_indices.insert(ins_s, win_si);
+                        ctx.final_session_indices.truncate(orig_slen);
+                    }
                 }
             }
         }

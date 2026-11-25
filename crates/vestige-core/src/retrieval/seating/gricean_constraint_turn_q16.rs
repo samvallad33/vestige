@@ -374,6 +374,7 @@ pub(in crate::retrieval) fn apply_gricean_constraint_slices(
     if final_turn_indices.is_empty()
         || final_session_indices.is_empty()
         || inp.k < 2
+        || inp.ix.has_tool_calls
         || c2_named_session(inp.ix, final_turn_indices[0])
     {
         return;
@@ -408,6 +409,7 @@ pub(in crate::retrieval) fn apply_gricean_constraint_slices(
         || inp.ix.turns[h0].is_pure_info_question
         || same_sess_dominance;
 
+    let orig_tlen = final_turn_indices.len();
     let mut next_slot = if h0_is_weak_echo { 0usize } else { 1usize };
     let mut seated = 0usize;
 
@@ -427,6 +429,9 @@ pub(in crate::retrieval) fn apply_gricean_constraint_slices(
         final_turn_indices.insert(insert_at, cand.turn_idx);
         next_slot += 1;
         seated += 1;
+    }
+    if orig_tlen > 0 {
+        final_turn_indices.truncate(orig_tlen);
     }
 }
 

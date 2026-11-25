@@ -317,6 +317,29 @@ pub(in crate::retrieval) fn score_revealed_preference_turns_q16(
 
     let ns_total = (ix.session_turns.len() as usize).max(1);
     let sw = stopwords();
+    // Hoist query head expansion set (in lemma space) once per query rather than per turn so
+    // cross-POS gloss/Roget/ConceptNet neighbors from turns meet query heads in O(1) lookup.
+    let mut q_meet_set: DetHashSet<&'static str> = DetHashSet::default();
+    for h_word in heads.iter().take(4) {
+        for (lem, _) in crate::roget::conceptual_neighbors(h_word, 32) {
+            q_meet_set.insert(lem);
+        }
+        for (lem, _) in crate::conceptnet::two_hop_neighbors(h_word, 20) {
+            q_meet_set.insert(lem);
+        }
+        for lem in crate::wordnet::gloss_and_compound_concepts(h_word)
+            .into_iter()
+            .take(28)
+        {
+            q_meet_set.insert(lem);
+        }
+        for (lem, _) in crate::wordnet::full_lexicon_neighbors(h_word)
+            .into_iter()
+            .take(28)
+        {
+            q_meet_set.insert(lem);
+        }
+    }
     let mut candidates: Vec<RevealedPrefCandidate> = Vec::new();
 
     for (ti, tr) in ix.turns.iter().enumerate() {
@@ -359,30 +382,6 @@ pub(in crate::retrieval) fn score_revealed_preference_turns_q16(
                 .collect();
             rare_words.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
             rare_words.truncate(5);
-
-            // Collect raw query head expansion set (in lemma space) so cross-POS gloss/Roget/ConceptNet
-            // neighbors from the turn can meet query heads even when the shared concept isn't in `ix.vocab`!
-            let mut q_meet_set: DetHashSet<&'static str> = DetHashSet::default();
-            for h_word in heads.iter().take(4) {
-                for (lem, _) in crate::roget::conceptual_neighbors(h_word, 32) {
-                    q_meet_set.insert(lem);
-                }
-                for (lem, _) in crate::conceptnet::two_hop_neighbors(h_word, 20) {
-                    q_meet_set.insert(lem);
-                }
-                for lem in crate::wordnet::gloss_and_compound_concepts(h_word)
-                    .into_iter()
-                    .take(28)
-                {
-                    q_meet_set.insert(lem);
-                }
-                for (lem, _) in crate::wordnet::full_lexicon_neighbors(h_word)
-                    .into_iter()
-                    .take(28)
-                {
-                    q_meet_set.insert(lem);
-                }
-            }
 
             let mut best_up_q16: u64 = 0;
             let mut total_meet_hits: u64 = 0;
@@ -512,6 +511,7 @@ pub(in crate::retrieval) fn apply_revealed_preference_cone_slices(
     if final_turn_indices.is_empty()
         || final_session_indices.is_empty()
         || inp.k < 2
+        || inp.ix.has_tool_calls
         || c2_named_session(inp.ix, final_turn_indices[0])
     {
         return;
@@ -538,6 +538,8 @@ pub(in crate::retrieval) fn apply_revealed_preference_cone_slices(
             || h0_tr.is_standing_policy
             || self_disclosure_strength_q16(inp.ix, h0) >= Q16_ONE);
 
+    let orig_tlen = final_turn_indices.len();
+    let orig_slen = final_session_indices.len();
     let mut next_slot = if h0_is_protected { 1usize } else { 0usize };
     let max_rescue = 2usize.min(inp.k.saturating_sub(next_slot));
     let mut rescued = 0usize;
@@ -574,6 +576,12 @@ pub(in crate::retrieval) fn apply_revealed_preference_cone_slices(
 
         next_slot += 1;
         rescued += 1;
+    }
+    if orig_tlen > 0 {
+        final_turn_indices.truncate(orig_tlen);
+    }
+    if orig_slen > 0 {
+        final_session_indices.truncate(orig_slen);
     }
 }
 

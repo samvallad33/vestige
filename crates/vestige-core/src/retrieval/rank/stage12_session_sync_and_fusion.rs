@@ -4530,14 +4530,12 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     }
     // Wave 6 (Chronological Genesis Spine Stratification + Knowledge-Update Mutation Polarity):
     crate::retrieval::rank::genesis_spine_q16::apply_genesis_spine_and_ku_polarity(ctx);
-    // Breakthroughs #2, #3, #5, #6 (respect locked Torrens & implicit-disclosure heads):
+    // Breakthroughs #2, #5, #6, #3 (respect locked Torrens & implicit-disclosure heads;
+    // run submodular residual cover before Gricean intra-session turn seating so Gricean
+    // novel-constraint turns stay in Top-5 without being pushed to Slots 6..10):
     if !ctx.torrens_locked_head && !ctx.implicit_disclosure_locked {
         // Breakthrough #2 (Revealed-Preference Interrogative Immunity + Polysemy-Attenuated Cone):
         crate::retrieval::seating::revealed_preference_cone_q16::apply_revealed_preference_cone_seating(
-            ctx,
-        );
-        // Breakthrough #3 (Gricean Maxim-of-Quantity Conditional Information-Gain Intra-Session Turn Selector):
-        crate::retrieval::seating::gricean_constraint_turn_q16::apply_gricean_constraint_turn_seating(
             ctx,
         );
         // Breakthrough #5 (Counterfactual/Epistemic Modal x Named Speaker Dispositional Cone):
@@ -4546,6 +4544,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         );
         // Breakthrough #6 (#855 Open-Circuit Residual Peeling + Counting Cover + Max-Entropy Spine):
         let _ = crate::retrieval::fusion::submodular_residual_cover_q16::apply_submodular_residual_cover(
+            ctx,
+        );
+        // Breakthrough #3 (Gricean Maxim-of-Quantity Conditional Information-Gain Intra-Session Turn Selector):
+        crate::retrieval::seating::gricean_constraint_turn_q16::apply_gricean_constraint_turn_seating(
             ctx,
         );
     }

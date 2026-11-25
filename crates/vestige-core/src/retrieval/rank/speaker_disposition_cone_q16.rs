@@ -540,9 +540,19 @@ pub(in crate::retrieval) fn apply_speaker_disposition_cone_slices(
     let csq_sp = detect_counterfactual_speaker_query(inp.ix, inp.query)
         .map(|c| c.speaker_low)
         .unwrap_or_default();
-    let h0_has_partial_sp = inp.ix.turns[h0].speaker.eq_ignore_ascii_case(&csq_sp)
-        && (inp.t_exact_mask.get(h0).copied().unwrap_or(0) & inp.q_group_mask).count_ones() >= 2;
-    let mut next_slot = if h0_has_partial_sp { 1usize } else { 0usize };
+    let h0_tr = &inp.ix.turns[h0];
+    let h0_is_target_sp_decl = h0_tr.speaker.eq_ignore_ascii_case(&csq_sp)
+        && !h0_tr.is_question
+        && !h0_tr.is_backchannel;
+    // Protect calibrated `implicit_bridge` + BM25F Slots 0..2 when incumbent Slot 0 is already
+    // a substantive declarative turn by the queried speaker; co-seat disposition winners into Slots 2..4.
+    let mut next_slot = if h0_is_target_sp_decl {
+        2usize.min(inp.k.saturating_sub(1))
+    } else {
+        0usize
+    };
+    let orig_tlen = final_turn_indices.len();
+    let orig_slen = final_session_indices.len();
     let mut seated = 0usize;
 
     for cand in cands {
@@ -576,6 +586,12 @@ pub(in crate::retrieval) fn apply_speaker_disposition_cone_slices(
 
         next_slot += 1;
         seated += 1;
+    }
+    if orig_tlen > 0 {
+        final_turn_indices.truncate(orig_tlen);
+    }
+    if orig_slen > 0 {
+        final_session_indices.truncate(orig_slen);
     }
 }
 

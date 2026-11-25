@@ -461,6 +461,11 @@ pub(in crate::retrieval) fn apply_lambek_qud_slot0_tiebreak(
         || is_discourse_closure_or_meta_echo(ctx.ix, t0, &ctx.q.text)
         || (ctx.ix.turns[t0].is_pure_info_question && s0.q_echo_penalty_q16 >= ECHO_NON_CANCEL_PENALTY_Q16);
 
+    let t0_sess = ctx.ix.turns[t0].session;
+    let t0_scene = ctx.t_scene.get(t0).copied().unwrap_or(0.0);
+    let t0_substantive_user =
+        !t0_unsaturated_echo && (ctx.ix.turns[t0].field == 0 || ctx.eff_it.assistant_attribution);
+
     let mut best: Option<(usize, i64, u32)> = None;
     for (slot, sc) in scores.iter().enumerate().skip(1) {
         if !sc.filler_satisfied
@@ -469,14 +474,31 @@ pub(in crate::retrieval) fn apply_lambek_qud_slot0_tiebreak(
         {
             continue;
         }
+        // Protect substantive declarative Slot-0 turns from cross-session displacement:
+        // only allow cross-session Slot-0 swap when incumbent Slot 0 is an unsaturated echo/question
+        // or assistant non-target turn; otherwise restrict to decisive same-session tie-break.
+        if t0_substantive_user {
+            if ctx.ix.turns[sc.turn_idx].session != t0_sess {
+                continue;
+            }
+            let sc_scene = ctx.t_scene.get(sc.turn_idx).copied().unwrap_or(0.0);
+            if t0_scene > 0.0 && sc_scene < 0.80 * t0_scene {
+                continue;
+            }
+        }
         let ex_c = (ctx.t_exact_mask.get(sc.turn_idx).copied().unwrap_or(0)
             & frame.topic_group_mask)
             .count_ones();
         if ex_c == 0 || (ex_c < ex0 && !t0_unsaturated_echo) {
             continue;
         }
+        let min_margin = if t0_substantive_user {
+            Q16_ONE
+        } else {
+            Q16_ONE >> 1
+        };
         let margin = sc.net_q16.saturating_sub(s0.net_q16);
-        if margin < (Q16_ONE >> 1) {
+        if margin < min_margin {
             continue;
         }
         let key = (sc.net_q16, ex_c);
@@ -502,12 +524,13 @@ pub(in crate::retrieval) fn apply_lambek_qud_slot0_tiebreak(
         let win_ti = final_turn_indices.remove(win_slot);
         final_turn_indices.insert(0, win_ti);
         let win_si = ctx.ix.turns[win_ti].session;
-        if !final_session_indices.is_empty() && final_session_indices[0] != win_si {
+        let orig_slen = final_session_indices.len();
+        if orig_slen > 0 && final_session_indices[0] != win_si {
             if let Some(spos) = final_session_indices.iter().position(|&s| s == win_si) {
                 final_session_indices.remove(spos);
             }
             final_session_indices.insert(0, win_si);
-            final_session_indices.truncate(ctx.k.max(5));
+            final_session_indices.truncate(orig_slen.max(ctx.k));
         }
     }
 }

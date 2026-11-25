@@ -92,19 +92,18 @@ pub(in crate::retrieval) fn detect_cover_regime(
         || ql.contains(" how many ")
         || ql.contains("in total")
         || ql.contains("altogether")
-        || ql.contains("all the ")
         || ql.contains("every time ")
-        || ql.contains("list all ")
+        || ql.starts_with("list all ")
         || ql.contains("total number of")
-        || ql.contains("combined ")
     {
         return ResidualCoverRegime::MultiSessionInstanceCover;
     }
 
-    // 3. Open-Circuit Back-EMF (#855) or partial query-group coverage at Slot 0.
+    // 3. Open-Circuit Back-EMF (#855) with genuine uncovered query-group deficit at Slot 0.
+    // Never fire on generic `partial_cov` alone (single-hop queries routinely omit 1 non-focal term).
     let head0_cov = (top0_exact_mask & q_group_mask).count_ones() as usize;
     let partial_cov = q_group_cnt >= 2 && head0_cov < q_group_cnt;
-    if ghostcurrent.open_circuit || !ghostcurrent.missing_query_groups.is_empty() || partial_cov {
+    if partial_cov && (ghostcurrent.open_circuit || !ghostcurrent.missing_query_groups.is_empty()) {
         return ResidualCoverRegime::OpenCircuitBridgePeeling;
     }
 
@@ -220,12 +219,17 @@ fn run_open_circuit_bridge_peeling(
     }
 
     let spine_set: DetHashSet<usize> = inp.ghostcurrent.witness_spine.iter().copied().collect();
-    let target_k = inp.k.min(5).min(final_turn_indices.len().max(1));
+    // Seat Slot 0 + at most 2 genuine residual missing-facet turns so existing BM25F/GBDT Top-5
+    // turns are never blindly evicted by unrelated bridge postings.
+    let target_k = inp.k.min(3).min(final_turn_indices.len().max(1));
     let mut selected: Vec<usize> = vec![h0];
 
-    // Greedy submodular marginal gain for Slots 1..target_k.
+    // Greedy submodular marginal gain for Slots 1..target_k (strictly requiring newly_covered > 0).
     while selected.len() < target_k {
         let uncovered_mask = inp.q_group_mask & !covered_mask;
+        if uncovered_mask == 0 {
+            break;
+        }
         let mut best_pick: Option<(usize, i64)> = None;
 
         for &ti in &pool {
@@ -242,10 +246,10 @@ fn run_open_circuit_bridge_peeling(
 
             let t_mask = inp.t_exact_mask.get(ti).copied().unwrap_or(0);
             let newly_covered = (t_mask & uncovered_mask).count_ones() as i64;
-            let is_new_sess = !covered_sessions.contains(&tr.session);
-            if !is_new_sess && newly_covered == 0 {
+            if newly_covered == 0 {
                 continue;
             }
+            let is_new_sess = !covered_sessions.contains(&tr.session);
 
             // Bridge resonance with Slot 0's highest-IDF non-query entities across sessions.
             let mut bridge_q16: i64 = 0;
@@ -266,21 +270,10 @@ fn run_open_circuit_bridge_peeling(
                 0
             };
 
-            if newly_covered == 0 && bridge_capped == 0 && spine_bonus == 0 {
-                continue;
-            }
-
             let base_rel = ((inp.t_scene.get(ti).copied().unwrap_or(0.0).max(0.0) * 16_384.0) as i64)
                 .min(Q16_ONE);
 
-            let sess_delta = if is_new_sess {
-                Q16_ONE >> 1
-            } else if newly_covered == 0 {
-                // Penalize redundant same-session clones that add zero new query facets.
-                -(Q16_ONE + (Q16_ONE >> 1))
-            } else {
-                0
-            };
+            let sess_delta = if is_new_sess { Q16_ONE >> 1 } else { 0 };
 
             let gain_q16 = newly_covered
                 .saturating_mul(Q16_ONE.saturating_mul(2))
@@ -383,6 +376,7 @@ fn run_multi_session_instance_cover(
         return;
     }
 
+    let orig_tlen = final_turn_indices.len();
     let sel_set: DetHashSet<usize> = selected.iter().copied().collect();
     let mut merged = selected.clone();
     for &ti in final_turn_indices.iter() {
@@ -390,6 +384,7 @@ fn run_multi_session_instance_cover(
             merged.push(ti);
         }
     }
+    merged.truncate(orig_tlen.max(inp.k));
     *final_turn_indices = merged;
     sync_sessions_from_turns(inp.ix, &selected, final_session_indices);
 }
@@ -590,6 +585,23 @@ pub(in crate::retrieval) fn apply_submodular_residual_cover_slices(
 pub(in crate::retrieval) fn apply_submodular_residual_cover(
     ctx: &mut RankCtx<'_>,
 ) -> ResidualCoverRegime {
+    // Protect dedicated downstream/upstream domain engines:
+    // - STATE-Bench mutable tool-receipt pipelines (`has_tool_calls`)
+    // - Preference / recommendation queries (`preference`, `is_recommendation_request_query`)
+    // - Standing-rule tasks (`task_under_rules`)
+    // - Dedicated event-ordering & summarization stacks (`is_event_sequence`, `eff_summary_request`)
+    if ctx.ix.has_tool_calls
+        || ctx.eff_it.preference
+        || ctx.eff_it.task_under_rules
+        || ctx.eff_it.is_event_sequence
+        || eff_summary_request(&ctx.q.text)
+        || crate::retrieval::seating::revealed_preference_cone_q16::is_recommendation_request_query(
+            &ctx.q.text,
+            ctx.pref_on,
+        )
+    {
+        return ResidualCoverRegime::PassThrough;
+    }
     let inp = SubmodularCoverInput {
         ix: ctx.ix,
         query: &ctx.q.text,
