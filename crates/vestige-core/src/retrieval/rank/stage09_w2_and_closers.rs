@@ -19,7 +19,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let t_scene = &ctx.t_scene;
     let t_mask = &ctx.t_mask;
     let t_exact_mask = &ctx.t_exact_mask;
-    let mut final_session_indices = std::mem::take(&mut ctx.final_session_indices);
+    let final_session_indices = &ctx.final_session_indices;
     let mut final_turn_indices = std::mem::take(&mut ctx.final_turn_indices);
 
     // [W2-033] Milestone Admission: for long turn histories (`turns >= 64`) or monologues,
@@ -36,57 +36,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
 
     // Scope-matched / live-task standing_rules head merge (keyed on turn count `turns >= 64`,
     // never `session_turns.len()`, so coarse 3..5-batch long chats qualify too):
-    let ql_s9 = q.text.trim().to_ascii_lowercase();
-    let is_factual_past_s9 = ql_s9.contains("did i ")
-        || ql_s9.contains("did we ")
-        || ql_s9.contains("did you ")
-        || ql_s9.contains("have i ")
-        || ql_s9.contains("have we ")
-        || ql_s9.contains("was my ")
-        || ql_s9.contains("were my ")
-        || ql_s9.starts_with("what is my ")
-        || ql_s9.starts_with("what was ")
-        || ql_s9.starts_with("how many ")
-        || ql_s9.starts_with("how long ")
-        || ql_s9.starts_with("how old ")
-        || ql_s9.starts_with("how much ");
-    let is_proc_task_s9 = eff_it.task_under_rules
-        || (!is_factual_past_s9
-            && (ql_s9.starts_with("how ")
-                || ql_s9.starts_with("what ")
-                || ql_s9.starts_with("which ")
-                || ql_s9.starts_with("if i")
-                || (ql_s9.contains("which ") && ql_s9.contains(" should i"))));
-    let allow_chat_task_rule = !has_named_speakers_eff && ix.turns.len() >= 64 && is_proc_task_s9;
-    let is_temp_sched_s9 = (it.temporal || it.sniper_when || ql_s9.contains("remind me of the date"))
-        && !has_named_speakers_eff
-        && ix.turns.len() >= 64
-        && !cond_rule_turns.is_empty();
-    if is_temp_sched_s9 && !seq_mode_eff && !it.sniper_how_many && final_turn_indices.len() >= 2 {
-        // Two-Tier Temporal Formatting Shield: protect Slot 0 (exact event date) while co-seating
-        // a condition-matched non-superseded temporal formatting standing rule cleanly at Slot 1!
-        if let Some(&r_ti) = cond_rule_turns.iter().rev().find(|&&ti| {
-            !turn_is_superseded(ix, ti) && final_turn_indices.first() != Some(&ti)
-        }) {
-            if let Some(pos) = final_turn_indices.iter().position(|&x| x == r_ti) {
-                final_turn_indices.remove(pos);
-            }
-            final_turn_indices.insert(1.min(final_turn_indices.len()), r_ti);
-            if final_turn_indices.len() > k {
-                final_turn_indices.truncate(k);
-            }
-            let r_si = ix.turns[r_ti].session;
-            if final_session_indices.first() != Some(&r_si) {
-                if let Some(spos) = final_session_indices.iter().position(|&s| s == r_si) {
-                    final_session_indices.remove(spos);
-                }
-                final_session_indices.insert(1.min(final_session_indices.len()), r_si);
-                if final_session_indices.len() > k {
-                    final_session_indices.truncate(k);
-                }
-            }
-        }
-    }
+    let allow_chat_task_rule = !has_named_speakers_eff && ix.turns.len() >= 64 && eff_it.task_under_rules;
     if (is_monologue_corpus || allow_chat_task_rule)
         && !standing_rules.is_empty()
         && !seq_mode_eff
@@ -99,7 +49,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         // to `(pti, r_ti)` when the query is an explicit preference or recommendation request.
         let prefer_pref_over_rule =
             eff_it.preference || crate::retrieval::step14_is_rec_request(&q.text);
-        for sr in standing_rules.iter().take(6) {
+        for sr in standing_rules.iter().take(2) {
             if sr.score <= 0.0 {
                 continue;
             }
@@ -171,17 +121,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 }
                 final_turn_indices.insert(0, slot0_ti);
                 final_turn_indices.insert(1.min(final_turn_indices.len()), slot1_ti);
-                for (slot_i, ti_sync) in [(0usize, slot0_ti), (1usize, slot1_ti)] {
-                    let s_sync = ix.turns[ti_sync].session;
-                    if let Some(sp) = final_session_indices.iter().position(|&s| s == s_sync) {
-                        if sp > slot_i {
-                            final_session_indices.remove(sp);
-                            final_session_indices.insert(slot_i.min(final_session_indices.len()), s_sync);
-                        }
-                    } else {
-                        final_session_indices.insert(slot_i.min(final_session_indices.len()), s_sync);
-                    }
-                }
             } else {
                 let ins_at = if wants_slot0 {
                     0
@@ -189,21 +128,9 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                     1.min(final_turn_indices.len())
                 };
                 final_turn_indices.insert(ins_at, r_ti);
-                let s_sync = ix.turns[r_ti].session;
-                if let Some(sp) = final_session_indices.iter().position(|&s| s == s_sync) {
-                    if sp > ins_at {
-                        final_session_indices.remove(sp);
-                        final_session_indices.insert(ins_at.min(final_session_indices.len()), s_sync);
-                    }
-                } else {
-                    final_session_indices.insert(ins_at.min(final_session_indices.len()), s_sync);
-                }
             }
             if final_turn_indices.len() > k {
                 final_turn_indices.truncate(k);
-            }
-            if final_session_indices.len() > k {
-                final_session_indices.truncate(k);
             }
             break;
         }
@@ -289,6 +216,5 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
     }
 
-    ctx.final_session_indices = final_session_indices;
     ctx.final_turn_indices = final_turn_indices;
 }

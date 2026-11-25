@@ -19,6 +19,14 @@ pub(in crate::retrieval) enum BeliefScope {
     TransientDebug,
 }
 
+fn utf8_prefix(s: &str, max_bytes: usize) -> &str {
+    let mut end = s.len().min(max_bytes);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Classify a turn's belief scope using strictly closed-class deontic/volitional and
 /// structural error/question cues.
 pub(in crate::retrieval) fn classify_belief_scope(ix: &Index, ti: usize) -> BeliefScope {
@@ -230,7 +238,7 @@ pub(in crate::retrieval) fn is_discourse_closure_or_meta_echo(
         return false;
     }
     // Protect 1st-person past-tense episodic assertions (`"Yes, I finished..."`, `"Yes, we moved..."`):
-    let raw_b_toks = raw_tokens(&trimmed[..trimmed.len().min(96)]);
+    let raw_b_toks = raw_tokens(utf8_prefix(trimmed, 96));
     let has_1p_past_event = raw_b_toks.windows(2).any(|p| {
         matches!(p[0].as_str(), "i" | "we")
             && ((p[1].len() >= 5 && p[1].ends_with("ed"))
@@ -239,7 +247,7 @@ pub(in crate::retrieval) fn is_discourse_closure_or_meta_echo(
     if has_1p_past_event {
         return false;
     }
-    let first_toks: Vec<String> = raw_tokens(&trimmed[..trimmed.len().min(64)])
+    let first_toks: Vec<String> = raw_tokens(utf8_prefix(trimmed, 64))
         .into_iter()
         .take(4)
         .collect();
@@ -391,5 +399,46 @@ mod tests {
             base + 6,
             "What practice management tips do I need?"
         ));
+    }
+
+    #[test]
+    fn meta_echo_handles_multibyte_utf8_em_dash_at_prefix_boundaries() {
+        let mk = |role: &str, content: &str| Turn {
+            role: role.to_string(),
+            content: content.to_string(),
+            ..Default::default()
+        };
+        let mut sessions = Vec::new();
+        for s in 0..8 {
+            sessions.push(Session {
+                id: format!("s{s}"),
+                date: String::new(),
+                timestamp: (s + 1) as i64 * 1000,
+                turns: vec![
+                    mk("user", &format!("Reviewing policy note {s} carefully.")),
+                    mk("assistant", &format!("Noted policy {s}.")),
+                ],
+            });
+        }
+        // Place 3-byte em-dash U+2014 straddling byte 64 (`bytes 62..65`) and byte 96 (`bytes 94..97`).
+        let s64 = format!("{}—{}", "yes, that sounds very reasonable and completely aligned right ", "here");
+        assert!(s64.as_bytes().len() > 64 && !s64.is_char_boundary(64));
+        let s96 = format!(
+            "{}—{}",
+            "thanks, this café résumé overview aligns cleanly with our current review plan right here ok",
+            "done"
+        );
+        assert!(s96.as_bytes().len() > 96 && !s96.is_char_boundary(96));
+        sessions.push(Session {
+            id: "s_utf8".into(),
+            date: String::new(),
+            timestamp: 9000,
+            turns: vec![mk("user", &s64), mk("user", &s96)],
+        });
+        let ix = build_index(&sessions, &Params::default());
+        let _ = is_discourse_closure_or_meta_echo(&ix, 16, "Great, thanks for confirming.");
+        let _ = is_discourse_closure_or_meta_echo(&ix, 17, "Great, thanks for confirming.");
+        assert_eq!(utf8_prefix(&s64, 64).len(), 62);
+        assert_eq!(utf8_prefix(&s96, 96).len(), 94);
     }
 }

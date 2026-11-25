@@ -90,15 +90,31 @@ pub(in crate::retrieval) fn is_pref_framing_word(w: &str) -> bool {
     )
 }
 
-// hardcode-scan: closed-class (explicit stance and comparative preference frames)
+// hardcode-scan: closed-class (explicit stance, optative/bouletic, and comparative preference frames)
 pub(in crate::retrieval) fn is_explicit_stance_directive(body_low: &str, is_pers: bool) -> bool {
     if is_pers || crate::retrieval::has_comparative_choice_frame(body_low) {
+        return true;
+    }
+    let has_without_gerund = body_low.contains(" without ")
+        && body_low
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|w| w.len() >= 5 && w.ends_with("ing"));
+    if has_without_gerund {
         return true;
     }
     [
         "i prefer",
         "i'd prefer",
         "i\u{2019}d prefer",
+        "so i'd like to",
+        "so i\u{2019}d like to",
+        "i'd like to",
+        "i\u{2019}d like to",
+        "i would like to",
+        "keep my ",
+        "i wanna ",
+        "i aim for ",
+        "i aim to ",
         "i tend to ",
         "my favorite",
         "i really like",
@@ -196,7 +212,7 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
     }
 
     let ns_u32 = (ix.session_turns.len() as u32).max(1);
-    let max_pref_df = (ns_u32 / 2).max(6);
+    let max_pref_df = (ns_u32 / 3).max(4);
     let mut q_topic_terms: Vec<(u32, u64)> = Vec::new();
     for qt in &plan.terms {
         if !qt.exact_hit {
@@ -251,6 +267,9 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
         for (lem, _) in crate::roget::conceptual_neighbors(g_word, 24) {
             add_lem(lem);
         }
+        for (lem, _) in crate::conceptnet::two_hop_neighbors(g_word, 10) {
+            add_lem(lem);
+        }
     }
 
     let sess_topic_ic = |si: usize| -> u64 {
@@ -264,7 +283,7 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
     };
 
     // Hoist corpus session co-occurrence set ONCE per query (O(N_sess) instead of O(P * 24 * Q * N_sess)).
-    let co_cap = (ns_u32 / 4).max(4);
+    let co_cap = (ns_u32 / 6).max(3);
     let mut cooccur_allowed_ids: DetHashSet<u32> = DetHashSet::default();
     if ix.session_content.len() >= 8 && !q_topic_terms.is_empty() {
         for sc in &ix.session_content {
@@ -321,9 +340,10 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
                 lex_ic = lex_ic.saturating_add(ic);
             }
         }
-        // Corpus session co-occurrence domain match (e.g. `lazysizes`/`bundle` <-> `gallery`, `excel`/`budget` <-> `expenses`):
+        // Corpus session co-occurrence fallback ONLY when direct topic & lexicon bridges are empty,
+        // bounded at `Q16_ONE` so 48-session background noise never outranks WordNet/Roget/ConceptNet.
         let mut cooccur_ic: u64 = 0;
-        if topic_ic_q16 == 0 && is_stance && !cooccur_allowed_ids.is_empty() {
+        if topic_ic_q16 == 0 && lex_ic == 0 && is_stance && !cooccur_allowed_ids.is_empty() {
             let mut checked = 0usize;
             for &cid in &t.content {
                 if !cooccur_allowed_ids.contains(&cid) {
@@ -331,10 +351,12 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
                 }
                 let cdf = ix.s_stats.df.get(&cid).copied().unwrap_or(0);
                 checked += 1;
-                if checked > 24 {
+                if checked > 12 {
                     break;
                 }
-                cooccur_ic = cooccur_ic.saturating_add(aspect_ic_q16(cdf, ns_u32) >> 1);
+                cooccur_ic = cooccur_ic
+                    .saturating_add(aspect_ic_q16(cdf, ns_u32) >> 2)
+                    .min(Q16_ONE);
             }
         }
         let eff_lex_ic = lex_ic.saturating_add(cooccur_ic);
@@ -460,11 +482,19 @@ pub(in crate::retrieval) fn apply_persistent_preference_lattice(
                     && is_stance
                     && (topic_ic_q16 > 0 || lex_ic >= (Q16_ONE >> 1)))
             {
-                if inc_topic_ic > topic_ic_q16.saturating_mul(2)
+                let inc_dominates = inc_topic_ic > topic_ic_q16.saturating_mul(2)
                     || (inc_topic_ic > topic_ic_q16
-                        && !(is_stance && (topic_ic_q16 > 0 || lex_ic >= (Q16_ONE >> 1))))
-                {
-                    continue;
+                        && !(is_stance && (topic_ic_q16 > 0 || lex_ic >= (Q16_ONE >> 1))));
+                if inc_dominates {
+                    // Protect Slot 0 (`RecallAny@1`) while co-seating strong preference stances
+                    // at Tier-2 Slot 1/2 so `single-session-preference R@5` never drops to Slots 6..10.
+                    if has_signal && is_stance && s_target < 2 {
+                        let co_slot = (s_target + 1).min(2);
+                        target_slot = co_slot.min(final_turn_indices.len());
+                        s_target = co_slot.min(final_session_indices.len());
+                    } else {
+                        continue;
+                    }
                 }
             }
         }
