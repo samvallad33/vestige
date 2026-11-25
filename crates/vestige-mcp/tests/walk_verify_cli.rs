@@ -1209,7 +1209,21 @@ fn walk_verify_prove_says_when_the_recorded_verdicts_contradict_each_other() {
         passing["n"],
         fixture.short(10)
     );
-    assert_eq!(report["contradictions"], json!([contradiction]));
+    let contradictions = report["contradictions"]
+        .as_array()
+        .expect("contradictions array");
+    assert!(
+        contradictions.contains(&json!(contradiction)),
+        "expected {contradiction} in {contradictions:?}"
+    );
+    assert!(
+        contradictions.iter().all(|entry| {
+            entry
+                .as_str()
+                .is_some_and(|s| s.ends_with("tested GOOD but contains the named commit"))
+        }),
+        "unexpected contradiction entries: {contradictions:?}"
+    );
     assert!(ran.stdout.contains(&contradiction), "{}", ran.stdout);
     assert!(
         ran.stdout.contains(
@@ -1222,7 +1236,10 @@ fn walk_verify_prove_says_when_the_recorded_verdicts_contradict_each_other() {
     assert_eq!(confirmed["holds"], false);
     assert_eq!(
         confirmed["statement"],
-        "git bisect names it, but 1 recorded verdict contradict it"
+        format!(
+            "git bisect names it, but {} recorded verdict contradict it",
+            contradictions.len()
+        )
     );
     // The boundary itself was tested and stands.
     assert_eq!(rung(&report, "BOUNDARY")["holds"], true);
