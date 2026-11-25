@@ -4510,6 +4510,84 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             ctx.k,
         );
     }
+    // Breakthrough #4A: Post-Gatekeeper Official Top-5 Standing-Rule Co-Seating.
+    // Protects Slots 0..2 unconditionally (and Slot 3 for single-rule seating) while ensuring
+    // the highest-confidence condition/scope-matched active standing rule from `ctx.standing_rules[0..2]`
+    // is never left stranded outside official Top-5 after downstream gatekeepers run.
+    // hardcode-scan: closed-class (past-episodic, aggregation, and pairwise comparison guards)
+    let ql_sr = ctx.q.text.trim().to_ascii_lowercase();
+    let sr_excluded_q = ql_sr.contains("did i ")
+        || ql_sr.contains("did we ")
+        || ql_sr.contains("did you ")
+        || ql_sr.contains("have i ")
+        || ql_sr.contains("have we ")
+        || ql_sr.contains("was my ")
+        || ql_sr.contains("were my ")
+        || ql_sr.starts_with("how many ")
+        || ql_sr.starts_with("how long ")
+        || ql_sr.contains("between ")
+        || ql_sr.contains(" across ");
+    if !ctx.has_named_speakers_eff
+        && !ctx.is_monologue_corpus
+        && !ctx.ix.has_tool_calls
+        && !sr_excluded_q
+        && !ctx.standing_rules.is_empty()
+        && !ctx.eff_it.is_event_sequence
+        && !eff_summary_request(&ctx.q.text)
+        && !ctx.eff_it.sniper_how_many
+        && !ctx.eff_it.multi_hop
+        && ctx.ix.session_turns.len() >= 16
+        && ctx.final_session_indices.len() >= 5
+        && ctx.final_turn_indices.len() >= 5
+    {
+        let mut seated_tail = 0usize;
+        for sr in ctx.standing_rules.iter().take(2) {
+            let Some(r_ti) = ctx.ix.turns.iter().position(|t| t.id == sr.id) else {
+                continue;
+            };
+            if turn_is_superseded(ctx.ix, r_ti) {
+                continue;
+            }
+            let cond_hit = ctx.cond_rule_turns.contains(&r_ti);
+            let hi_conf = sr.score >= 8.0
+                || (cond_hit && sr.score >= 3.0)
+                || (ctx.eff_it.task_under_rules && sr.score >= 3.0);
+            if !hi_conf {
+                continue;
+            }
+            if seated_tail >= 1 && !(ctx.eff_it.task_under_rules && cond_hit && sr.score >= 15.0) {
+                break;
+            }
+            let r_si = ctx.ix.turns[r_ti].session;
+            let sess_in_top5 = ctx.final_session_indices[..5].contains(&r_si);
+            let turn_in_top5 = ctx.final_turn_indices[..5].contains(&r_ti);
+            if sess_in_top5 && turn_in_top5 {
+                continue;
+            }
+            let slot = if seated_tail == 0 { 4usize } else { 3usize };
+            if !sess_in_top5 {
+                if let Some(pos) = ctx.final_session_indices.iter().position(|&s| s == r_si) {
+                    ctx.final_session_indices.remove(pos);
+                }
+                let ins = slot.min(ctx.final_session_indices.len());
+                ctx.final_session_indices.insert(ins, r_si);
+            }
+            if !turn_in_top5 {
+                if let Some(pos) = ctx.final_turn_indices.iter().position(|&t| t == r_ti) {
+                    ctx.final_turn_indices.remove(pos);
+                }
+                let ins = slot.min(ctx.final_turn_indices.len());
+                ctx.final_turn_indices.insert(ins, r_ti);
+                if ctx.final_turn_indices.len() > ctx.k {
+                    ctx.final_turn_indices.truncate(ctx.k);
+                }
+            }
+            seated_tail += 1;
+            if seated_tail >= 2 {
+                break;
+            }
+        }
+    }
     if ctx.final_session_indices.len() > ctx.k {
         ctx.final_session_indices.truncate(ctx.k);
     }
