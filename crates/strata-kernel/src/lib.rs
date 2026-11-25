@@ -51,8 +51,9 @@ pub mod prelude {
     pub use crate::checkpoint::{checkpoint_hash, state_root, Checkpoint, MAGIC};
     pub use crate::event::{ReviewEvent, StrataEvent};
     pub use crate::fsrs::{
-        weights_for, CardPhase, CardState, FsrsFold, ALGO_V1, ALGO_V2, V1_WEIGHTS_MILLI,
-        V2_WEIGHTS_MILLI,
+        fold_v3, fold_v4, is_known_algo_version, weights_for, CardPhase, CardState, FsrsFold,
+        ALGO_V1, ALGO_V2, ALGO_V3, ALGO_V4, FSRS6_OFFICIAL_WEIGHTS, FSRS7_WEIGHTS,
+        V1_WEIGHTS_MILLI, V2_WEIGHTS_MILLI,
     };
     pub use crate::kernel::{
         kernel_for, ApplyFn, Kernel, KernelTableEntry, UnknownAlgoVersion, VersionedFold,

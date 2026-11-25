@@ -367,7 +367,7 @@ pub fn verify_store(dir: &Path) -> VerifyReport {
                 failures.push(broken("bad magic"));
                 checkpoint_chain_ok = false;
             }
-            if strata_kernel::fsrs::weights_for(cp.algo_version).is_err() {
+            if !strata_kernel::fsrs::is_known_algo_version(cp.algo_version) {
                 failures.push(broken("unknown algorithm version"));
                 checkpoint_chain_ok = false;
             }

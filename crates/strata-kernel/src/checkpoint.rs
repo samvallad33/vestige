@@ -55,6 +55,15 @@ pub fn state_root(state: &State) -> [u8; 32] {
             .expect("borsh serialize of canonical state is infallible");
         hasher.update(blake3::hash(&entry).as_bytes());
     }
+    // Commit FSRS-7 (`ALGO_V4`) short-term stabilities when present.
+    // Empty under `ALGO_V1`..=`ALGO_V3`, preserving all historical state roots bit-exact.
+    if !state.short_stability_q.is_empty() {
+        for (card_id, s_short_q) in &state.short_stability_q {
+            let entry = borsh::to_vec(&(b"FSRS7_SS", *card_id, *s_short_q))
+                .expect("borsh serialize of FSRS-7 short stability is infallible");
+            hasher.update(blake3::hash(&entry).as_bytes());
+        }
+    }
     *hasher.finalize().as_bytes()
 }
 

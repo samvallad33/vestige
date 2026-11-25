@@ -15,6 +15,7 @@
 //! - Interval: t = S/FACTOR * (R^(1/w20) - 1)
 
 mod algorithm;
+mod fsrs7;
 mod scheduler;
 
 pub use algorithm::{
@@ -49,6 +50,19 @@ pub use algorithm::{
     retrievability_with_decay,
     same_day_stability,
     same_day_stability_with_weights,
+};
+
+pub use fsrs7::{
+    FSRS7_WEIGHTS,
+    Fsrs7State,
+    initial_difficulty_fsrs7,
+    initial_state_fsrs7,
+    initial_state_fsrs7_with_weights,
+    next_interval_fsrs7,
+    next_state_fsrs7,
+    next_state_fsrs7_with_weights,
+    retrievability_fsrs7,
+    retrievability_fsrs7_components,
 };
 
 pub use scheduler::{

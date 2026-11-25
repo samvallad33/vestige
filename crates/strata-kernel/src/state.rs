@@ -21,9 +21,13 @@ pub struct State {
     pub applied_seq: u64,
     /// Per-card folded state, canonically ordered by ascending `card_id`.
     pub cards: BTreeMap<u64, CardState>,
+    /// Per-card short-term stability `S_short` (Q32.32 days) for `ALGO_V4` (FSRS-7).
+    /// Always empty under `ALGO_V1`..=`ALGO_V3` so prior state roots stay bit-identical.
+    pub short_stability_q: BTreeMap<u64, i64>,
 }
 
 lint_state_type!(State {
     applied_seq: u64,
     cards: BTreeMap<u64, CardState>,
+    short_stability_q: BTreeMap<u64, i64>,
 });

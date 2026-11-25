@@ -14,7 +14,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use strata_kernel::canonical::to_q32_32;
 use strata_kernel::event::{ReviewEvent, StrataEvent};
 use strata_kernel::fsrs::{
-    fold_v1, fold_v2, CardPhase, CardState, ALGO_V1, ALGO_V2, D_MAX, D_MIN, S_MAX, S_MIN,
+    fold_v1, fold_v2, fold_v3, fold_v4, CardPhase, CardState, ALGO_V1, ALGO_V2, ALGO_V3, ALGO_V4,
+    D_MAX, D_MIN, S_MAX, S_MIN,
 };
 use strata_kernel::kernel::{KernelTableEntry, VersionedFold};
 use strata_kernel::state::State;
@@ -122,11 +123,37 @@ fn fold_card_v2(state: &mut State, event: &CardEvent) {
     }
 }
 
+fn fold_card_v3(state: &mut State, event: &CardEvent) {
+    match event {
+        CardEvent::Review(review) => fold_v3(state, review),
+        CardEvent::Import(card) => import(state, card),
+        CardEvent::AdjustStability {
+            card_id,
+            event_seq,
+            stability_q,
+        } => adjust(state, *card_id, *event_seq, *stability_q),
+    }
+}
+
+fn fold_card_v4(state: &mut State, event: &CardEvent) {
+    match event {
+        CardEvent::Review(review) => fold_v4(state, review),
+        CardEvent::Import(card) => import(state, card),
+        CardEvent::AdjustStability {
+            card_id,
+            event_seq,
+            stability_q,
+        } => adjust(state, *card_id, *event_seq, *stability_q),
+    }
+}
+
 impl VersionedFold for CardEvent {
     fn kernel_table() -> &'static [KernelTableEntry<Self>] {
         &[
             (ALGO_V1, fold_card_v1 as fn(&mut State, &CardEvent)),
             (ALGO_V2, fold_card_v2 as fn(&mut State, &CardEvent)),
+            (ALGO_V3, fold_card_v3 as fn(&mut State, &CardEvent)),
+            (ALGO_V4, fold_card_v4 as fn(&mut State, &CardEvent)),
         ]
     }
 }

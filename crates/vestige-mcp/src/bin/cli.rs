@@ -1063,6 +1063,73 @@ enum Commands {
         dry_run: bool,
     },
 
+    /// Run a live deterministic zero-vector retrieval + FSRS-7 proof suite and emit a BLAKE3-signed scorecard.
+    #[command(name = "bench-proof")]
+    BenchProof {
+        /// Emit Markdown scorecard instead of ASCII box
+        #[arg(long)]
+        markdown: bool,
+        /// Emit raw JSON report
+        #[arg(long)]
+        json: bool,
+        /// Optional file path to write rendered output
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Run an instant ephemeral live demo of bi-temporal supersession, FSRS-7 decay, and Strata BLAKE3 sealing.
+    Demo {
+        /// Emit raw JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Render a git-diff-style cognitive diff of your local Strata memory store (newly anchored, strong, and fading).
+    #[command(name = "diff-mind")]
+    DiffMind {
+        /// Lookback window in days for newly anchored memories
+        #[arg(long, default_value_t = 7)]
+        since: i64,
+        /// Emit Markdown output
+        #[arg(long)]
+        markdown: bool,
+        /// Emit raw JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Scan git history for recurring bug/revert hotspots and synthesize deterministic regression-guard antibodies.
+    Vaccine {
+        /// Path to the local git repository
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Number of recent commits to scan
+        #[arg(long, default_value_t = 200)]
+        commits: usize,
+        /// Anchor synthesized antibodies into local Strata under tag `vaccine`
+        #[arg(long)]
+        inject: bool,
+        /// Emit Markdown output
+        #[arg(long)]
+        markdown: bool,
+        /// Emit raw JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Time-travel deterministic Strata replay across ALGO_V1..ALGO_V4 (FSRS-6 & FSRS-7) with BLAKE3 checkpoint proofs.
+    Replay {
+        /// Algorithm version to replay (1=v1, 2=v2, 3=FSRS-6, 4=FSRS-7)
+        #[arg(long, default_value_t = 4)]
+        algo: u32,
+        /// Compare FSRS-6 (ALGO_V3) vs FSRS-7 (ALGO_V4) retention curves side-by-side
+        #[arg(long)]
+        compare: bool,
+        /// Emit raw JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Install Cognitive Sandwich companion files.
     Sandwich {
         #[command(subcommand)]
@@ -2000,6 +2067,98 @@ fn main() -> anyhow::Result<()> {
             )
             .map_err(|e| anyhow::anyhow!(e))?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+        Commands::BenchProof {
+            markdown,
+            json,
+            out,
+        } => {
+            let report = vestige_mcp::tools::viral_cli::run_bench_proof();
+            let rendered = if json {
+                serde_json::to_string_pretty(&report)?
+            } else if markdown {
+                vestige_mcp::tools::viral_cli::render_bench_proof_markdown(&report)
+            } else {
+                vestige_mcp::tools::viral_cli::render_bench_proof_ascii(&report)
+            };
+            if let Some(path) = out {
+                std::fs::write(&path, &rendered)?;
+            }
+            println!("{rendered}");
+            if report.passed < report.total {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Commands::Demo { json } => {
+            let report = vestige_mcp::tools::viral_cli::run_demo();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", vestige_mcp::tools::viral_cli::render_demo_ascii(&report));
+            }
+            Ok(())
+        }
+        Commands::DiffMind {
+            since,
+            markdown,
+            json,
+        } => {
+            let storage = open_storage()?;
+            let report = vestige_mcp::tools::viral_cli::run_diff_mind(storage.as_ref(), since)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "{}",
+                    vestige_mcp::tools::viral_cli::render_diff_mind_text(&report, markdown)
+                );
+            }
+            Ok(())
+        }
+        Commands::Vaccine {
+            repo,
+            commits,
+            inject,
+            markdown,
+            json,
+        } => {
+            let repo_abs = std::fs::canonicalize(&repo).unwrap_or(repo);
+            let maybe_storage = if inject { Some(open_storage()?) } else { None };
+            let report = vestige_mcp::tools::viral_cli::run_vaccine(
+                &repo_abs,
+                commits,
+                inject,
+                maybe_storage.as_deref(),
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "{}",
+                    vestige_mcp::tools::viral_cli::render_vaccine_text(&report, markdown)
+                );
+            }
+            Ok(())
+        }
+        Commands::Replay {
+            algo,
+            compare,
+            json,
+        } => {
+            let report = vestige_mcp::tools::viral_cli::run_replay(algo, compare)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "{}",
+                    vestige_mcp::tools::viral_cli::render_replay_text(&report)
+                );
+            }
             Ok(())
         }
     }
