@@ -37,9 +37,40 @@ const MAX_NEIGHBORS_PER_CARRIER: usize = 10;
 const HOP_MDL_COST_Q16: u64 = 2_048; // 0.03125 Q16 per hop beyond hop 1
 const MIN_CURRENT_Q16: u64 = 1_024; // 0.015625 Q16 pruning floor
 const SUP_FORWARD_DECAY_Q16: u64 = 62_259; // 0.95 Q16 per supersession link
+const BELNAP_BOTH_TAU_Q16: u64 = 16_384; // 0.25 Q16 threshold for Belnap Both witness detection (#853)
 const NO_CARRIER: u32 = u32::MAX;
 const VIRT_Q_CARRIER: u32 = u32::MAX - 1;
 const SUPERSEDE_CARRIER: u32 = u32::MAX - 2;
+
+/// Closed-class epistemic contradiction / audit query detector (`#853`).
+/// hardcode-scan: closed-class (epistemic contradiction and conflict interrogative markers only).
+pub(in crate::retrieval) fn is_contradiction_or_audit_query(q_text: &str) -> bool {
+    let low = q_text.to_ascii_lowercase();
+    low.contains("contradict")
+        || low.contains("inconsisten")
+        || low.contains("conflict")
+        || low.contains("discrepanc")
+        || low.contains("disagree")
+        || low.contains("changed their mind")
+        || low.contains("refut")
+}
+
+/// Closed-class negative-polarity query detector (`#853`).
+/// hardcode-scan: closed-class (English negation auxiliaries and adverbs only).
+fn query_is_negated(q_text: &str) -> bool {
+    let low = q_text.to_ascii_lowercase();
+    low.contains("didn't")
+        || low.contains("doesn't")
+        || low.contains("don't")
+        || low.contains(" not ")
+        || low.contains(" never ")
+        || low.contains("no longer")
+}
+
+#[inline]
+fn turn_is_negated(ix: &Index, ti: usize) -> bool {
+    (ix.turns[ti].modality_mask & 0x02) != 0
+}
 
 /// Compact output of GhostCurrent stored on `RankCtx` across Stages 11 and 12.
 #[derive(Default, Clone)]
@@ -49,6 +80,10 @@ pub(in crate::retrieval) struct GhostCurrentResult {
     pub(in crate::retrieval) sup_live_leaf_of_h0: Option<usize>,
     pub(in crate::retrieval) ranked_targets: Vec<(usize, u64)>,
     pub(in crate::retrieval) target_scores: BTreeMap<usize, u64>,
+    /// AC GhostCurrent (`#853`): per-target Belnap 2-channel admittance `(g_true_q16, g_false_q16)`.
+    pub(in crate::retrieval) target_admittance: BTreeMap<usize, (u64, u64)>,
+    /// AC GhostCurrent (`#853`): `(v_thesis, v_antithesis)` co-seating pair when Belnap `Both` fires.
+    pub(in crate::retrieval) belnap_dual_pair: Option<(usize, usize)>,
     pub(in crate::retrieval) witness_spine: Vec<usize>,
     /// Proof-carrying Strata outcome receipt IDs traversed along `witness_spine` (`#854`).
     pub(in crate::retrieval) witness_receipt_ids: Vec<String>,
@@ -171,6 +206,7 @@ pub(in crate::retrieval) fn evaluate_epistemic_deficit_gate(
                 .saturating_mul(23)
     });
 
+    let is_contradiction_q = is_contradiction_or_audit_query(&inp.q.text);
     let sealed = head0_full
         && !head0_sup
         && !head0_q_or_bc
@@ -178,6 +214,7 @@ pub(in crate::retrieval) fn evaluate_epistemic_deficit_gate(
         && !inp.eff_it.multi_hop
         && !inp.eff_it.temporal
         && !inp.eff_it.current_state
+        && !is_contradiction_q
         && head0_margin_strong;
 
     if sealed {
@@ -191,6 +228,7 @@ pub(in crate::retrieval) fn evaluate_epistemic_deficit_gate(
         || head0_type_miss
         || inp.eff_it.multi_hop
         || inp.eff_it.current_state
+        || is_contradiction_q
         || (inp.q_group_cnt >= 2 && head0_cov < inp.q_group_cnt);
 
     let can_override_slot0 = deficit_fired
@@ -199,6 +237,7 @@ pub(in crate::retrieval) fn evaluate_epistemic_deficit_gate(
             || head0_type_miss
             || head0_cov == 0
             || inp.deficit_a
+            || is_contradiction_q
             || (inp.q_group_cnt >= 2 && head0_cov < inp.q_group_cnt));
 
     (deficit_fired, can_override_slot0)
@@ -213,6 +252,11 @@ struct SearchState {
     last_carrier: u32,
     origin_sess: usize,
     path_idx: usize,
+    /// AC GhostCurrent (`#853`): false = constructive truth channel (`G_t`),
+    /// true = refuted / negated / analepsis-clashing falsity channel (`G_f`).
+    polarity_false: bool,
+    /// Reichenbach temporal phase `theta_time in {-1, 0, +1}` of current turn's session.
+    phase: i8,
 }
 
 impl Ord for SearchState {
@@ -221,6 +265,7 @@ impl Ord for SearchState {
             .cmp(&other.conductance_q16)
             .then_with(|| other.depth.cmp(&self.depth))
             .then_with(|| other.turn.cmp(&self.turn))
+            .then_with(|| self.polarity_false.cmp(&other.polarity_false))
     }
 }
 
@@ -382,6 +427,25 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         .unwrap_or(1)
         .max(1);
 
+    let is_contradiction_q = is_contradiction_or_audit_query(&inp.q.text);
+    let q_is_neg = query_is_negated(&inp.q.text);
+    let strict_false_channel = is_contradiction_q || inp.eff_it.current_state;
+    // AC GhostCurrent (#853): precompute Reichenbach temporal phase `theta_time in {-1, 0, +1}` per session.
+    let sess_phase: Vec<i8> = (0..inp.ix.session_turns.len())
+        .map(|si| {
+            let shift = crate::retrieval::graph::reichenbach_roman_belnap_q16::estimate_reichenbach_flashback_shift_q16(
+                inp.ix, si,
+            );
+            if shift < 0 {
+                -1i8
+            } else if shift > 0 {
+                1i8
+            } else {
+                0i8
+            }
+        })
+        .collect();
+
     let mut heap: BinaryHeap<SearchState> = BinaryHeap::new();
     let mut paths: Vec<PathNode> = Vec::with_capacity(256);
     let mut seed_mask = 0u64;
@@ -395,6 +459,12 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         let own = t_own_q16.get(seed_ti).copied().unwrap_or(0);
         let init_g = (Q16 >> 1)
             .saturating_add(((own as u128 * (Q16 >> 1) as u128) / max_own as u128) as u64);
+        let seed_sess = inp.ix.turns[seed_ti].session;
+        let seed_phase = sess_phase.get(seed_sess).copied().unwrap_or(0);
+        let seed_false = strict_false_channel
+            && !inp.eff_it.preference
+            && !q_is_neg
+            && turn_is_negated(inp.ix, seed_ti);
         let p_idx = paths.len();
         paths.push(PathNode {
             turn: seed_ti,
@@ -407,8 +477,10 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
             sup_hops: 0,
             turn: seed_ti,
             last_carrier: NO_CARRIER,
-            origin_sess: inp.ix.turns[seed_ti].session,
+            origin_sess: seed_sess,
             path_idx: p_idx,
+            polarity_false: seed_false,
+            phase: seed_phase,
         });
     }
 
@@ -491,6 +563,12 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                 if ti >= nt || inp.ix.turns[ti].is_backchannel {
                     continue;
                 }
+                let ti_sess = inp.ix.turns[ti].session;
+                let ti_phase = sess_phase.get(ti_sess).copied().unwrap_or(0);
+                let ti_false = strict_false_channel
+                    && !inp.eff_it.preference
+                    && !q_is_neg
+                    && turn_is_negated(inp.ix, ti);
                 let p_idx = paths.len();
                 paths.push(PathNode {
                     turn: ti,
@@ -505,6 +583,8 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                     last_carrier: VIRT_Q_CARRIER,
                     origin_sess: usize::MAX,
                     path_idx: p_idx,
+                    polarity_false: ti_false,
+                    phase: ti_phase,
                 });
                 virt_seeded += 1;
                 if virt_seeded >= 32 {
@@ -517,19 +597,20 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         }
     }
 
-    // Parallel Kirchhoff accumulation: per-target per-carrier max conductance so distinct
-    // clue paths ADD linearly while duplicate paths on the same carrier cannot double-count.
-    let mut per_target_carrier: BTreeMap<(usize, u32), u64> = BTreeMap::new();
+    // Parallel AC Kirchhoff accumulation (#853): per-target per-carrier 2-channel `(g_true, g_false)`
+    // so distinct agreeing clue paths ADD constructively into `g_true_q16` while negated/refuted/
+    // analepsis-clashing paths accumulate into `g_false_q16`.
+    let mut per_target_carrier: BTreeMap<(usize, u32), (u64, u64)> = BTreeMap::new();
     let mut best_path_for_target: BTreeMap<usize, (u64, usize)> = BTreeMap::new();
     let mut target_receipt_ids: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut settled = 0usize;
-    let mut visited_state: BTreeMap<(usize, u32), u64> = BTreeMap::new();
+    let mut visited_state: BTreeMap<(usize, u32, bool), u64> = BTreeMap::new();
 
     while let Some(st) = heap.pop() {
         if settled >= MAX_SETTLED {
             break;
         }
-        let key = (st.turn, st.last_carrier);
+        let key = (st.turn, st.last_carrier, st.polarity_false);
         if visited_state
             .get(&key)
             .is_some_and(|&prev_g| prev_g >= st.conductance_q16)
@@ -562,6 +643,12 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                         if g_fwd < MIN_CURRENT_Q16 {
                             continue;
                         }
+                        let nxt_sess = inp.ix.turns[nxt].session;
+                        let nxt_phase = sess_phase.get(nxt_sess).copied().unwrap_or(0);
+                        let nxt_false = strict_false_channel
+                            && !inp.eff_it.preference
+                            && !q_is_neg
+                            && turn_is_negated(inp.ix, nxt);
                         let p_idx = paths.len();
                         paths.push(PathNode {
                             turn: nxt,
@@ -576,11 +663,18 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                             last_carrier: SUPERSEDE_CARRIER,
                             origin_sess: st.origin_sess,
                             path_idx: p_idx,
+                            polarity_false: nxt_false,
+                            phase: nxt_phase,
                         });
                     }
                 }
             }
-            continue;
+            // Strata Live-Leaf Law keeps `g_sink = 0` on superseded nodes for all normal/current-state
+            // queries; on contradiction/audit queries (#853), superseded theses also deposit so Belnap
+            // `Both` captures both the superseded thesis and its contradicting antithesis.
+            if !is_contradiction_q {
+                continue;
+            }
         }
 
         // Absorbing sink deposit on live declarative turns reached via >= 1 hop or revision chain
@@ -608,14 +702,16 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                 // Live leaf terminating a supersession chain receives priority weight
                 sink_g = sink_g.saturating_add(sink_g >> 1);
             }
-            per_target_carrier
+            let entry = per_target_carrier
                 .entry((st.turn, st.last_carrier))
-                .and_modify(|v| {
-                    if sink_g > *v {
-                        *v = sink_g;
-                    }
-                })
-                .or_insert(sink_g);
+                .or_insert((0, 0));
+            if st.polarity_false {
+                if sink_g > entry.1 {
+                    entry.1 = sink_g;
+                }
+            } else if sink_g > entry.0 {
+                entry.0 = sink_g;
+            }
             best_path_for_target
                 .entry(st.turn)
                 .and_modify(|(bg, bp)| {
@@ -627,10 +723,10 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                 .or_insert((sink_g, st.path_idx));
             let path_rcpts = reconstruct_receipt_ids(&paths, st.path_idx);
             if !path_rcpts.is_empty() {
-                let entry = target_receipt_ids.entry(st.turn).or_default();
+                let r_entry = target_receipt_ids.entry(st.turn).or_default();
                 for r in path_rcpts {
-                    if !entry.contains(&r) {
-                        entry.push(r);
+                    if !r_entry.contains(&r) {
+                        r_entry.push(r);
                     }
                 }
             }
@@ -705,6 +801,16 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                 }
                 let u_sess = inp.ix.turns[st.turn].session;
                 let v_sess = inp.ix.turns[v].session;
+                let v_phase = sess_phase.get(v_sess).copied().unwrap_or(0);
+                // #853 AC Reichenbach-Belnap phase transition: analepsis clash (prospective -> flashback
+                // or flashback target on current_state) or negated/refuted turn routes into `G_f`.
+                let analepsis_clash = (st.phase == 1 && v_phase == -1)
+                    || (inp.eff_it.current_state && v_phase == -1);
+                let v_negated = strict_false_channel
+                    && !inp.eff_it.preference
+                    && !q_is_neg
+                    && turn_is_negated(inp.ix, v);
+                let next_false = st.polarity_false || analepsis_clash || v_negated;
                 let g_hop = if u_sess != v_sess
                     && u_sess < inp.ix.session_rare_nt.len()
                     && v_sess < inp.ix.session_rare_nt.len()
@@ -732,6 +838,8 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                     last_carrier: cid,
                     origin_sess: st.origin_sess,
                     path_idx: p_idx,
+                    polarity_false: next_false,
+                    phase: v_phase,
                 });
             }
         }
@@ -753,6 +861,13 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
             if g_next < MIN_CURRENT_Q16 {
                 continue;
             }
+            let t_sess = inp.ix.turns[target_ti].session;
+            let t_phase = sess_phase.get(t_sess).copied().unwrap_or(0);
+            let refutes_target = tr.supersedes_turns.contains(&target_ti)
+                || (strict_false_channel
+                    && !inp.eff_it.preference
+                    && !q_is_neg
+                    && turn_is_negated(inp.ix, target_ti));
             let p_idx = paths.len();
             paths.push(PathNode {
                 turn: target_ti,
@@ -767,18 +882,93 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                 last_carrier: SUPERSEDE_CARRIER,
                 origin_sess: st.origin_sess,
                 path_idx: p_idx,
+                polarity_false: st.polarity_false || refutes_target,
+                phase: t_phase,
             });
         }
     }
 
-    // Parallel Kirchhoff summation across independent carriers for each target turn
-    let mut totals: BTreeMap<usize, u64> = BTreeMap::new();
-    for ((ti, _carrier), g) in per_target_carrier {
-        totals
-            .entry(ti)
-            .and_modify(|sum| *sum = sum.saturating_add(g))
-            .or_insert(g);
+    // Parallel AC Kirchhoff summation (#853): sum `(g_true, g_false)` across independent carriers.
+    let mut target_admittance: BTreeMap<usize, (u64, u64)> = BTreeMap::new();
+    for ((ti, _carrier), (gt, gf)) in per_target_carrier {
+        let ent = target_admittance.entry(ti).or_insert((0, 0));
+        ent.0 = ent.0.saturating_add(gt);
+        ent.1 = ent.1.saturating_add(gf);
     }
+
+    // Compute Belnap FOUR_2 effective ranking scores:
+    // - On contradiction/audit queries: Belnap `Both` (`g_true >= tau && g_false >= tau`) ranks by
+    //   Knowledge Order `g_true + g_false`, and conflicting `(v_thesis, v_antithesis)` pairs are
+    //   extracted for Slots 0 & 1 co-seating.
+    // - On normal / `current_state` / `knowledge_update` queries: Truth Order `g_true - g_false`.
+    let mut totals: BTreeMap<usize, u64> = BTreeMap::new();
+    // `(ti, is_belnap_both, knowledge_or_truth_score)` so Belnap `Both` theses (`gt >= tau && gf >= tau`)
+    // rank by Knowledge Order `gt + gf` ahead of incidental seed turns.
+    let mut best_thesis: Option<(usize, bool, u64)> = None;
+    let mut best_antithesis: Option<(usize, u64)> = None;
+    for (&ti, &(gt, gf)) in &target_admittance {
+        let is_both = gt >= BELNAP_BOTH_TAU_Q16 && gf >= BELNAP_BOTH_TAU_Q16;
+        let eff_g = if is_contradiction_q {
+            if is_both {
+                gt.saturating_add(gf)
+            } else {
+                gt.max(gf)
+            }
+        } else {
+            gt.saturating_sub(gf)
+        };
+        if eff_g > 0 {
+            totals.insert(ti, eff_g);
+        }
+        if is_contradiction_q {
+            if gt >= BELNAP_BOTH_TAU_Q16 {
+                let t_score = if is_both { gt.saturating_add(gf) } else { gt };
+                let better = best_thesis.is_none_or(|(prev_ti, prev_both, prev_s)| {
+                    (is_both, t_score, std::cmp::Reverse(ti))
+                        > (prev_both, prev_s, std::cmp::Reverse(prev_ti))
+                });
+                if better {
+                    best_thesis = Some((ti, is_both, t_score));
+                }
+            }
+            if gf >= BELNAP_BOTH_TAU_Q16
+                && best_antithesis.is_none_or(|(prev_ti, prev_g)| gf > prev_g || (gf == prev_g && ti < prev_ti))
+            {
+                best_antithesis = Some((ti, gf));
+            }
+        }
+    }
+
+    // Identify Belnap `Both` dual-witness pair `(v_thesis, v_antithesis)` on contradiction/audit queries.
+    let belnap_dual_pair: Option<(usize, usize)> = if is_contradiction_q {
+        let thesis_opt = best_thesis.map(|(t, _, _)| t).or_else(|| {
+            inp.final_turn_indices
+                .iter()
+                .copied()
+                .take(MAX_SEED_TURNS)
+                .find(|&ti| {
+                    ti < nt
+                        && !inp.ix.turns[ti].is_backchannel
+                        && !inp.ix.turns[ti].is_pure_info_question
+                        && !turn_is_negated(inp.ix, ti)
+                })
+        });
+        thesis_opt.and_then(|vt| {
+            let anti = best_antithesis
+                .filter(|&(va, _)| va != vt)
+                .map(|(va, _)| va)
+                .or_else(|| {
+                    target_admittance
+                        .iter()
+                        .filter(|&(&ti, &(_, gf))| ti != vt && gf >= BELNAP_BOTH_TAU_Q16)
+                        .max_by(|a, b| a.1.1.cmp(&b.1.1).then_with(|| b.0.cmp(a.0)))
+                        .map(|(&ti, _)| ti)
+                });
+            anti.map(|va| (vt, va))
+        })
+    } else {
+        None
+    };
 
     let mut ranked: Vec<(usize, u64)> = totals.iter().map(|(&ti, &g)| (ti, g)).collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -802,6 +992,8 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         sup_live_leaf_of_h0,
         ranked_targets: ranked,
         target_scores: totals,
+        target_admittance,
+        belnap_dual_pair,
         witness_spine,
         witness_receipt_ids,
     }
@@ -957,6 +1149,43 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
     let Some(&h0) = ctx.final_turn_indices.first() else {
         return;
     };
+
+    // Case 0 (#853 AC GhostCurrent): Belnap `Both` contradiction/audit dual-witness co-seating.
+    // Co-seats BOTH `[v_thesis, v_antithesis]` into Slots 0 & 1 (and syncs their owning sessions).
+    if is_contradiction_or_audit_query(&ctx.q.text)
+        && let Some((v_thesis, v_antithesis)) = ctx.res.belnap_dual_pair
+        && v_thesis < ctx.ix.turns.len()
+        && v_antithesis < ctx.ix.turns.len()
+        && v_thesis != v_antithesis
+    {
+        for &target_ti in &[v_antithesis, v_thesis] {
+            if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == target_ti) {
+                ctx.final_turn_indices.remove(pos);
+            }
+            ctx.final_turn_indices.insert(0, target_ti);
+        }
+        if ctx.final_turn_indices.len() > ctx.k {
+            ctx.final_turn_indices.truncate(ctx.k);
+        }
+        let s_thesis = ctx.ix.turns[v_thesis].session;
+        let s_anti = ctx.ix.turns[v_antithesis].session;
+        let sess_pair: Vec<usize> = if s_thesis == s_anti {
+            vec![s_thesis]
+        } else {
+            vec![s_anti, s_thesis]
+        };
+        for s_idx in sess_pair {
+            if let Some(spos) = ctx.final_session_indices.iter().position(|&s| s == s_idx) {
+                ctx.final_session_indices.remove(spos);
+            }
+            ctx.final_session_indices.insert(0, s_idx);
+        }
+        if ctx.final_session_indices.len() > ctx.k {
+            ctx.final_session_indices.truncate(ctx.k);
+        }
+        return;
+    }
+
     let h0_sup = turn_is_superseded(ctx.ix, h0);
     let sp_single = crate::retrieval::lexical::tier_bridge_q16::detect_single_subject_speaker(
         ctx.ix,
@@ -1047,6 +1276,11 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
                     best_ti,
                     &ctx.q.text,
                 )
+            {
+                return None;
+            }
+            if let Some(&(gt, gf)) = ctx.res.target_admittance.get(&best_ti)
+                && gf >= gt
             {
                 return None;
             }

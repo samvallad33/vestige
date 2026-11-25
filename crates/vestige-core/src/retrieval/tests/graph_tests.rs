@@ -390,3 +390,242 @@ fn issue_854_outcome_conductance_redirects_current_with_receipts_and_bit_exact_r
     assert_eq!(plast.target_scores, replay.target_scores);
     assert_eq!(plast.witness_receipt_ids, replay.witness_receipt_ids);
 }
+
+#[test]
+fn issue_853_ac_constructive_interference_vs_analepsis_flashback_and_negation() {
+    use crate::retrieval::graph::ghostcurrent_mdl_q16::{GhostCurrentInput, run_ghostcurrent_mdl_q16};
+
+    let sessions = vec![
+        Session {
+            id: "s0".into(),
+            date: String::new(),
+            timestamp: 100,
+            turns: vec![Turn {
+                id: "t0".into(),
+                role: "user".into(),
+                content: "Next month VortexEngine will ship with CobaltMesh and QuartzCache.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s1".into(),
+            date: String::new(),
+            timestamp: 200,
+            turns: vec![Turn {
+                id: "t1_flashback".into(),
+                role: "user".into(),
+                content: "Years earlier VortexEngine had used LegacyTape storage.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s2".into(),
+            date: String::new(),
+            timestamp: 300,
+            turns: vec![Turn {
+                id: "t2_negated".into(),
+                role: "user".into(),
+                content: "VortexEngine does not use CobaltMesh in production.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s3".into(),
+            date: String::new(),
+            timestamp: 400,
+            turns: vec![Turn {
+                id: "t3_live".into(),
+                role: "user".into(),
+                content: "VortexEngine runs CobaltMesh and QuartzCache on HelsinkiCluster.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s4".into(),
+            date: String::new(),
+            timestamp: 500,
+            turns: vec![Turn {
+                id: "t4_decoy".into(),
+                role: "user".into(),
+                content: "VortexEngine documentation mentions OsloNode.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+    ];
+    let p = Params::default();
+    let ix = build_index(&sessions, &p);
+    let q = Query {
+        text: "What cluster does VortexEngine currently run on?".into(),
+        date: String::new(),
+    };
+    let mut plan = plan_query(&ix, &q, &p);
+    plan.intent.current_state = true;
+    let q_cnt = plan.groups.len().min(64);
+    let q_mask = if q_cnt == 0 { 0 } else { (1u64 << q_cnt) - 1 };
+    let t_own = vec![10.0f32, 0.0, 0.0, 0.0, 0.0];
+    let t_exact_mask = vec![1u64, 0, 0, 0, 0];
+    let final_turns = vec![0usize];
+    let inp = GhostCurrentInput {
+        ix: &ix,
+        plan: &plan,
+        q: &q,
+        eff_it: &plan.intent,
+        t_own: &t_own,
+        t_exact_mask: &t_exact_mask,
+        final_turn_indices: &final_turns,
+        q_group_mask: q_mask,
+        q_group_cnt: q_cnt,
+        deficit_a: false,
+        deficit_b: true,
+        is_encyclopedic_multi_doc: false,
+    };
+    let res = run_ghostcurrent_mdl_q16(&inp);
+    assert!(res.deficit_fired);
+    assert_eq!(
+        res.ranked_targets.first().map(|&(ti, _)| ti),
+        Some(3),
+        "3 agreeing carriers onto t3_live must beat single-carrier decoy, flashback, and negated paths: {:?}",
+        res.ranked_targets
+    );
+    let (live_gt, live_gf) = res.target_admittance.get(&3).copied().unwrap_or((0, 0));
+    let (decoy_gt, _) = res.target_admittance.get(&4).copied().unwrap_or((0, 0));
+    let (flash_gt, flash_gf) = res.target_admittance.get(&1).copied().unwrap_or((0, 0));
+    let (neg_gt, neg_gf) = res.target_admittance.get(&2).copied().unwrap_or((0, 0));
+    assert!(
+        live_gt > decoy_gt && live_gt > live_gf,
+        "3 agreeing parallel carriers must constructively amplify G_t ({live_gt}) > decoy ({decoy_gt}) and G_f ({live_gf})"
+    );
+    assert!(
+        flash_gf > 0 && flash_gt <= flash_gf,
+        "prospective->flashback analepsis clash must deposit into G_f (gt={flash_gt}, gf={flash_gf})"
+    );
+    assert!(
+        neg_gf > 0 && neg_gt <= neg_gf,
+        "negated turn under current_state must deposit into G_f (gt={neg_gt}, gf={neg_gf})"
+    );
+}
+
+#[test]
+fn issue_853_belnap_both_dual_witness_coseats_thesis_and_antithesis_slots_0_and_1() {
+    use crate::retrieval::graph::ghostcurrent_mdl_q16::{
+        GhostCurrentInput, GhostCurrentSlot0Ctx, apply_ghostcurrent_slot0_promotion,
+        run_ghostcurrent_mdl_q16,
+    };
+
+    let sessions = vec![
+        Session {
+            id: "s0".into(),
+            date: String::new(),
+            timestamp: 100,
+            turns: vec![Turn {
+                id: "t0_seed".into(),
+                role: "user".into(),
+                content: "Security audit opened for OrionCore encryption.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s1".into(),
+            date: String::new(),
+            timestamp: 200,
+            turns: vec![Turn {
+                id: "t1_thesis".into(),
+                role: "user".into(),
+                content: "OrionCore uses ArgonCipher encryption in production.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s2".into(),
+            date: String::new(),
+            timestamp: 300,
+            turns: vec![Turn {
+                id: "t2_antithesis".into(),
+                role: "user".into(),
+                content: "OrionCore does not use ArgonCipher encryption in production.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s3".into(),
+            date: String::new(),
+            timestamp: 400,
+            turns: vec![Turn {
+                id: "t3_noise".into(),
+                role: "user".into(),
+                content: "We baked sourdough loaves on Sunday afternoon.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+    ];
+    let p = Params::default();
+    let ix = build_index(&sessions, &p);
+    let q = Query {
+        text: "Is there a contradiction about whether OrionCore uses ArgonCipher?".into(),
+        date: String::new(),
+    };
+    let plan = plan_query(&ix, &q, &p);
+    let q_cnt = plan.groups.len().min(64);
+    let q_mask = if q_cnt == 0 { 0 } else { (1u64 << q_cnt) - 1 };
+    let t_own = vec![10.0f32, 4.0, 4.0, 0.0];
+    let t_exact_mask = vec![1u64, 1, 1, 0];
+    let mut final_turns = vec![0usize, 3, 1, 2];
+    let mut final_sessions = vec![0usize, 3, 1, 2];
+    let inp = GhostCurrentInput {
+        ix: &ix,
+        plan: &plan,
+        q: &q,
+        eff_it: &plan.intent,
+        t_own: &t_own,
+        t_exact_mask: &t_exact_mask,
+        final_turn_indices: &final_turns,
+        q_group_mask: q_mask,
+        q_group_cnt: q_cnt,
+        deficit_a: false,
+        deficit_b: false,
+        is_encyclopedic_multi_doc: false,
+    };
+    let res = run_ghostcurrent_mdl_q16(&inp);
+    assert!(res.deficit_fired && res.can_override_slot0);
+    assert_eq!(
+        res.belnap_dual_pair,
+        Some((1, 2)),
+        "contradiction query must pair thesis t1 and negated antithesis t2: adm={:?}",
+        res.target_admittance
+    );
+
+    let mut s0_ctx = GhostCurrentSlot0Ctx {
+        ix: &ix,
+        plan: &plan,
+        q: &q,
+        eff_it: &plan.intent,
+        pref_on: false,
+        deficit_a: false,
+        res: &res,
+        t_exact_mask: &t_exact_mask,
+        q_group_mask: q_mask,
+        k: 4,
+        final_turn_indices: &mut final_turns,
+        final_session_indices: &mut final_sessions,
+    };
+    apply_ghostcurrent_slot0_promotion(&mut s0_ctx);
+    assert_eq!(
+        &final_turns[..2],
+        &[1usize, 2usize],
+        "Belnap Both must co-seat [v_thesis, v_antithesis] into Slots 0 & 1"
+    );
+    assert_eq!(
+        &final_sessions[..2],
+        &[1usize, 2usize],
+        "Belnap Both must sync thesis and antithesis sessions into Session Slots 0 & 1"
+    );
+}
