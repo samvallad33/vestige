@@ -463,8 +463,9 @@ pub(in crate::retrieval) fn apply_lambek_qud_slot0_tiebreak(
 
     let t0_sess = ctx.ix.turns[t0].session;
     let t0_scene = ctx.t_scene.get(t0).copied().unwrap_or(0.0);
-    let t0_substantive_user =
-        !t0_unsaturated_echo && (ctx.ix.turns[t0].field == 0 || ctx.eff_it.assistant_attribution);
+    // Any non-echo declarative Slot-0 turn (including Speaker #2 `field == 1` on named-speaker
+    // dialogues and assistant-authored facts) must never be displaced across sessions.
+    let t0_is_protected_decl = !t0_unsaturated_echo;
 
     let mut best: Option<(usize, i64, u32)> = None;
     for (slot, sc) in scores.iter().enumerate().skip(1) {
@@ -475,9 +476,9 @@ pub(in crate::retrieval) fn apply_lambek_qud_slot0_tiebreak(
             continue;
         }
         // Protect substantive declarative Slot-0 turns from cross-session displacement:
-        // only allow cross-session Slot-0 swap when incumbent Slot 0 is an unsaturated echo/question
-        // or assistant non-target turn; otherwise restrict to decisive same-session tie-break.
-        if t0_substantive_user {
+        // only allow cross-session Slot-0 swap when incumbent Slot 0 is an unsaturated echo/question;
+        // otherwise restrict to decisive same-session tie-break.
+        if t0_is_protected_decl {
             if ctx.ix.turns[sc.turn_idx].session != t0_sess {
                 continue;
             }
@@ -492,7 +493,7 @@ pub(in crate::retrieval) fn apply_lambek_qud_slot0_tiebreak(
         if ex_c == 0 || (ex_c < ex0 && !t0_unsaturated_echo) {
             continue;
         }
-        let min_margin = if t0_substantive_user {
+        let min_margin = if t0_is_protected_decl {
             Q16_ONE
         } else {
             Q16_ONE >> 1

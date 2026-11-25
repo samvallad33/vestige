@@ -219,13 +219,36 @@ fn run_open_circuit_bridge_peeling(
     }
 
     let spine_set: DetHashSet<usize> = inp.ghostcurrent.witness_spine.iter().copied().collect();
-    // Seat Slot 0 + at most 2 genuine residual missing-facet turns so existing BM25F/GBDT Top-5
-    // turns are never blindly evicted by unrelated bridge postings.
-    let target_k = inp.k.min(3).min(final_turn_indices.len().max(1));
+    // Preserve Slot 0 and any distinct-session exact-matching turns already seated in Slots 1..3;
+    // only replace redundant same-session clones or Slot 4 with at most 1 genuine `newly_covered > 0`
+    // residual/bridge turn so calibrated Top-4 multi-session evidence is never evicted.
+    let target_k = inp.k.min(5).min(final_turn_indices.len().max(1));
     let mut selected: Vec<usize> = vec![h0];
+    let preserve_cap = target_k.saturating_sub(1).min(3);
+    // Inspect strictly Slots 1..=2 so distinct-session incumbents stay locked while same-session
+    // clones or empty slots yield cleanly to a residual `newly_covered > 0` bridge turn.
+    for &ti in final_turn_indices.iter().skip(1).take(2) {
+        if selected.len() >= preserve_cap {
+            break;
+        }
+        let tr = &inp.ix.turns[ti];
+        let t_m = inp.t_exact_mask.get(ti).copied().unwrap_or(0) & inp.q_group_mask;
+        if t_m != 0
+            && !covered_sessions.contains(&tr.session)
+            && !tr.is_backchannel
+            && !turn_is_superseded(inp.ix, ti)
+            && !is_discourse_closure_or_meta_echo(inp.ix, ti, inp.query)
+        {
+            selected.push(ti);
+            covered_mask |= t_m;
+            covered_sessions.insert(tr.session);
+        }
+    }
+    let preserved_len = selected.len();
 
-    // Greedy submodular marginal gain for Slots 1..target_k (strictly requiring newly_covered > 0).
-    while selected.len() < target_k {
+    // Greedy submodular marginal gain for at most 1 residual slot (strictly requiring newly_covered > 0).
+    let max_total = (preserved_len + 1).min(target_k);
+    while selected.len() < max_total {
         let uncovered_mask = inp.q_group_mask & !covered_mask;
         if uncovered_mask == 0 {
             break;
@@ -304,11 +327,11 @@ fn run_open_circuit_bridge_peeling(
         covered_sessions.insert(inp.ix.turns[win_ti].session);
     }
 
-    if selected.len() <= 1 {
+    if selected.len() <= preserved_len {
         return;
     }
 
-    // Splice `selected` to the front of `final_turn_indices` and sync `final_session_indices`.
+    // Splice `selected` to the front of `final_turn_indices`.
     let orig_tlen = final_turn_indices.len();
     let sel_set: DetHashSet<usize> = selected.iter().copied().collect();
     let mut merged = selected.clone();
@@ -320,11 +343,35 @@ fn run_open_circuit_bridge_peeling(
     merged.truncate(orig_tlen.max(inp.k));
     *final_turn_indices = merged;
 
-    sync_sessions_from_turns(inp.ix, &selected, final_session_indices);
+    // Only sync the newly peeled residual turn's session at `preserved_len` (Slot 1 when Slots 1..
+    // were clones/empty, or Slot 3/4 when Slots 0..3 already held distinct matching sessions),
+    // never evicting calibrated Top-`preserved_len` sessions.
+    if let Some(&new_ti) = selected.last() {
+        let new_si = inp.ix.turns[new_ti].session;
+        let orig_slen = final_session_indices.len();
+        let target_s_slot = preserved_len.min(inp.k.saturating_sub(1));
+        if orig_slen > target_s_slot
+            && !final_session_indices
+                .iter()
+                .take(target_s_slot)
+                .any(|&s| s == new_si)
+        {
+            if let Some(pos) = final_session_indices.iter().position(|&s| s == new_si) {
+                if pos > target_s_slot {
+                    final_session_indices.remove(pos);
+                    final_session_indices.insert(target_s_slot, new_si);
+                }
+            } else {
+                final_session_indices.insert(target_s_slot, new_si);
+                final_session_indices.truncate(orig_slen);
+            }
+        }
+    }
 }
 
 /// Mode B: Multi-Session Instance Cover — guarantees up to `k` distinct matching sessions land
-/// inside Top-5 on counting/aggregation/exhaustive queries instead of 1 session taking 3 slots.
+/// inside Top-5 turns on counting/aggregation queries while preserving globally-ranked
+/// `final_session_indices` untouched.
 fn run_multi_session_instance_cover(
     inp: &SubmodularCoverInput<'_>,
     final_turn_indices: &mut Vec<usize>,
@@ -338,7 +385,33 @@ fn run_multi_session_instance_cover(
     let mut used_sessions: DetHashSet<usize> = DetHashSet::default();
     used_sessions.insert(inp.ix.turns[h0].session);
 
-    // Pass 1: pull the highest-ranked matching turn from each distinct session in `final_turn_indices`.
+    // Pass 1: align turns with the globally-optimized Top-`target_k` distinct sessions first.
+    for &si in final_session_indices.iter().take(target_k) {
+        if selected.len() >= target_k {
+            break;
+        }
+        if used_sessions.contains(&si) {
+            continue;
+        }
+        if let Some(&ti) = final_turn_indices.iter().find(|&&ti| {
+            let tr = &inp.ix.turns[ti];
+            tr.session == si
+                && !tr.is_backchannel
+                && !turn_is_superseded(inp.ix, ti)
+                && ((inp.t_exact_mask.get(ti).copied().unwrap_or(0) & inp.q_group_mask) != 0
+                    || inp.t_scene.get(ti).copied().unwrap_or(0.0) > 0.0)
+        }) {
+            selected.push(ti);
+            used_sessions.insert(si);
+        } else if inp.s_score.get(si).copied().unwrap_or(0.0) > 0.0
+            && let Some(best_ti) = best_substantive_turn_in_session(inp, si)
+        {
+            selected.push(best_ti);
+            used_sessions.insert(si);
+        }
+    }
+
+    // Pass 2: fill any remaining distinct-session turn slots from `final_turn_indices`.
     for &ti in final_turn_indices.iter().skip(1) {
         if selected.len() >= target_k {
             break;
@@ -356,22 +429,6 @@ fn run_multi_session_instance_cover(
         }
     }
 
-    // Pass 2: if still < target_k, pick the best substantive turn from remaining top-scored sessions.
-    if selected.len() < target_k {
-        for &si in final_session_indices.iter().take(12) {
-            if selected.len() >= target_k {
-                break;
-            }
-            if used_sessions.contains(&si) || inp.s_score.get(si).copied().unwrap_or(0.0) <= 0.0 {
-                continue;
-            }
-            if let Some(best_ti) = best_substantive_turn_in_session(inp, si) {
-                selected.push(best_ti);
-                used_sessions.insert(si);
-            }
-        }
-    }
-
     if selected.len() <= 1 {
         return;
     }
@@ -386,7 +443,6 @@ fn run_multi_session_instance_cover(
     }
     merged.truncate(orig_tlen.max(inp.k));
     *final_turn_indices = merged;
-    sync_sessions_from_turns(inp.ix, &selected, final_session_indices);
 }
 
 /// Mode C: Maximum-Entropy Chronological Spine Stratifier — partitions all qualified matching
@@ -515,37 +571,6 @@ fn best_substantive_turn_in_session(inp: &SubmodularCoverInput<'_>, si: usize) -
         }
     }
     best.map(|(ti, _)| ti)
-}
-
-/// Synchronize `final_session_indices` so the sessions of `selected_turns` occupy the matching
-/// leading slots without duplicates, while preserving incumbent `final_session_indices[0]`.
-fn sync_sessions_from_turns(
-    ix: &Index,
-    selected_turns: &[usize],
-    final_session_indices: &mut Vec<usize>,
-) {
-    let orig_len = final_session_indices.len();
-    let mut leading_sessions: Vec<usize> = Vec::new();
-    if let Some(&orig_s0) = final_session_indices.first() {
-        leading_sessions.push(orig_s0);
-    }
-    for &ti in selected_turns {
-        let si = ix.turns[ti].session;
-        if !leading_sessions.contains(&si) {
-            leading_sessions.push(si);
-        }
-    }
-    let lead_set: DetHashSet<usize> = leading_sessions.iter().copied().collect();
-    let mut merged = leading_sessions;
-    for &si in final_session_indices.iter() {
-        if !lead_set.contains(&si) {
-            merged.push(si);
-        }
-    }
-    if orig_len > 0 {
-        merged.truncate(orig_len);
-    }
-    *final_session_indices = merged;
 }
 
 /// Stateless slice entrypoint for [`apply_submodular_residual_cover`].

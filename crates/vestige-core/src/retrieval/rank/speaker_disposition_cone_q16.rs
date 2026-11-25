@@ -505,7 +505,8 @@ pub(in crate::retrieval) fn score_speaker_disposition_candidates_q16(
     cands
 }
 
-/// Read-only slice input for [`apply_speaker_disposition_cone_slices`].
+/// Read-only slice input for unit testing [`apply_speaker_disposition_cone_slices`].
+#[cfg(test)]
 pub(in crate::retrieval) struct SpeakerDispositionSliceInput<'a> {
     pub(in crate::retrieval) ix: &'a Index,
     pub(in crate::retrieval) query: &'a str,
@@ -515,7 +516,8 @@ pub(in crate::retrieval) struct SpeakerDispositionSliceInput<'a> {
     pub(in crate::retrieval) k: usize,
 }
 
-/// Stateless slice seating entrypoint for [`apply_speaker_disposition_cone_seating`].
+/// Stateless slice seating entrypoint for unit testing [`score_speaker_disposition_candidates_q16`].
+#[cfg(test)]
 pub(in crate::retrieval) fn apply_speaker_disposition_cone_slices(
     inp: &SpeakerDispositionSliceInput<'_>,
     final_turn_indices: &mut Vec<usize>,
@@ -595,21 +597,76 @@ pub(in crate::retrieval) fn apply_speaker_disposition_cone_slices(
     }
 }
 
-/// Pipeline entrypoint for `RankCtx` (single-line wiring in Stage 12).
+/// Stage 12 Slot-0..3-protected entrypoint for `RankCtx`: preserves calibrated `implicit_bridge`
+/// and BM25F Slots `0..3` unconditionally and co-seats the strongest stranded dispositional-cone
+/// candidate into Slot 4 (official Top-5), keeping `final_session_indices` synchronized.
 pub(in crate::retrieval) fn apply_speaker_disposition_cone_seating(ctx: &mut RankCtx<'_>) {
-    let inp = SpeakerDispositionSliceInput {
-        ix: ctx.ix,
-        query: &ctx.q.text,
-        t_exact_mask: &ctx.t_exact_mask,
-        q_group_mask: ctx.q_group_mask,
-        q_group_cnt: ctx.q_group_cnt,
-        k: ctx.k,
+    if ctx.final_turn_indices.len() < 5
+        || ctx.final_session_indices.len() < 5
+        || ctx.k < 5
+        || ctx.ix.has_tool_calls
+    {
+        return;
+    }
+    let h0 = ctx.final_turn_indices[0];
+    let h0_full_cov = ctx.q_group_cnt > 0
+        && (ctx.t_exact_mask.get(h0).copied().unwrap_or(0) & ctx.q_group_mask).count_ones() as usize
+            >= ctx.q_group_cnt;
+    if h0_full_cov {
+        return;
+    }
+
+    let cands = score_speaker_disposition_candidates_q16(ctx.ix, &ctx.q.text);
+    if cands.is_empty() {
+        return;
+    }
+
+    let Some(cand) = cands.iter().copied().find(|c| {
+        !ctx.final_session_indices
+            .iter()
+            .take(4)
+            .any(|&s| s == c.session_idx)
+    }) else {
+        return;
     };
-    apply_speaker_disposition_cone_slices(
-        &inp,
-        &mut ctx.final_turn_indices,
-        &mut ctx.final_session_indices,
-    );
+
+    let target_slot = 4usize;
+    let orig_tlen = ctx.final_turn_indices.len();
+    if !ctx
+        .final_turn_indices
+        .iter()
+        .take(target_slot)
+        .any(|&t| t == cand.turn_idx)
+    {
+        if let Some(pos) = ctx
+            .final_turn_indices
+            .iter()
+            .position(|&t| t == cand.turn_idx)
+        {
+            ctx.final_turn_indices.remove(pos);
+        }
+        ctx.final_turn_indices.insert(target_slot, cand.turn_idx);
+        ctx.final_turn_indices.truncate(orig_tlen);
+    }
+
+    let orig_slen = ctx.final_session_indices.len();
+    if !ctx
+        .final_session_indices
+        .iter()
+        .take(target_slot)
+        .any(|&s| s == cand.session_idx)
+    {
+        if let Some(spos) = ctx
+            .final_session_indices
+            .iter()
+            .position(|&s| s == cand.session_idx)
+        {
+            ctx.final_session_indices.remove(spos);
+        }
+        ctx.final_session_indices
+            .insert(target_slot, cand.session_idx);
+        ctx.final_session_indices.truncate(orig_slen);
+    }
 }
 
 #[cfg(test)]

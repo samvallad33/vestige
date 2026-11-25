@@ -355,7 +355,8 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
     scores
 }
 
-/// Read-only slice input for [`apply_gricean_constraint_slices`].
+/// Read-only slice input for unit testing [`apply_gricean_constraint_slices`].
+#[cfg(test)]
 pub(in crate::retrieval) struct GriceanSliceInput<'a> {
     pub(in crate::retrieval) ix: &'a Index,
     pub(in crate::retrieval) plan: &'a QueryPlan,
@@ -365,7 +366,8 @@ pub(in crate::retrieval) struct GriceanSliceInput<'a> {
     pub(in crate::retrieval) k: usize,
 }
 
-/// Stateless slice entrypoint for [`apply_gricean_constraint_turn_seating`].
+/// Stateless slice entrypoint for unit testing [`score_gricean_constraint_turns_q16`].
+#[cfg(test)]
 pub(in crate::retrieval) fn apply_gricean_constraint_slices(
     inp: &GriceanSliceInput<'_>,
     final_turn_indices: &mut Vec<usize>,
@@ -435,19 +437,56 @@ pub(in crate::retrieval) fn apply_gricean_constraint_slices(
     }
 }
 
-/// Intra-session Gricean Novel-Constraint turn seating pass.
-/// Strictly preserves Top-3 session ordering while promoting novel-constraint user turns
-/// inside those sessions above generic query-echo chatter.
+/// Intra-session Gricean Novel-Constraint turn seating pass (Stage 12).
+/// Strictly preserves Top-3 session ordering and calibrated Slots `0..3`, rescuing the strongest
+/// stranded novel-constraint user turn inside those sessions directly into Slot 3/4 (official Top-5).
 pub(in crate::retrieval) fn apply_gricean_constraint_turn_seating(ctx: &mut RankCtx<'_>) {
-    let inp = GriceanSliceInput {
-        ix: ctx.ix,
-        plan: &ctx.plan,
-        eff_it: &ctx.eff_it,
-        query: &ctx.q.text,
-        pref_on: ctx.pref_on,
-        k: ctx.k,
+    if ctx.final_turn_indices.len() < 5
+        || ctx.final_session_indices.is_empty()
+        || ctx.k < 5
+        || ctx.ix.has_tool_calls
+        || c2_named_session(ctx.ix, ctx.final_turn_indices[0])
+    {
+        return;
+    }
+
+    let top_sessions: Vec<usize> = ctx.final_session_indices.iter().copied().take(3).collect();
+    let cands = score_gricean_constraint_turns_q16(
+        ctx.ix,
+        &ctx.plan,
+        &ctx.eff_it,
+        &ctx.q.text,
+        ctx.pref_on,
+        &top_sessions,
+    );
+    if cands.is_empty() {
+        return;
+    }
+
+    let h0 = ctx.final_turn_indices[0];
+    let h0_is_weak_echo =
+        ctx.ix.turns[h0].field != 0 || ctx.ix.turns[h0].is_pure_info_question;
+    let target_slot = if h0_is_weak_echo { 3usize } else { 4usize };
+
+    let Some(cand) = cands.iter().copied().find(|c| {
+        !ctx.final_turn_indices
+            .iter()
+            .take(target_slot)
+            .any(|&t| t == c.turn_idx)
+    }) else {
+        return;
     };
-    apply_gricean_constraint_slices(&inp, &mut ctx.final_turn_indices, &ctx.final_session_indices);
+
+    let orig_tlen = ctx.final_turn_indices.len();
+    if let Some(pos) = ctx
+        .final_turn_indices
+        .iter()
+        .position(|&t| t == cand.turn_idx)
+    {
+        ctx.final_turn_indices.remove(pos);
+    }
+    ctx.final_turn_indices.insert(target_slot, cand.turn_idx);
+    ctx.final_turn_indices.truncate(orig_tlen);
 }
 
 #[cfg(test)]

@@ -486,13 +486,22 @@ pub(in crate::retrieval) fn apply_genesis_spine_and_ku_polarity(ctx: &mut RankCt
             };
             if let Some(win_ti) = select_ku_mutation_winner_q16(&kctx, &ctx.final_turn_indices) {
                 let t0 = ctx.final_turn_indices[0];
+                let explicitly_supersedes_t0 = ctx.ix.turns[win_ti].supersedes_turns.contains(&t0);
+                let win_si = ctx.ix.turns[win_ti].session;
+                let same_session = win_si == ctx.ix.turns[t0].session;
+                // Only promote to Slot 0 on a verified `supersedes_turns` edge or a proven
+                // same-session revision; never displace globally-ranked `final_session_indices`
+                // on cross-session textual heuristics alone.
+                if !explicitly_supersedes_t0 && !same_session {
+                    return;
+                }
                 let t0_prof = analyze_turn_mutation_polarity_q16(ctx.ix, t0);
-                let proven_supersedes_t0 = ctx.ix.turns[win_ti].supersedes_turns.contains(&t0)
+                let proven_slot0 = explicitly_supersedes_t0
                     || (q_pol == TemporalQueryPolarity::LatestCurrentState
                         && t0_prof.stale_q16 > 0)
                     || (q_pol == TemporalQueryPolarity::GenesisFirst
                         && t0_prof.has_explicit_revision);
-                let target_slot = if proven_supersedes_t0 { 0usize } else { 1usize };
+                let target_slot = if proven_slot0 { 0usize } else { 1usize };
 
                 let orig_tlen = ctx.final_turn_indices.len();
                 if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == win_ti) {
@@ -507,19 +516,22 @@ pub(in crate::retrieval) fn apply_genesis_spine_and_ku_polarity(ctx: &mut RankCt
                     ctx.final_turn_indices.truncate(orig_tlen);
                 }
 
-                let win_si = ctx.ix.turns[win_ti].session;
-                let orig_slen = ctx.final_session_indices.len();
-                if orig_slen > target_slot {
-                    if let Some(spos) = ctx.final_session_indices.iter().position(|&s| s == win_si) {
-                        if spos > target_slot {
-                            ctx.final_session_indices.remove(spos);
+                if explicitly_supersedes_t0 {
+                    let orig_slen = ctx.final_session_indices.len();
+                    if orig_slen > target_slot {
+                        if let Some(spos) =
+                            ctx.final_session_indices.iter().position(|&s| s == win_si)
+                        {
+                            if spos > target_slot {
+                                ctx.final_session_indices.remove(spos);
+                                let ins_s = target_slot.min(ctx.final_session_indices.len());
+                                ctx.final_session_indices.insert(ins_s, win_si);
+                            }
+                        } else {
                             let ins_s = target_slot.min(ctx.final_session_indices.len());
                             ctx.final_session_indices.insert(ins_s, win_si);
+                            ctx.final_session_indices.truncate(orig_slen);
                         }
-                    } else {
-                        let ins_s = target_slot.min(ctx.final_session_indices.len());
-                        ctx.final_session_indices.insert(ins_s, win_si);
-                        ctx.final_session_indices.truncate(orig_slen);
                     }
                 }
             }

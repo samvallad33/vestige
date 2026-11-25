@@ -317,31 +317,8 @@ pub(in crate::retrieval) fn score_revealed_preference_turns_q16(
 
     let ns_total = (ix.session_turns.len() as usize).max(1);
     let sw = stopwords();
-    // Hoist query head expansion set (in lemma space) once per query rather than per turn so
-    // cross-POS gloss/Roget/ConceptNet neighbors from turns meet query heads in O(1) lookup.
-    let mut q_meet_set: DetHashSet<&'static str> = DetHashSet::default();
-    for h_word in heads.iter().take(4) {
-        for (lem, _) in crate::roget::conceptual_neighbors(h_word, 32) {
-            q_meet_set.insert(lem);
-        }
-        for (lem, _) in crate::conceptnet::two_hop_neighbors(h_word, 20) {
-            q_meet_set.insert(lem);
-        }
-        for lem in crate::wordnet::gloss_and_compound_concepts(h_word)
-            .into_iter()
-            .take(28)
-        {
-            q_meet_set.insert(lem);
-        }
-        for (lem, _) in crate::wordnet::full_lexicon_neighbors(h_word)
-            .into_iter()
-            .take(28)
-        {
-            q_meet_set.insert(lem);
-        }
-    }
-    let mut candidates: Vec<RevealedPrefCandidate> = Vec::new();
-
+    // Pass 1: fast O(N) forward cone overlap over all eligible self-disclosure user turns.
+    let mut pre_scored: Vec<(usize, u64, u64, usize)> = Vec::new();
     for (ti, tr) in ix.turns.iter().enumerate() {
         if tr.field != 0 || tr.is_backchannel || turn_is_superseded(ix, ti) {
             continue;
@@ -350,8 +327,6 @@ pub(in crate::retrieval) fn score_revealed_preference_turns_q16(
         if disc_q16 == 0 {
             continue;
         }
-
-        // Forward cone overlap against turn content tokens.
         let mut cone_ic_q16: u64 = 0;
         let mut matched_ids: usize = 0;
         for &cid in &tr.content {
@@ -360,10 +335,63 @@ pub(in crate::retrieval) fn score_revealed_preference_turns_q16(
                 matched_ids += 1;
             }
         }
+        pre_scored.push((ti, disc_q16, cone_ic_q16, matched_ids));
+    }
 
-        // Reverse upward WordNet Heyting + cross-POS gloss/Roget/ConceptNet meet on the turn's
-        // rarest 5 content words whenever forward cone resonance is still below 1.0 Q16.
-        if cone_ic_q16 < Q16_ONE && !heads.is_empty() {
+    // Select at most 24 highest-disclosure turns needing reverse 4-lexicon upward meet,
+    // preventing O(N * 5 * 4) lexicon expansion spikes on 500-turn haystacks.
+    let mut rev_indices: Vec<usize> = pre_scored
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &(_, disc_q16, cone_ic_q16, _))| {
+            if cone_ic_q16 < Q16_ONE && disc_q16 >= Q16_ONE && !heads.is_empty() {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+        .collect();
+    rev_indices.sort_by(|&a, &b| {
+        pre_scored[b]
+            .1
+            .cmp(&pre_scored[a].1)
+            .then_with(|| pre_scored[b].2.cmp(&pre_scored[a].2))
+            .then_with(|| pre_scored[a].0.cmp(&pre_scored[b].0))
+    });
+    rev_indices.truncate(24);
+    let rev_set: DetHashSet<usize> = rev_indices.into_iter().collect();
+
+    // Build `q_meet_set` lazily once per query only if at least one high-disclosure turn needs it.
+    let mut q_meet_set: DetHashSet<&'static str> = DetHashSet::default();
+    if !rev_set.is_empty() {
+        for h_word in heads.iter().take(4) {
+            for (lem, _) in crate::roget::conceptual_neighbors(h_word, 32) {
+                q_meet_set.insert(lem);
+            }
+            for (lem, _) in crate::conceptnet::two_hop_neighbors(h_word, 20) {
+                q_meet_set.insert(lem);
+            }
+            for lem in crate::wordnet::gloss_and_compound_concepts(h_word)
+                .into_iter()
+                .take(28)
+            {
+                q_meet_set.insert(lem);
+            }
+            for (lem, _) in crate::wordnet::full_lexicon_neighbors(h_word)
+                .into_iter()
+                .take(28)
+            {
+                q_meet_set.insert(lem);
+            }
+        }
+    }
+
+    let mut candidates: Vec<RevealedPrefCandidate> = Vec::new();
+    for (idx, &(ti, disc_q16, mut cone_ic_q16, mut matched_ids)) in pre_scored.iter().enumerate() {
+        let tr = &ix.turns[ti];
+        // Reverse upward WordNet Heyting + cross-POS gloss/Roget/ConceptNet meet on the
+        // bounded Top-24 high-disclosure turns whose forward cone resonance is below 1.0 Q16.
+        if rev_set.contains(&idx) {
             let mut rare_words: Vec<(u32, &str)> = tr
                 .content
                 .iter()
@@ -490,6 +518,7 @@ pub(in crate::retrieval) fn score_revealed_preference_turns_q16(
 }
 
 /// Read-only slice input for [`apply_revealed_preference_cone_slices`].
+#[cfg(test)]
 pub(in crate::retrieval) struct RevealedPrefSliceInput<'a> {
     pub(in crate::retrieval) ix: &'a Index,
     pub(in crate::retrieval) plan: &'a QueryPlan,
@@ -502,7 +531,8 @@ pub(in crate::retrieval) struct RevealedPrefSliceInput<'a> {
     pub(in crate::retrieval) k: usize,
 }
 
-/// Stateless slice seating entrypoint for [`apply_revealed_preference_cone_seating`].
+/// Stateless slice seating entrypoint for unit testing [`score_revealed_preference_turns_q16`].
+#[cfg(test)]
 pub(in crate::retrieval) fn apply_revealed_preference_cone_slices(
     inp: &RevealedPrefSliceInput<'_>,
     final_turn_indices: &mut Vec<usize>,
@@ -585,26 +615,100 @@ pub(in crate::retrieval) fn apply_revealed_preference_cone_slices(
     }
 }
 
-/// Slot-0-protected Tier-2 Co-Seater: rescues revealed-preference turns stranded in Slots 5..N
-/// (or unseated) straight into Slots 1–2 (and Slot 0 only if incumbent Slot 0 is an assistant
-/// echo or lacks substantive coverage), keeping `final_session_indices` synchronized.
+/// Slot-0..3-protected Stage 12 Stranded-Preference Co-Seater: preserves `preference_lattice`'s
+/// calibrated Top-4 turns & sessions unconditionally, and rescues the strongest revealed-preference
+/// turn stranded in Slots `4..N` (or unseated with strong cone alignment) directly into Slot 4
+/// (index 4 = official Top-5).
 pub(in crate::retrieval) fn apply_revealed_preference_cone_seating(ctx: &mut RankCtx<'_>) {
-    let inp = RevealedPrefSliceInput {
-        ix: ctx.ix,
-        plan: &ctx.plan,
-        eff_it: &ctx.eff_it,
-        query: &ctx.q.text,
-        pref_on: ctx.pref_on,
-        t_exact_mask: &ctx.t_exact_mask,
-        q_group_mask: ctx.q_group_mask,
-        q_group_cnt: ctx.q_group_cnt,
-        k: ctx.k,
-    };
-    apply_revealed_preference_cone_slices(
-        &inp,
-        &mut ctx.final_turn_indices,
-        &mut ctx.final_session_indices,
+    if ctx.final_turn_indices.len() < 5
+        || ctx.final_session_indices.len() < 5
+        || ctx.k < 5
+        || ctx.ix.has_tool_calls
+        || c2_named_session(ctx.ix, ctx.final_turn_indices[0])
+    {
+        return;
+    }
+
+    let cands = score_revealed_preference_turns_q16(
+        ctx.ix,
+        &ctx.plan,
+        &ctx.eff_it,
+        &ctx.q.text,
+        ctx.pref_on,
     );
+    if cands.is_empty() {
+        return;
+    }
+
+    // Prefer the highest-scoring candidate whose session is currently stranded in Slots 4..12,
+    // or an unseated high-confidence (`cone_ic_q16 >= Q16_ONE`) self-disclosure candidate.
+    let pick = cands
+        .iter()
+        .copied()
+        .find(|c| {
+            !ctx.final_session_indices
+                .iter()
+                .take(4)
+                .any(|&s| s == c.session_idx)
+                && ctx
+                    .final_session_indices
+                    .iter()
+                    .skip(4)
+                    .take(8)
+                    .any(|&s| s == c.session_idx)
+        })
+        .or_else(|| {
+            cands.iter().copied().find(|c| {
+                c.cone_ic_q16 >= Q16_ONE
+                    && !ctx
+                        .final_session_indices
+                        .iter()
+                        .take(4)
+                        .any(|&s| s == c.session_idx)
+            })
+        });
+
+    let Some(cand) = pick else {
+        return;
+    };
+
+    let target_slot = 4usize;
+    let orig_tlen = ctx.final_turn_indices.len();
+    if !ctx
+        .final_turn_indices
+        .iter()
+        .take(target_slot)
+        .any(|&t| t == cand.turn_idx)
+    {
+        if let Some(pos) = ctx
+            .final_turn_indices
+            .iter()
+            .position(|&t| t == cand.turn_idx)
+        {
+            ctx.final_turn_indices.remove(pos);
+        }
+        ctx.final_turn_indices.insert(target_slot, cand.turn_idx);
+        ctx.final_turn_indices.truncate(orig_tlen);
+    }
+
+    let orig_slen = ctx.final_session_indices.len();
+    if !ctx
+        .final_session_indices
+        .iter()
+        .take(target_slot)
+        .any(|&s| s == cand.session_idx)
+    {
+        if let Some(spos) = ctx
+            .final_session_indices
+            .iter()
+            .position(|&s| s == cand.session_idx)
+        {
+            ctx.final_session_indices.remove(spos);
+        }
+        ctx.final_session_indices
+            .insert(target_slot, cand.session_idx);
+        ctx.final_session_indices.truncate(orig_slen);
+    }
 }
 
 #[cfg(test)]
