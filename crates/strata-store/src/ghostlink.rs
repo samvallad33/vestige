@@ -97,6 +97,97 @@ pub const W_TOUCHED_ARTIFACT: f64 = 0.8;
 pub const W_TOUCHED_ASSOCIATION: f64 = 0.25;
 /// Default per-memory cap on a propose page.
 pub const DEFAULT_PER_MEMORY_CAP: usize = 1;
+/// Fixed-point unit `1.0` in `Q16.16` for Self-Plasticizing Strata Conductance (`#854`).
+pub const CONDUCTANCE_Q16_ONE: u64 = 65_536;
+/// Lower clamp (`0.20 * Q16`) for outcome conductance multipliers so damped
+/// false pathways stay finite and auditable without deleting Strata log bytes.
+pub const OUTCOME_MULTIPLIER_MIN_Q16: u64 = 13_107;
+/// Upper clamp (`2.00 * Q16`) for outcome conductance multipliers on verified
+/// causal pathways.
+pub const OUTCOME_MULTIPLIER_MAX_Q16: u64 = 131_072;
+
+/// Pure-integer `Q16.16` conductance delta for one exact recorded outcome type.
+///
+/// Mirrors `vestige_core::composition::outcome_conductance_delta_q16` bit-for-bit
+/// with zero floats, zero embeddings, and zero content heuristics.
+pub fn outcome_conductance_delta_q16(outcome: &str) -> i64 {
+    match outcome {
+        "causal_walk_proved" | "proved" | "bisect_proved" => 26_214,
+        "accepted" => 22_938,
+        "helpful" => 16_384,
+        "user_promoted" => 13_107,
+        "submitted" => 9_830,
+        "needs_poc" => -3_277,
+        "user_demoted" => -13_107,
+        "duplicate_risk" => -22_938,
+        "closed_by_duplicate" => -26_214,
+        "dead_end"
+        | "rejected"
+        | "bad_severity"
+        | "closed_by_scope"
+        | "closed_by_false_assumption"
+        | "closed_by_user"
+        | "expired_lane" => -29_491,
+        _ => 0,
+    }
+}
+
+/// Deterministic `Q16.16` Hebbian conductance multiplier `M_outcome` derived
+/// strictly from exact recorded outcome types, clamped to
+/// `[OUTCOME_MULTIPLIER_MIN_Q16, OUTCOME_MULTIPLIER_MAX_Q16]`.
+pub fn outcome_conductance_multiplier_q16<S: AsRef<str>>(outcomes: &[S]) -> u64 {
+    let mut acc: i64 = CONDUCTANCE_Q16_ONE as i64;
+    for outcome in outcomes {
+        acc = acc.saturating_add(outcome_conductance_delta_q16(outcome.as_ref()));
+    }
+    acc.clamp(
+        OUTCOME_MULTIPLIER_MIN_Q16 as i64,
+        OUTCOME_MULTIPLIER_MAX_Q16 as i64,
+    ) as u64
+}
+
+/// Apply `M_outcome` in `Q16.16` to a base conductance:
+/// `kappa_eff = (kappa_base * M_outcome) >> 16`, floored at `1` for any positive
+/// base conductance so damped wires remain finite.
+pub fn apply_outcome_conductance_q16(base_conductance_q16: u64, multiplier_q16: u64) -> u64 {
+    if base_conductance_q16 == 0 {
+        return 0;
+    }
+    let scaled = ((u128::from(base_conductance_q16).saturating_mul(u128::from(multiplier_q16)))
+        >> 16) as u64;
+    scaled.max(1)
+}
+
+/// Exact integer series resistance `r = Q16^2 / kappa_eff` in `Q16.16`.
+///
+/// Reinforcing outcomes raise `kappa_eff` and lower series resistance;
+/// inhibitory (`dead_end`, `closed_by_false_assumption`) outcomes lower
+/// `kappa_eff` and raise resistance without erasing any log bytes.
+pub fn series_resistance_from_conductance_q16(effective_conductance_q16: u64) -> u64 {
+    let denom = u128::from(effective_conductance_q16.max(1));
+    let raw = (1u128 << 32) / denom;
+    raw.min(u128::from(u64::MAX)) as u64
+}
+
+/// One unordered memory pair with its deterministic `Q16.16` outcome-plasticized
+/// conductance multiplier, series resistance, and proof-carrying Strata receipt ids.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutcomeConductanceEdge {
+    /// Lower member memory id.
+    pub first_id: String,
+    /// Higher member memory id.
+    pub second_id: String,
+    /// Deterministic `Q16.16` multiplier `M_outcome(first_id, second_id)`.
+    pub multiplier_q16: u64,
+    /// Relative series resistance `Q16^2 / multiplier_q16` for unit base conductance.
+    pub relative_resistance_q16: u64,
+    /// Exact recorded outcome types folded into `multiplier_q16`, sorted and deduplicated.
+    pub outcomes: Vec<String>,
+    /// Exact Strata composition record ids providing cryptographic proof for this edge.
+    pub receipt_ids: Vec<String>,
+    /// Log head (`last_acked_seq`) this reading is pinned to for bit-exact replay.
+    pub head_seq: u64,
+}
 
 const CURSOR_PREFIX: &str = "gl1";
 /// Cursor prefix of a capped or rotating divergent ranking.
@@ -1117,6 +1208,90 @@ impl<'s> GhostSnapshot<'s> {
             }
         }
         out.into_iter().collect()
+    }
+
+    /// Deterministic `Q16.16` outcome conductance multiplier `M_outcome(first, second)`
+    /// computed strictly from exact recorded composition outcomes on `first` and `second`.
+    pub fn outcome_conductance_q16(&self, first: &str, second: &str) -> u64 {
+        let outcomes = self.prior_outcomes(first, second);
+        outcome_conductance_multiplier_q16(&outcomes)
+    }
+
+    /// Full proof-carrying outcome conductance reading for unordered pair `(first, second)`,
+    /// pinned to [`Self::head_seq`] for bit-exact replay reproducibility.
+    ///
+    /// Attaches the exact live complete Strata composition record ids that contributed
+    /// outcomes to either endpoint (or directly wove the pair), in canonical id order.
+    pub fn outcome_conductance_for_pair(&self, first: &str, second: &str) -> OutcomeConductanceEdge {
+        let (a, b) = if first <= second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let outcomes = self.prior_outcomes(a, b);
+        let multiplier_q16 = outcome_conductance_multiplier_q16(&outcomes);
+        let relative_resistance_q16 = series_resistance_from_conductance_q16(multiplier_q16);
+        let mut receipts = BTreeSet::new();
+        for rec in &self.records {
+            if !rec.complete || rec.outcome_type.is_none() {
+                continue;
+            }
+            let touches_pair = rec.first_id == a
+                || rec.second_id == a
+                || rec.first_id == b
+                || rec.second_id == b;
+            if touches_pair {
+                receipts.insert(rec.id.clone());
+            }
+        }
+        OutcomeConductanceEdge {
+            first_id: a.to_string(),
+            second_id: b.to_string(),
+            multiplier_q16,
+            relative_resistance_q16,
+            outcomes,
+            receipt_ids: receipts.into_iter().collect(),
+            head_seq: self.head_seq,
+        }
+    }
+
+    /// Every plasticized unordered pair in this snapshot — spanning both complete live
+    /// woven composition pairs and visible non-legacy recorded edges whose endpoints carry
+    /// recorded outcomes — sorted deterministically by `(first_id, second_id)`.
+    pub fn outcome_conductance_edges(&self) -> Vec<OutcomeConductanceEdge> {
+        let mut pairs: BTreeSet<(&str, &str)> = BTreeSet::new();
+        for rec in &self.records {
+            if rec.complete && rec.outcome_type.is_some() {
+                pairs.insert((rec.first_id.as_str(), rec.second_id.as_str()));
+            }
+        }
+        for (a_idx, edges) in self.adj.iter().enumerate() {
+            let a_u32 = a_idx as u32;
+            let a_has = self.outcomes.contains_key(&a_u32);
+            for edge in edges {
+                if self.kind_legacy[edge.kind as usize] {
+                    continue;
+                }
+                let b_u32 = edge.to;
+                if a_u32 >= b_u32 {
+                    continue;
+                }
+                if a_has || self.outcomes.contains_key(&b_u32) {
+                    let a_id = self.ids[a_idx];
+                    let b_id = self.ids[b_u32 as usize];
+                    if a_id <= b_id {
+                        pairs.insert((a_id, b_id));
+                    } else {
+                        pairs.insert((b_id, a_id));
+                    }
+                }
+            }
+        }
+        pairs
+            .into_iter()
+            .map(|(a, b)| self.outcome_conductance_for_pair(a, b))
+            .filter(|e| !e.outcomes.is_empty())
+            .collect()
     }
 
     /// Is there a visible recorded edge of any kind between the two ids?

@@ -1240,3 +1240,92 @@ fn owner_scale_divergent_and_bridge_answer_under_two_seconds() {
     assert!(page.summary.isolated_nodes >= 3_800);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn outcome_conductance_reinforces_proven_paths_damps_dead_ends_and_replays_bit_exact() {
+    use crate::ghostlink::{
+        apply_outcome_conductance_q16, series_resistance_from_conductance_q16,
+        CONDUCTANCE_Q16_ONE, OUTCOME_MULTIPLIER_MAX_Q16, OUTCOME_MULTIPLIER_MIN_Q16,
+    };
+
+    let dir = temp_dir("outcome-conductance-854");
+    let (a, b, c, d, rec_good, rec_bad, head_seq_before_reopen);
+    {
+        let mut store = StrataStore::open(&dir).expect("open");
+        a = node(&mut store, "root auth session token drift", &["auth"], "fact");
+        b = node(&mut store, "token ttl mismatch fix", &["auth"], "fact");
+        c = node(&mut store, "false caching hypothesis", &["cache"], "fact");
+        d = node(&mut store, "unrelated live node", &["misc"], "fact");
+        edge(&mut store, &a, &b, "touched");
+        edge(&mut store, &a, &c, "touched");
+        edge(&mut store, &c, &d, "derived_from");
+
+        // Before any outcomes, conductance multiplier is strictly identity (1.0 in Q16.16).
+        let snap0 = store.ghost_snapshot(user());
+        assert_eq!(snap0.outcome_conductance_q16(&a, &b), CONDUCTANCE_Q16_ONE);
+        assert!(snap0.outcome_conductance_edges().is_empty());
+
+        // Reinforce (a, b) with accepted + causal_walk_proved, and damp (c, d) with dead_end.
+        rec_good = weave(&mut store, &a, &b, "accepted");
+        let _rec_proved = weave(&mut store, &a, &b, "causal_walk_proved");
+        rec_bad = weave(&mut store, &c, &d, "closed_by_false_assumption");
+        let _rec_dead = weave(&mut store, &c, &d, "dead_end");
+
+        let snap = store.ghost_snapshot(user());
+        head_seq_before_reopen = snap.head_seq();
+
+        let good = snap.outcome_conductance_for_pair(&a, &b);
+        let bad = snap.outcome_conductance_for_pair(&c, &d);
+
+        // Reinforcing outcomes increase conductance (> Q16_ONE) and lower series resistance.
+        assert!(good.multiplier_q16 > CONDUCTANCE_Q16_ONE);
+        assert!(good.multiplier_q16 <= OUTCOME_MULTIPLIER_MAX_Q16);
+        assert!(good.relative_resistance_q16 < CONDUCTANCE_Q16_ONE);
+        assert!(good.receipt_ids.contains(&rec_good));
+        assert!(good.outcomes.contains(&"accepted".to_string()));
+        assert!(good.outcomes.contains(&"causal_walk_proved".to_string()));
+
+        // Inhibitory outcomes lower conductance (< Q16_ONE, clamped at MIN) and raise resistance
+        // without deleting any Strata nodes or bytes.
+        assert_eq!(bad.multiplier_q16, OUTCOME_MULTIPLIER_MIN_Q16);
+        assert!(bad.relative_resistance_q16 > CONDUCTANCE_Q16_ONE * 4);
+        assert!(bad.receipt_ids.contains(&rec_bad));
+        assert!(store.node_map().contains_key(&c));
+        assert!(store.node_map().contains_key(&d));
+
+        // Base conductance routing flips decisively toward the proven wire over the damped wire.
+        let base_k = CONDUCTANCE_Q16_ONE;
+        let k_good = apply_outcome_conductance_q16(base_k, good.multiplier_q16);
+        let k_bad = apply_outcome_conductance_q16(base_k, bad.multiplier_q16);
+        assert!(k_good > k_bad * 5);
+        assert!(
+            series_resistance_from_conductance_q16(k_good)
+                < series_resistance_from_conductance_q16(k_bad)
+        );
+
+        // `outcome_conductance_edges` returns deterministic canonical edges carrying receipts.
+        let edges_first = snap.outcome_conductance_edges();
+        assert!(!edges_first.is_empty());
+        assert!(edges_first.iter().all(|e| e.head_seq == head_seq_before_reopen));
+    }
+
+    // Reopen the append-only Strata log and verify bit-exact replay at identical `head_seq`.
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    let snap_reopened = reopened.ghost_snapshot(user());
+    assert_eq!(snap_reopened.head_seq(), head_seq_before_reopen);
+    let good_replayed = snap_reopened.outcome_conductance_for_pair(&b, &a);
+    let bad_replayed = snap_reopened.outcome_conductance_for_pair(&d, &c);
+    assert!(good_replayed.receipt_ids.contains(&rec_good));
+    assert!(bad_replayed.receipt_ids.contains(&rec_bad));
+    assert_eq!(bad_replayed.multiplier_q16, OUTCOME_MULTIPLIER_MIN_Q16);
+    assert_eq!(
+        snap_reopened.outcome_conductance_edges().len(),
+        reopened.ghost_snapshot(user()).outcome_conductance_edges().len()
+    );
+    assert_eq!(
+        snap_reopened.outcome_conductance_edges(),
+        reopened.ghost_snapshot(user()).outcome_conductance_edges()
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
