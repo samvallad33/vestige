@@ -38,9 +38,28 @@ const HOP_MDL_COST_Q16: u64 = 2_048; // 0.03125 Q16 per hop beyond hop 1
 const MIN_CURRENT_Q16: u64 = 1_024; // 0.015625 Q16 pruning floor
 const SUP_FORWARD_DECAY_Q16: u64 = 62_259; // 0.95 Q16 per supersession link
 const BELNAP_BOTH_TAU_Q16: u64 = 16_384; // 0.25 Q16 threshold for Belnap Both witness detection (#853)
+pub(in crate::retrieval) const GROUND_FLOOR_Q16: u64 = 4_096; // 0.0625 Q16 open-circuit grounding floor (#855)
 const NO_CARRIER: u32 = u32::MAX;
 const VIRT_Q_CARRIER: u32 = u32::MAX - 1;
 const SUPERSEDE_CARRIER: u32 = u32::MAX - 2;
+
+/// Map existing WH-slot bitmask to a human-readable slot label for `#855` Open-Circuit Back-EMF.
+pub(in crate::retrieval) fn wh_slot_type_label(q_text: &str) -> Option<&'static str> {
+    let bits = crate::retrieval::wh_slots(q_text);
+    if (bits & crate::retrieval::WH_PLACE) != 0 {
+        Some("LOC")
+    } else if (bits & crate::retrieval::WH_PERSON) != 0 {
+        Some("HUM")
+    } else if (bits & crate::retrieval::WH_TIME) != 0 {
+        Some("TIME")
+    } else if (bits & crate::retrieval::WH_QTY) != 0 {
+        Some("NUM")
+    } else if (bits & crate::retrieval::WH_CAUSE) != 0 {
+        Some("CAUSE")
+    } else {
+        None
+    }
+}
 
 /// Closed-class epistemic contradiction / audit query detector (`#853`).
 /// hardcode-scan: closed-class (epistemic contradiction and conflict interrogative markers only).
@@ -87,6 +106,18 @@ pub(in crate::retrieval) struct GhostCurrentResult {
     pub(in crate::retrieval) witness_spine: Vec<usize>,
     /// Proof-carrying Strata outcome receipt IDs traversed along `witness_spine` (`#854`).
     pub(in crate::retrieval) witness_receipt_ids: Vec<String>,
+    /// Open-Circuit Back-EMF (`#855`): highest absorbed Kirchhoff current on any live sufficient sink.
+    pub(in crate::retrieval) best_absorbed_q16: u64,
+    /// Open-Circuit Back-EMF (`#855`): residual MDL energy `Q16 - min(best_absorbed_q16, Q16)`.
+    pub(in crate::retrieval) best_mdl_energy_q16: u64,
+    /// Open-Circuit Back-EMF (`#855`): true when Slot 0 fails sufficiency AND current fails to ground.
+    pub(in crate::retrieval) open_circuit: bool,
+    /// Open-Circuit Back-EMF (`#855`): turn index of ungrounded frontier node `u_frontier`.
+    pub(in crate::retrieval) frontier_turn_idx: Option<usize>,
+    /// Open-Circuit Back-EMF (`#855`): uncovered query term groups along the partial chain.
+    pub(in crate::retrieval) missing_query_groups: Vec<String>,
+    /// Open-Circuit Back-EMF (`#855`): unresolved WH answer slot label if required by query.
+    pub(in crate::retrieval) unresolved_slot_type: Option<&'static str>,
 }
 
 /// Read-only inputs to `run_ghostcurrent_mdl_q16`.
@@ -279,6 +310,8 @@ struct PathNode {
     turn: usize,
     parent: Option<usize>,
     receipt_ids: Vec<String>,
+    /// Cumulative exact query-group mask covered along path `Q ~> turn` (`#855`).
+    solved_mask: u64,
 }
 
 fn reconstruct_path(paths: &[PathNode], idx: usize) -> Vec<usize> {
@@ -465,11 +498,13 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
             && !inp.eff_it.preference
             && !q_is_neg
             && turn_is_negated(inp.ix, seed_ti);
+        let seed_turn_mask = inp.t_exact_mask.get(seed_ti).copied().unwrap_or(0) & inp.q_group_mask;
         let p_idx = paths.len();
         paths.push(PathNode {
             turn: seed_ti,
             parent: None,
             receipt_ids: Vec::new(),
+            solved_mask: seed_turn_mask,
         });
         heap.push(SearchState {
             conductance_q16: init_g,
@@ -569,11 +604,13 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                     && !inp.eff_it.preference
                     && !q_is_neg
                     && turn_is_negated(inp.ix, ti);
+                let ti_mask = inp.t_exact_mask.get(ti).copied().unwrap_or(0) & inp.q_group_mask;
                 let p_idx = paths.len();
                 paths.push(PathNode {
                     turn: ti,
                     parent: None,
                     receipt_ids: Vec::new(),
+                    solved_mask: ti_mask,
                 });
                 heap.push(SearchState {
                     conductance_q16: g_virt,
@@ -603,6 +640,46 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
     let mut per_target_carrier: BTreeMap<(usize, u32), (u64, u64)> = BTreeMap::new();
     let mut best_path_for_target: BTreeMap<usize, (u64, usize)> = BTreeMap::new();
     let mut target_receipt_ids: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    // Open-Circuit Back-EMF (#855): track settled node conductance/depth/solved-mask, grounded live
+    // sinks, WH slot satisfaction, and OOV open-class query terms missing from the corpus.
+    let required_wh_slot = wh_slot_type_label(&inp.q.text);
+    let oov_query_words: Vec<String> = {
+        let mut oov = Vec::new();
+        for w in crate::retrieval::raw_tokens(&inp.q.text) {
+            if w.len() < 3 || !crate::retrieval::is_content(&w) {
+                continue;
+            }
+            let st_w = crate::retrieval::stem(&w);
+            let in_vocab = inp.ix.vocab.get(&w).is_some()
+                || inp.ix.vocab.get(&crate::retrieval::stem_term(&st_w)).is_some();
+            if !in_vocab && !oov.contains(&w) {
+                oov.push(w);
+            }
+        }
+        oov
+    };
+    // Strong WH answer-class grounding for #855 Open-Circuit Back-EMF:
+    // requires verified class match (`lr >= 2 || dur >= 2`, e.g. GeoNames/Wikidata/WordNet place,
+    // inline date/clock, explicit unit-quantity, or person/org entity) — never a bare `form_midcap`
+    // (`lr == 1`) heuristic — so ungrounded bridge turns carrying capitalized entities stay open!
+    let turn_satisfies_wh_slot = |ti: usize| -> bool {
+        if spec.has_wh_answer_class() {
+            let (lr, dur) = eval_li_roth_turn(inp.ix, &spec, ti);
+            return lr >= 2 || dur >= 2;
+        }
+        let tr = &inp.ix.turns[ti];
+        match required_wh_slot {
+            Some("TIME") => tr.form_clock || !tr.resolved_timex.is_empty(),
+            Some("NUM") => tr.form_digit,
+            Some("CAUSE") => tr.has_causal,
+            _ => false,
+        }
+    };
+    let mut settled_nodes: BTreeMap<usize, (u64, u8, u64)> = BTreeMap::new();
+    let mut grounded_sinks: BTreeMap<usize, u64> = BTreeMap::new();
+    let mut any_live_affirmative_sink = false;
+    let mut any_wh_satisfied = false;
+    let mut union_live_mask = 0u64;
     let mut settled = 0usize;
     let mut visited_state: BTreeMap<(usize, u32, bool), u64> = BTreeMap::new();
 
@@ -620,8 +697,30 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         visited_state.insert(key, st.conductance_q16);
         settled += 1;
 
+        let path_solved = paths[st.path_idx].solved_mask;
+        settled_nodes
+            .entry(st.turn)
+            .and_modify(|(bg, bd, bm)| {
+                if st.conductance_q16 > *bg {
+                    *bg = st.conductance_q16;
+                }
+                if st.depth > *bd {
+                    *bd = st.depth;
+                }
+                *bm |= path_solved;
+            })
+            .or_insert((st.conductance_q16, st.depth, path_solved));
+
         let tr = &inp.ix.turns[st.turn];
         let is_sup = turn_is_superseded(inp.ix, st.turn);
+        if !is_sup && !st.polarity_false && !tr.is_pure_info_question && !tr.is_backchannel {
+            union_live_mask |= inp.t_exact_mask.get(st.turn).copied().unwrap_or(0) & inp.q_group_mask;
+            if (spec.has_wh_answer_class() || required_wh_slot.is_some())
+                && turn_satisfies_wh_slot(st.turn)
+            {
+                any_wh_satisfied = true;
+            }
+        }
 
         // Strata Live-Leaf Law: superseded turns have g_sink = 0 and forward current along
         // arbitrary-depth revision chains up to MAX_SUP_HOPS.
@@ -649,11 +748,14 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                             && !inp.eff_it.preference
                             && !q_is_neg
                             && turn_is_negated(inp.ix, nxt);
+                        let nxt_solved = path_solved
+                            | (inp.t_exact_mask.get(nxt).copied().unwrap_or(0) & inp.q_group_mask);
                         let p_idx = paths.len();
                         paths.push(PathNode {
                             turn: nxt,
                             parent: Some(st.path_idx),
                             receipt_ids: rcpts,
+                            solved_mask: nxt_solved,
                         });
                         heap.push(SearchState {
                             conductance_q16: g_fwd,
@@ -701,6 +803,29 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
             if st.sup_hops > 0 {
                 // Live leaf terminating a supersession chain receives priority weight
                 sink_g = sink_g.saturating_add(sink_g >> 1);
+            }
+            if !is_sup && !st.polarity_false && sink_g >= GROUND_FLOOR_Q16 {
+                any_live_affirmative_sink = true;
+                let has_wh_req = spec.has_wh_answer_class() || required_wh_slot.is_some();
+                let wh_sat = has_wh_req && turn_satisfies_wh_slot(st.turn);
+                let path_full = inp.q_group_mask != 0
+                    && path_solved == inp.q_group_mask
+                    && oov_query_words.is_empty();
+                let wh_ok = !has_wh_req || wh_sat;
+                let grounds_query = st.sup_hops > 0
+                    || (path_full && wh_ok)
+                    || (wh_sat && (new_cov > 0 || path_solved.count_ones() >= 1))
+                    || (!has_wh_req && oov_query_words.is_empty() && inp.q_group_cnt <= 1 && new_cov > 0);
+                if grounds_query {
+                    grounded_sinks
+                        .entry(st.turn)
+                        .and_modify(|v| {
+                            if sink_g > *v {
+                                *v = sink_g;
+                            }
+                        })
+                        .or_insert(sink_g);
+                }
             }
             let entry = per_target_carrier
                 .entry((st.turn, st.last_carrier))
@@ -824,11 +949,14 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                 } else {
                     g_next
                 };
+                let v_solved = path_solved
+                    | (inp.t_exact_mask.get(v).copied().unwrap_or(0) & inp.q_group_mask);
                 let p_idx = paths.len();
                 paths.push(PathNode {
                     turn: v,
                     parent: Some(st.path_idx),
                     receipt_ids: rcpts,
+                    solved_mask: v_solved,
                 });
                 heap.push(SearchState {
                     conductance_q16: g_hop,
@@ -868,11 +996,14 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                     && !inp.eff_it.preference
                     && !q_is_neg
                     && turn_is_negated(inp.ix, target_ti));
+            let t_solved = path_solved
+                | (inp.t_exact_mask.get(target_ti).copied().unwrap_or(0) & inp.q_group_mask);
             let p_idx = paths.len();
             paths.push(PathNode {
                 turn: target_ti,
                 parent: Some(st.path_idx),
                 receipt_ids: rcpts,
+                solved_mask: t_solved,
             });
             heap.push(SearchState {
                 conductance_q16: g_next,
@@ -986,6 +1117,100 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
     witness_receipt_ids.sort();
     witness_receipt_ids.dedup();
 
+    // #855 Open-Circuit Back-EMF: compute best grounded absorbed current, residual MDL energy,
+    // circuit closure status, ungrounded frontier `u_frontier`, missing query groups, and WH slot.
+    let best_absorbed_q16: u64 = grounded_sinks
+        .iter()
+        .map(|(&ti, &sink_g)| totals.get(&ti).copied().unwrap_or(sink_g))
+        .max()
+        .unwrap_or(0);
+    let best_mdl_energy_q16 = Q16.saturating_sub(best_absorbed_q16.min(Q16));
+    let h0_opt = inp.final_turn_indices.first().copied();
+    let has_wh_req = spec.has_wh_answer_class() || required_wh_slot.is_some();
+    let h0_fails_sufficiency = h0_opt.map_or(true, |h0| {
+        let h0_sup = turn_is_superseded(inp.ix, h0);
+        let h0_cov = (inp.t_exact_mask.get(h0).copied().unwrap_or(0) & inp.q_group_mask)
+            .count_ones() as usize;
+        let h0_neg = strict_false_channel
+            && !inp.eff_it.preference
+            && !q_is_neg
+            && turn_is_negated(inp.ix, h0);
+        let h0_wh_miss = has_wh_req && !turn_satisfies_wh_slot(h0);
+        h0_sup
+            || h0_neg
+            || inp.ix.turns[h0].is_pure_info_question
+            || inp.ix.turns[h0].is_backchannel
+            || h0_cov == 0
+            || !oov_query_words.is_empty()
+            || (inp.q_group_cnt >= 2 && h0_cov < inp.q_group_cnt)
+            || h0_wh_miss
+    });
+    let open_circuit = h0_fails_sufficiency
+        && (best_absorbed_q16 < GROUND_FLOOR_Q16 || !any_live_affirmative_sink);
+
+    let frontier_turn_idx = if open_circuit {
+        let has_non_seed = settled_nodes
+            .keys()
+            .any(|&ti| Some(ti) != h0_opt && !grounded_sinks.contains_key(&ti));
+        let has_deeper = settled_nodes.iter().any(|(&ti, &(_, d, _))| {
+            d >= 1 && !grounded_sinks.contains_key(&ti) && (!has_non_seed || Some(ti) != h0_opt)
+        });
+        settled_nodes
+            .iter()
+            .filter(|&(&ti, &(_, d, _))| {
+                !grounded_sinks.contains_key(&ti)
+                    && (!has_non_seed || Some(ti) != h0_opt)
+                    && (!has_deeper || d >= 1)
+            })
+            .max_by(|&(&ta, &(ga, da, ma)), &(&tb, &(gb, db, mb))| {
+                let h_a = (inp.q_group_mask & !ma).count_ones() as u128;
+                let h_b = (inp.q_group_mask & !mb).count_ones() as u128;
+                let emf_a = (ga as u128)
+                    .saturating_mul(1 + h_a)
+                    .saturating_mul(1 + da as u128);
+                let emf_b = (gb as u128)
+                    .saturating_mul(1 + h_b)
+                    .saturating_mul(1 + db as u128);
+                emf_a
+                    .cmp(&emf_b)
+                    .then_with(|| da.cmp(&db))
+                    .then_with(|| tb.cmp(&ta))
+            })
+            .map(|(&ti, _)| ti)
+    } else {
+        None
+    };
+
+    let missing_query_groups: Vec<String> = if open_circuit {
+        let mut missing: Vec<String> = inp
+            .plan
+            .groups
+            .iter()
+            .enumerate()
+            .take(64)
+            .filter(|&(gi, gw)| {
+                (inp.q_group_mask & (1u64 << gi)) != 0
+                    && (union_live_mask & (1u64 << gi)) == 0
+                    && !gw.starts_with('\u{1}')
+            })
+            .map(|(_, gw)| gw.clone())
+            .collect();
+        for w in &oov_query_words {
+            if !missing.contains(w) {
+                missing.push(w.clone());
+            }
+        }
+        missing
+    } else {
+        Vec::new()
+    };
+
+    let unresolved_slot_type = if open_circuit && has_wh_req && !any_wh_satisfied {
+        required_wh_slot
+    } else {
+        None
+    };
+
     GhostCurrentResult {
         deficit_fired,
         can_override_slot0,
@@ -996,6 +1221,12 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         belnap_dual_pair,
         witness_spine,
         witness_receipt_ids,
+        best_absorbed_q16,
+        best_mdl_energy_q16,
+        open_circuit,
+        frontier_turn_idx,
+        missing_query_groups,
+        unresolved_slot_type,
     }
 }
 

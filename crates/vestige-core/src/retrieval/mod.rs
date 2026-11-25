@@ -262,6 +262,18 @@ pub struct PremiseCoverage {
     pub union_groups: usize,
     pub grounded_groups: usize,
     pub grounded_covered: usize,
+    /// Open-Circuit Back-EMF (`#855`): true when Kirchhoff current fails to ground on any live
+    /// sufficient sink (missing final hop or dead-end retracted/superseded chain).
+    pub open_circuit: bool,
+    /// Exact turn ID of the ungrounded frontier node where current stalled (`#855`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontier_turn_id: Option<String>,
+    /// Uncovered query term groups along the partial chain (`#855`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_query_groups: Vec<String>,
+    /// Unresolved WH answer slot type (`"TIME"`, `"NUM"`, `"HUM"`, `"LOC"`, `"CAUSE"`) if any (`#855`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unresolved_slot_type: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]

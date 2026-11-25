@@ -629,3 +629,261 @@ fn issue_853_belnap_both_dual_witness_coseats_thesis_and_antithesis_slots_0_and_
         "Belnap Both must sync thesis and antithesis sessions into Session Slots 0 & 1"
     );
 }
+
+#[test]
+fn issue_855_complete_three_hop_chain_grounds_circuit_closed() {
+    use crate::retrieval::graph::ghostcurrent_mdl_q16::{
+        GROUND_FLOOR_Q16, GhostCurrentInput, run_ghostcurrent_mdl_q16,
+    };
+
+    let sessions = vec![
+        Session {
+            id: "s0".into(),
+            date: String::new(),
+            timestamp: 100,
+            turns: vec![Turn {
+                id: "t0_seed".into(),
+                role: "user".into(),
+                content: "Elena manages Project Helios.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s1".into(),
+            date: String::new(),
+            timestamp: 200,
+            turns: vec![Turn {
+                id: "t1_bridge".into(),
+                role: "user".into(),
+                content: "Project Helios relies on CatalystCore.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s2".into(),
+            date: String::new(),
+            timestamp: 300,
+            turns: vec![Turn {
+                id: "t2_ground".into(),
+                role: "user".into(),
+                content: "CatalystCore is manufactured in Zurich, Switzerland.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+    ];
+    let p = Params::default();
+    let ix = build_index(&sessions, &p);
+    let q = Query {
+        text: "Where is the component for Elena manufactured?".into(),
+        date: String::new(),
+    };
+    let plan = plan_query(&ix, &q, &p);
+    let q_cnt = plan.groups.len().min(64);
+    let q_mask = if q_cnt == 0 { 0 } else { (1u64 << q_cnt) - 1 };
+    let mut t_exact_mask = vec![0u64; ix.turns.len()];
+    for (ti, tr) in ix.turns.iter().enumerate() {
+        for qt in &plan.terms {
+            if qt.exact_hit
+                && let Some(g) = qt.group
+                && g < 64
+                && tr.content.contains(&qt.id)
+            {
+                t_exact_mask[ti] |= 1u64 << g;
+            }
+        }
+    }
+    let t_own = vec![10.0f32, 0.0, 2.0];
+    let final_turns = vec![0usize];
+    let inp = GhostCurrentInput {
+        ix: &ix,
+        plan: &plan,
+        q: &q,
+        eff_it: &plan.intent,
+        t_own: &t_own,
+        t_exact_mask: &t_exact_mask,
+        final_turn_indices: &final_turns,
+        q_group_mask: q_mask,
+        q_group_cnt: q_cnt,
+        deficit_a: false,
+        deficit_b: true,
+        is_encyclopedic_multi_doc: false,
+    };
+    let res = run_ghostcurrent_mdl_q16(&inp);
+    assert!(res.deficit_fired);
+    assert!(
+        !res.open_circuit,
+        "complete 3-hop chain t0->t1->t2 must ground the circuit closed (best_abs={})",
+        res.best_absorbed_q16
+    );
+    assert!(res.best_absorbed_q16 >= GROUND_FLOOR_Q16);
+    assert!(res.frontier_turn_idx.is_none());
+}
+
+#[test]
+fn issue_855_broken_chain_missing_final_hop_flags_open_circuit_and_exact_frontier() {
+    use crate::retrieval::graph::ghostcurrent_mdl_q16::{
+        GROUND_FLOOR_Q16, GhostCurrentInput, run_ghostcurrent_mdl_q16,
+    };
+
+    let sessions = vec![
+        Session {
+            id: "s0".into(),
+            date: String::new(),
+            timestamp: 100,
+            turns: vec![Turn {
+                id: "t0_seed".into(),
+                role: "user".into(),
+                content: "Elena manages Project Helios.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s1".into(),
+            date: String::new(),
+            timestamp: 200,
+            turns: vec![Turn {
+                id: "t1_bridge".into(),
+                role: "user".into(),
+                content: "Project Helios relies on CatalystCore.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+    ];
+    let p = Params::default();
+    let ix = build_index(&sessions, &p);
+    let q = Query {
+        text: "Where is the component for Elena manufactured?".into(),
+        date: String::new(),
+    };
+    let plan = plan_query(&ix, &q, &p);
+    let q_cnt = plan.groups.len().min(64);
+    let q_mask = if q_cnt == 0 { 0 } else { (1u64 << q_cnt) - 1 };
+    let mut t_exact_mask = vec![0u64; ix.turns.len()];
+    for (ti, tr) in ix.turns.iter().enumerate() {
+        for qt in &plan.terms {
+            if qt.exact_hit
+                && let Some(g) = qt.group
+                && g < 64
+                && tr.content.contains(&qt.id)
+            {
+                t_exact_mask[ti] |= 1u64 << g;
+            }
+        }
+    }
+    let t_own = vec![10.0f32, 0.0];
+    let final_turns = vec![0usize];
+    let inp = GhostCurrentInput {
+        ix: &ix,
+        plan: &plan,
+        q: &q,
+        eff_it: &plan.intent,
+        t_own: &t_own,
+        t_exact_mask: &t_exact_mask,
+        final_turn_indices: &final_turns,
+        q_group_mask: q_mask,
+        q_group_cnt: q_cnt,
+        deficit_a: false,
+        deficit_b: true,
+        is_encyclopedic_multi_doc: false,
+    };
+    let res = run_ghostcurrent_mdl_q16(&inp);
+    assert!(res.deficit_fired);
+    assert!(res.open_circuit, "broken chain missing final hop must raise open_circuit=true");
+    assert!(res.best_absorbed_q16 < GROUND_FLOOR_Q16);
+    assert_eq!(
+        res.frontier_turn_idx,
+        Some(1),
+        "frontier must pinpoint exact last bridge turn t1_bridge"
+    );
+    assert_eq!(res.unresolved_slot_type, Some("LOC"));
+
+    // End-to-end RankResult.premise_coverage telemetry check
+    let req = RankRequest {
+        sessions,
+        queries: vec![q],
+        top_k: 5,
+        params: p,
+    };
+    let pc = &rank(&req).results[0].premise_coverage;
+    assert!(pc.open_circuit, "PremiseCoverage must expose open_circuit=true: {pc:?}");
+    assert_eq!(pc.frontier_turn_id.as_deref(), Some("t1_bridge"));
+    assert_eq!(pc.unresolved_slot_type, Some("LOC"));
+}
+
+#[test]
+fn issue_855_retracted_superseded_chain_with_no_live_leaf_flags_open_circuit() {
+    use crate::retrieval::graph::ghostcurrent_mdl_q16::{GhostCurrentInput, run_ghostcurrent_mdl_q16};
+
+    let sessions = vec![
+        Session {
+            id: "s0".into(),
+            date: String::new(),
+            timestamp: 100,
+            turns: vec![Turn {
+                id: "t0_old".into(),
+                role: "user".into(),
+                content: "My staging cluster runs on Ubuntu 22.04.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+        Session {
+            id: "s1".into(),
+            date: String::new(),
+            timestamp: 200,
+            turns: vec![Turn {
+                id: "t1_retracted".into(),
+                role: "user".into(),
+                content: "I no longer run Ubuntu on my staging cluster and have not chosen a replacement.".into(),
+                links: Vec::new(),
+                stability: 0.0,
+            }],
+        },
+    ];
+    let p = Params::default();
+    let mut ix = build_index(&sessions, &p);
+    ix.turns[1].supersedes_turns = vec![0];
+    ix.turn_superseded = vec![true, false];
+    let q = Query {
+        text: "What operating system does my staging cluster currently run on?".into(),
+        date: String::new(),
+    };
+    let mut plan = plan_query(&ix, &q, &p);
+    plan.intent.current_state = true;
+    let q_cnt = plan.groups.len().min(64);
+    let q_mask = if q_cnt == 0 { 0 } else { (1u64 << q_cnt) - 1 };
+    let t_own = vec![10.0f32, 4.0];
+    let t_exact_mask = vec![q_mask, 1u64];
+    let final_turns = vec![0usize];
+    let inp = GhostCurrentInput {
+        ix: &ix,
+        plan: &plan,
+        q: &q,
+        eff_it: &plan.intent,
+        t_own: &t_own,
+        t_exact_mask: &t_exact_mask,
+        final_turn_indices: &final_turns,
+        q_group_mask: q_mask,
+        q_group_cnt: q_cnt,
+        deficit_a: false,
+        deficit_b: true,
+        is_encyclopedic_multi_doc: false,
+    };
+    let res = run_ghostcurrent_mdl_q16(&inp);
+    assert!(res.deficit_fired);
+    assert!(
+        res.open_circuit,
+        "superseded fact terminating only on negated retraction must raise open_circuit=true"
+    );
+    assert_eq!(res.best_absorbed_q16, 0);
+    assert_eq!(
+        res.frontier_turn_idx,
+        Some(1),
+        "frontier must pinpoint terminal retracted turn t1_retracted"
+    );
+}
