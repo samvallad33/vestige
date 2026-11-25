@@ -125,6 +125,18 @@ pub(super) struct TurnLedger {
     /// Files that already received a PreToolUse blast-radius simulation notice this turn.
     #[serde(default)]
     pub blast_warned: Vec<String>,
+    /// Tool calls executed in the current turn (for Execution Lease budget fuse).
+    #[serde(default)]
+    pub tool_calls_this_turn: u32,
+    /// Canonical key of the most recent tool failure in this turn (for spin-loop breaker).
+    #[serde(default)]
+    pub last_fail_key: String,
+    /// Consecutive identical failures without an intervening file edit.
+    #[serde(default)]
+    pub consecutive_same_fail: u32,
+    /// Transient one-shot owner HALT directive captured in `observe` for `decide`.
+    #[serde(skip)]
+    pub pending_steer_halt: Option<String>,
 }
 
 impl TurnLedger {
@@ -140,6 +152,10 @@ impl TurnLedger {
         self.receipt_gaps.clear();
         self.last_prompt.clear();
         self.blast_warned.clear();
+        self.tool_calls_this_turn = 0;
+        self.last_fail_key.clear();
+        self.consecutive_same_fail = 0;
+        self.pending_steer_halt = None;
     }
 }
 
@@ -152,6 +168,9 @@ pub(super) struct HostDecision {
     pub permit_message: Option<String>,
     pub updated_input: Option<Value>,
     pub retry: Option<bool>,
+    /// Hard-stop the agentic loop (`continue: false` + `stopReason`).
+    pub halt_loop: bool,
+    pub stop_reason: Option<String>,
     /// Advisory process status for hosts that honor exit codes.
     pub exit_code: Option<i32>,
     pub overdue_item: Option<Value>,
@@ -217,6 +236,17 @@ fn write_top_level(v: &mut serde_json::Map<String, Value>, event: &str, d: &Host
     if uses_decision && let Some(reason) = &d.block_reason {
         v.insert("decision".into(), json!("block"));
         v.insert("reason".into(), json!(reason));
+    }
+    if d.halt_loop {
+        v.insert("continue".into(), json!(false));
+        if let Some(reason) = d
+            .stop_reason
+            .as_deref()
+            .or(d.block_reason.as_deref())
+            .or(d.permission_reason.as_deref())
+        {
+            v.insert("stopReason".into(), json!(reason));
+        }
     }
     if event == "WorktreeRemove"
         && let Some(code) = d.exit_code
@@ -320,6 +350,17 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
     }
     note_intentions(g, inp);
     let mut lines = Vec::new();
+    if matches!(
+        inp.event.as_str(),
+        "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PostToolBatch"
+    ) {
+        let (steer_lines, steer_halt) =
+            super::lease::consume_steers_for_session(storage.data_dir(), &inp.session);
+        lines.extend(steer_lines);
+        if steer_halt.is_some() {
+            g.session(&inp.session).ledger.pending_steer_halt = steer_halt;
+        }
+    }
     match inp.event.as_str() {
         "UserPromptSubmit" => {
             if !inp.prompt.is_empty() {
@@ -380,6 +421,15 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
                     if let Some(summary) = report.summary_line {
                         lines.push(summary);
                     }
+                    if let Some(fence_line) =
+                        crate::tools::causal_frontier::pre_edit_fence_summary(
+                            storage.as_ref(),
+                            &inp.file,
+                            cwd_path,
+                        )
+                    {
+                        lines.push(fence_line);
+                    }
                 }
             }
         }
@@ -387,6 +437,17 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
             note_gate(g, inp, storage);
             note_success(g, inp);
             note_store_receipts(g, inp, storage);
+            {
+                let s = g.session(&inp.session);
+                s.ledger.tool_calls_this_turn = s.ledger.tool_calls_this_turn.saturating_add(1);
+                if is_edit_tool(&inp.tool) {
+                    s.ledger.last_fail_key.clear();
+                    s.ledger.consecutive_same_fail = 0;
+                }
+            }
+            if pairing::is_shell(&inp.tool) {
+                super::lease::release_mutex_for_session(storage.data_dir(), &inp.session);
+            }
             if is_edit_tool(&inp.tool)
                 || (pairing::is_shell(&inp.tool)
                     && (is_git_commit(&inp.command)
@@ -407,7 +468,46 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
                 crate::cognitive_kernel::stage_subagent_write(storage.as_ref(), &inp.agent, nid);
             }
         }
-        "PostToolUseFailure" => note_failure(g, inp),
+        "PostToolUseFailure" => {
+            note_failure(g, inp);
+            let fail_key = super::lease::failure_key(&inp.tool, &inp.file, &inp.command);
+            {
+                let s = g.session(&inp.session);
+                s.ledger.tool_calls_this_turn = s.ledger.tool_calls_this_turn.saturating_add(1);
+                if s.ledger.last_fail_key == fail_key {
+                    s.ledger.consecutive_same_fail =
+                        s.ledger.consecutive_same_fail.saturating_add(1);
+                } else {
+                    s.ledger.last_fail_key = fail_key;
+                    s.ledger.consecutive_same_fail = 1;
+                }
+            }
+            if pairing::is_shell(&inp.tool) {
+                super::lease::release_mutex_for_session(storage.data_dir(), &inp.session);
+            }
+        }
+        "PostModelSwitch" => {
+            lines.extend(crate::cognitive_kernel::anchor_watch_lines(
+                storage.as_ref(),
+                None,
+            ));
+            let edited = g.session(&inp.session).ledger.edited.clone();
+            if !edited.is_empty() {
+                lines.push(format!(
+                    "Vestige PostModelSwitch bridge: active turn modified [{}]; verify causal lineage before continuing on `{}`.",
+                    edited.join(", "),
+                    if inp.to_model.is_empty() { "new model" } else { inp.to_model.as_str() }
+                ));
+            }
+            if let Some(l) = super::lease::load_lease(storage.data_dir()).filter(|l| l.active) {
+                lines.push(format!(
+                    "Vestige Execution Lease `{}` remains active across model switch (allow_paths={}, deny_cmds={}).",
+                    l.id,
+                    l.allowed_paths.len(),
+                    l.denied_command_patterns.len()
+                ));
+            }
+        }
         "StopFailure" => note_stop_failure(g, inp),
         "SubagentStart" => {
             lines.extend(subagent_lines(g));
@@ -482,9 +582,10 @@ pub(super) fn decide(
         "Stop" | "SubagentStop" => stop_decision(g, inp, storage, &mut d),
         "PreToolUse" => pre_tool_decision(g, inp, storage, &mut d),
         "PermissionRequest" => permit_decision(g, inp, &mut d),
+        "PermissionDenied" => permission_denied_decision(g, inp, &mut d),
         "PreModelSwitch" => model_decision(g, inp, &mut d),
         "WorktreeRemove" => worktree_decision(inp, &mut d),
-        "PostToolBatch" => batch_decision(inp, &mut d),
+        "PostToolBatch" => batch_decision(g, inp, storage, &mut d),
         _ => {}
     }
     mark_delivered(g, inp, delivered);
@@ -976,6 +1077,44 @@ fn stop_decision(g: &mut Global, inp: &Input, storage: &Arc<Storage>, d: &mut Ho
 }
 
 fn pre_tool_decision(g: &mut Global, inp: &Input, storage: &Arc<Storage>, d: &mut HostDecision) {
+    // Owner Execution Lease & instant mid-session HALT gate (highest priority).
+    if let Some(reason) = g.session(&inp.session).ledger.pending_steer_halt.take() {
+        d.permission_decision = Some("deny".into());
+        d.permission_reason = Some(reason.clone());
+        d.halt_loop = true;
+        d.stop_reason = Some(reason);
+        return;
+    }
+    let current_fail_key = super::lease::failure_key(&inp.tool, &inp.file, &inp.command);
+    let (tool_calls_this_turn, last_fail_key, consecutive_same_fail) = {
+        let s = g.session(&inp.session);
+        (
+            s.ledger.tool_calls_this_turn,
+            s.ledger.last_fail_key.clone(),
+            s.ledger.consecutive_same_fail,
+        )
+    };
+    let verdict = super::lease::check_pre_tool(&super::lease::PreToolCheck {
+        data_dir: storage.data_dir(),
+        session: &inp.session,
+        is_edit: is_edit_tool(&inp.tool),
+        is_shell: pairing::is_shell(&inp.tool),
+        file: &inp.file,
+        command: &inp.command,
+        tool_calls_this_turn,
+        last_fail_key: &last_fail_key,
+        consecutive_same_fail,
+        current_fail_key: &current_fail_key,
+    });
+    if let Some(reason) = verdict.deny_reason {
+        d.permission_decision = Some("deny".into());
+        d.permission_reason = Some(reason.clone());
+        if verdict.halt_loop {
+            d.halt_loop = true;
+            d.stop_reason = Some(reason);
+        }
+        return;
+    }
     // Cryptographic SubagentPassport capability gate: enforced BEFORE any tool executes.
     if !inp.agent.is_empty() {
         let target_path = (!inp.file.is_empty()).then_some(inp.file.as_str());
@@ -1399,6 +1538,22 @@ fn permit_decision(g: &mut Global, inp: &Input, d: &mut HostDecision) {
     ));
 }
 
+/// Recover from false auto-mode denials on `PermissionDenied` when an active,
+/// unconsumed one-use owner permit explicitly covers this exact command.
+fn permission_denied_decision(g: &mut Global, inp: &Input, d: &mut HostDecision) {
+    let command = normalize_command(&inp.command);
+    if command.is_empty() {
+        return;
+    }
+    let now = Utc::now().timestamp();
+    let has_permit = g.p.permits.iter().any(|p| {
+        !p.consumed && p.session == inp.session && p.command == command && p.expires > now
+    });
+    if has_permit {
+        d.retry = Some(true);
+    }
+}
+
 fn model_decision(g: &mut Global, inp: &Input, d: &mut HostDecision) {
     let (Some(from), Some(to)) = (model_rank(&inp.from_model), model_rank(&inp.to_model)) else {
         return;
@@ -1441,7 +1596,36 @@ fn worktree_decision(inp: &Input, d: &mut HostDecision) {
     d.exit_code = Some(2);
 }
 
-fn batch_decision(inp: &Input, d: &mut HostDecision) {
+fn batch_decision(g: &mut Global, inp: &Input, storage: &Arc<Storage>, d: &mut HostDecision) {
+    if let Some(reason) = g.session(&inp.session).ledger.pending_steer_halt.take() {
+        d.block_reason = Some(reason.clone());
+        d.halt_loop = true;
+        d.stop_reason = Some(reason);
+        return;
+    }
+    let (tool_calls_this_turn, last_fail_key, consecutive_same_fail) = {
+        let s = g.session(&inp.session);
+        (
+            s.ledger.tool_calls_this_turn,
+            s.ledger.last_fail_key.clone(),
+            s.ledger.consecutive_same_fail,
+        )
+    };
+    let verdict = super::lease::check_post_batch(&super::lease::PostBatchCheck {
+        data_dir: storage.data_dir(),
+        session: &inp.session,
+        tool_calls_this_turn,
+        consecutive_same_fail,
+        last_fail_key: &last_fail_key,
+    });
+    if let Some(reason) = verdict.deny_reason {
+        d.block_reason = Some(reason.clone());
+        if verdict.halt_loop {
+            d.halt_loop = true;
+            d.stop_reason = Some(reason);
+        }
+        return;
+    }
     let Some(path) = colliding_path(&inp.tool_calls) else {
         return;
     };
@@ -2124,8 +2308,11 @@ fn take_prefixed(
 }
 
 fn uuid_at(s: &str, i: usize) -> Option<usize> {
+    if !s.is_char_boundary(i) {
+        return None;
+    }
     let rest = &s[i..];
-    if rest.len() < 36 {
+    if rest.len() < 36 || !rest.is_char_boundary(36) {
         return None;
     }
     let candidate = &rest[..36];
@@ -2810,5 +2997,153 @@ mod tests {
         assert_ne!(swapped_id, new);
         assert_eq!(store.resolve_handle(swapped_id).ids.len(), 1);
         assert!(note2.contains(swapped_id));
+    }
+
+    #[test]
+    fn execution_lease_blocks_benchmark_and_halts_on_owner_steer_end_to_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let lease = super::lease::ExecutionLease {
+            id: "lease-e2e".into(),
+            active: true,
+            denied_command_patterns: vec!["retrieval_bench".into()],
+            ..Default::default()
+        };
+        super::lease::save_lease(store.data_dir(), &lease).unwrap();
+
+        let mut g = Global::load(dir.path().to_path_buf());
+        let bench_inp = Input {
+            event: "PreToolUse".into(),
+            session: "sess-e2e".into(),
+            tool: "Bash".into(),
+            command: "cargo run --bin retrieval_bench -- --beam".into(),
+            ..Input::default()
+        };
+        let _lines = observe(&mut g, &bench_inp, &store);
+        let d = decide(&mut g, &bench_inp, &store, "");
+        let j = host_json("PreToolUse", "claude", "", &d);
+        assert_eq!(j["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert!(
+            j["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
+                .unwrap()
+                .contains("CMD-DENY")
+        );
+        assert!(j.get("continue").is_none());
+
+        // Now owner triggers an instant `--halt` steer mid-session.
+        super::lease::push_steer(
+            store.data_dir(),
+            "STOP immediately and wire Stage 12 first",
+            true,
+            None,
+        )
+        .unwrap();
+        let safe_inp = Input {
+            event: "PreToolUse".into(),
+            session: "sess-e2e".into(),
+            tool: "Bash".into(),
+            command: "git status".into(),
+            ..Input::default()
+        };
+        let steer_lines = observe(&mut g, &safe_inp, &store);
+        assert!(steer_lines.iter().any(|l| l.contains("OWNER HALT")));
+        let d_halt = decide(&mut g, &safe_inp, &store, "");
+        let j_halt = host_json("PreToolUse", "claude", &steer_lines.join("\n"), &d_halt);
+        assert_eq!(j_halt["continue"], false);
+        assert!(
+            j_halt["stopReason"]
+                .as_str()
+                .unwrap()
+                .contains("wire Stage 12 first")
+        );
+        assert_eq!(j_halt["hookSpecificOutput"]["permissionDecision"], "deny");
+    }
+
+    #[test]
+    fn execution_lease_spin_loop_trips_post_batch_and_resets_after_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let lease = super::lease::ExecutionLease {
+            id: "lease-spin".into(),
+            active: true,
+            max_identical_failures: Some(2),
+            ..Default::default()
+        };
+        super::lease::save_lease(store.data_dir(), &lease).unwrap();
+
+        let mut g = Global::load(dir.path().to_path_buf());
+        let fail_inp = Input {
+            event: "PostToolUseFailure".into(),
+            session: "sess-spin".into(),
+            tool: "Bash".into(),
+            command: "cargo test -p vestige-core".into(),
+            error: "exit 101".into(),
+            ..Input::default()
+        };
+        observe(&mut g, &fail_inp, &store);
+        observe(&mut g, &fail_inp, &store);
+
+        let batch_inp = Input {
+            event: "PostToolBatch".into(),
+            session: "sess-spin".into(),
+            ..Input::default()
+        };
+        let d_trip = decide(&mut g, &batch_inp, &store, "");
+        let j_trip = host_json("PostToolBatch", "claude", "", &d_trip);
+        assert_eq!(j_trip["decision"], "block");
+        assert_eq!(j_trip["continue"], false);
+        assert!(
+            j_trip["reason"]
+                .as_str()
+                .unwrap()
+                .contains("CIRCUIT-BREAKER")
+        );
+
+        // Intervening file edit clears the consecutive failure streak.
+        let edit_ok = Input {
+            event: "PostToolUse".into(),
+            session: "sess-spin".into(),
+            tool: "Edit".into(),
+            file: "crates/vestige-mcp/src/tools/reflex/lease.rs".into(),
+            ..Input::default()
+        };
+        observe(&mut g, &edit_ok, &store);
+        let d_clear = decide(&mut g, &batch_inp, &store, "");
+        assert!(d_clear.block_reason.is_none());
+        assert!(!d_clear.halt_loop);
+    }
+
+    #[test]
+    fn uuid_at_never_panics_on_multibyte_utf8_at_byte_36() {
+        // Place multibyte UTF-8 chars across byte index 36 where naive `&rest[..36]` panicked.
+        let text = "status: verified in 12ms — café résumé ⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡ end";
+        let handles = memory_handles(text);
+        assert!(handles.is_empty());
+    }
+
+    #[test]
+    fn permission_denied_sets_retry_true_when_owner_permit_is_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let mut g = Global::load(dir.path().to_path_buf());
+        g.p.permits.push(Permit {
+            id: "permit-001".into(),
+            command: normalize_command("cargo test -p vestige-mcp"),
+            session: "sess-pd".into(),
+            expires: Utc::now().timestamp() + 300,
+            consumed: false,
+        });
+
+        let inp = Input {
+            event: "PermissionDenied".into(),
+            session: "sess-pd".into(),
+            tool: "Bash".into(),
+            command: "cargo test -p vestige-mcp".into(),
+            ..Input::default()
+        };
+        let d = decide(&mut g, &inp, &store, "");
+        let j = host_json("PermissionDenied", "claude", "", &d);
+        assert_eq!(j["hookSpecificOutput"]["retry"], true);
     }
 }

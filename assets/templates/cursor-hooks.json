@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeTabFileRead": [
+      {
+        "command": "vestige doctor --repo . --context-rot",
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "vestige lease status",
+        "failClosed": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://github.com/samvallad33/vestige/blob/main/.well-known/ai-provenance.json",
+  "spec_version": "0.1.0",
+  "engine": "vestige",
+  "license": "AGPL-3.0-only",
+  "repository": "https://github.com/samvallad33/vestige",
+  "execution_model": "local-deterministic-zero-cloud",
+  "llm_dependencies": 0,
+  "vector_dependencies": 0,
+  "ledger": {
+    "name": "Strata",
+    "hash_algorithm": "BLAKE3",
+    "signature_algorithm": "Ed25519",
+    "git_notes_ref": "refs/notes/vestige-proof"
+  },
+  "gates": [
+    "zombie-regression-patch-id",
+    "forward-chestertons-fence",
+    "halpern-pearl-hunk-ablation",
+    "unicode-concealment-and-bidi-shield",
+    "biba-control-plane-guard",
+    "cross-language-sarif-2.1.0",
+    "mid-session-execution-lease"
+  ],
+  "verify_offline": [
+    "vestige shield --repo . --base origin/main --head HEAD --sarif",
+    "vestige pr-audit --repo . --base origin/main --head HEAD --fail-on-zombie",
+    "vestige card --repo . --since 30d"
+  ]
+}

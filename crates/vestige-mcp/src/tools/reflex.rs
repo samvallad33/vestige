@@ -59,6 +59,7 @@ use crate::cognitive::CognitiveEngine;
 pub mod auto_bind;
 mod compaction;
 mod enforce;
+pub mod lease;
 pub mod pairing;
 mod stale;
 mod witness;

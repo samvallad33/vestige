@@ -374,11 +374,31 @@ impl Prover<'_> {
                     line_up.len()
                 );
             }
-            // Leads at `low..high` are still open.
+            // Leads at `low..high` are still open. Select the BISCEPTER Q16.16
+            // weighted-median probability-mass pivot instead of blind 50/50 count
+            // splitting so recent & direct-anchor BICs isolate in fewer probes.
             let (mut low, mut high) = (0usize, line_up.len());
             let mut earliest_bad: Option<&Lead> = None;
             while low < high {
-                let middle = (low + high - 1) / 2;
+                let slice_len = high - low;
+                let weights: Vec<u64> = (low..high)
+                    .map(|idx| {
+                        super::biscepter::score_commit_prior_q16(
+                            &super::biscepter::CommitRiskSignals {
+                                age_from_bad: (line_up.len() - 1).saturating_sub(idx),
+                                touches_failing_anchor: line_up[idx].depth <= 1,
+                                unwitnessed: false,
+                                oscillation_neighbor: false,
+                                bad_outcomes: 0,
+                                good_outcomes: 0,
+                            },
+                        )
+                    })
+                    .collect();
+                let rel = super::biscepter::weighted_median_pivot(&weights)
+                    .unwrap_or((slice_len - 1) / 2)
+                    .min(slice_len - 1);
+                let middle = low + rel;
                 let lead = line_up[middle];
                 let commit = lead.commit.as_deref().unwrap_or_default();
                 let Some(entry) = self.probe_within(&mut cap, commit, "candidate")? else {

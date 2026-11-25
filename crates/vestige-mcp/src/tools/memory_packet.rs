@@ -64,12 +64,20 @@ fn thing_words(raw: &str) -> Vec<String> {
         .map(|w| {
             let w = w.to_lowercase();
             let n = w.chars().count();
-            if n > 4 && w.ends_with("ies") {
-                format!("{}y", &w[..w.len() - 3])
-            } else if n > 4 && w.ends_with("oes") {
-                w[..w.len() - 2].to_string()
-            } else if n > 3 && w.ends_with('s') && !w.ends_with("ss") && !w.ends_with("us") {
-                w[..w.len() - 1].to_string()
+            if n > 4
+                && let Some(stem) = w.strip_suffix("ies")
+            {
+                format!("{stem}y")
+            } else if n > 4
+                && let Some(stem) = w.strip_suffix("oes")
+            {
+                format!("{stem}o")
+            } else if n > 3
+                && !w.ends_with("ss")
+                && !w.ends_with("us")
+                && let Some(stem) = w.strip_suffix('s')
+            {
+                stem.to_string()
             } else {
                 w
             }

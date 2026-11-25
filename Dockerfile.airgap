@@ -1,0 +1,18 @@
+# Air-Gapped Sovereign Dev Container (Zero Network, Zero Cloud, Scratch Runtime)
+# Build: docker build -f Dockerfile.airgap -t ghcr.io/samvallad33/vestige:airgap .
+# Run:   docker run --rm --network=none -v "$PWD:/repo:ro" ghcr.io/samvallad33/vestige:airgap shield --repo /repo --base HEAD~1 --head HEAD
+
+FROM rust:1.88-alpine AS builder
+RUN apk add --no-cache musl-dev pkgconfig
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked --target x86_64-unknown-linux-musl -p vestige-mcp --bin vestige \
+    && strip target/x86_64-unknown-linux-musl/release/vestige
+
+FROM scratch
+LABEL org.opencontainers.image.title="Vestige Air-Gapped Causal Proof Engine"
+LABEL org.opencontainers.image.description="Zero-network static Rust binary for deterministic PR verification, Unicode/secret shielding, and Strata cryptographic audit trails."
+LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
+LABEL org.opencontainers.image.source="https://github.com/samvallad33/vestige"
+COPY --from=builder /src/target/x86_64-unknown-linux-musl/release/vestige /vestige
+ENTRYPOINT ["/vestige"]

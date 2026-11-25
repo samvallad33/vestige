@@ -92,6 +92,7 @@ use std::sync::Arc;
 
 use vestige_core::Storage;
 
+pub mod biscepter;
 pub mod card;
 pub mod check;
 pub mod child;

@@ -194,6 +194,8 @@ pub(crate) fn static_instructions() -> String {
             .to_string()
     };
     instructions.push_str("\nUse session for boot, intentions and status; remember for gated saves and inline salience receipts; recall for exact handles or ids; causal_walk for recorded evidence; curate for memory changes; precedent for receipts and verification.");
+    instructions.push_str("\nCAUSAL_WALK CONTRACT (ENFORCED — HARD-FAIL ON MISSING FIELDS): causal_walk follows lineage edges (derived_from, evidence_of, closes, corrects) freely to full depth, and at most ONE touched edge. On ANY codebase/decision/pattern save (or any save mentioning source files), remember(action='save') REJECTS the write unless ALL FIVE are supplied: (1) repo_path pointing to an existing directory, (2) non-empty repo-relative files=[...] verified against repo_path, (3) exact path/to/file.ext:line frames inside content, (4) non-empty domain tags=[...], and (5) explicit typed links=[{'kind':'derived_from'|'evidence_of'|'closes'|'supersedes','to':'<id>'}] OR an ingested HEAD commit receipt in Strata.");
+    instructions.push_str("\nPROVE & WALK: On failures, run causal_walk(action='walk', start_points=[version_range/stack_frame/failing_test]) before guessing (returns diverse_causes, interaction_pairs, zombie_oscillations, trust_audit, env_drift). BEFORE editing guarded lines, run causal_walk(action='fence', repoPath='<repo>', targets=['file:start-end']) for Chesterton's Fence + zombie patch-id checks. When an expected cause is missing, run causal_walk(action='why_not', from_handle=..., expected_id=...). To prove every hunk in a fix commit is Halpern-Pearl necessary and catch tautological tests, run causal_walk(action='ablate', repoPath='<repo>', commit='HEAD', oracle_cmd='<cmd>'). After green tests, call causal_walk(action='prove', commit='<sha>', repoPath='<repo>', out='notes'). Respect active Execution Leases (vestige lease / vestige steer) and never bypass Operator stops.");
     instructions.push_str("\nDiscover actions with session(action='status', view='tools'); pass tool='<name>' for its exact schema. Choose calls that serve the task; no tool-call quota is required.");
     instructions.push_str("\nUse recall(id='<memory-id>') to read a memory. Native stability is a ranking signal, not proof of truth. Verify retrieved claims against current evidence.");
     instructions
@@ -1298,7 +1300,7 @@ impl McpServer {
                     open_world_hint: false,
                 }),
                 description: Some(
-                    "Recorded causal investigation and commit witness bundles. action='walk' follows explicit starts; action='prove' bundles already recorded test witnesses using repoPath, commit and out. It does not run tests or bisect.".to_string(),
+                    "Recorded causal proof engine: action='walk' runs backward BFS enriched with diverse_causes, interaction_pairs, zombie_oscillations, trust_audit & env_drift; action='fence' runs forward Chesterton's Fence blame+Strata guard & zombie patch-id checks; action='why_not' proves minimal graph obstructions; action='ablate' runs isolated-worktree Halpern-Pearl hunk ablation + tautology check; action='prove' bundles Reflex test witnesses.".to_string(),
                 ),
                 input_schema: tools::compact::of(&tools::causal_walk::schema()),
                 ..Default::default()

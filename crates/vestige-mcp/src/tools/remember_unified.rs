@@ -99,20 +99,102 @@ pub async fn execute(
     let parsed: RememberArgs = serde_json::from_value(raw_args.clone())
         .map_err(|e| format!("Invalid remember arguments: {e}"))?;
 
+    // Invisible Unicode Concealment & Trojan Source Firewall: reject hidden TAG-block
+    // (`U+E0000..=U+E007F`) prompt smuggling or Bidi overrides before writing any bytes.
+    if let Some(content) = raw_args.get("content").and_then(Value::as_str) {
+        let hits = crate::tools::bot_fleet::scan_concealed_unicode(content);
+        if let Some(first) = hits.first() {
+            return Err(format!(
+                "UNICODE_CONCEALMENT_REJECTED: refused invisible {} ({}) at char offset {} — nothing was written to Strata.",
+                first.kind, first.codepoint, first.char_offset
+            ));
+        }
+    }
+    if let Some(items) = raw_args.get("items").and_then(Value::as_array) {
+        for (idx, item) in items.iter().enumerate() {
+            if let Some(content) = item.get("content").and_then(Value::as_str) {
+                let hits = crate::tools::bot_fleet::scan_concealed_unicode(content);
+                if let Some(first) = hits.first() {
+                    return Err(format!(
+                        "UNICODE_CONCEALMENT_REJECTED: refused invisible {} ({}) in items[{idx}] at char offset {} — nothing was written to Strata.",
+                        first.kind, first.codepoint, first.char_offset
+                    ));
+                }
+            }
+        }
+    }
+
     let is_codebase =
         parsed.repo_path.is_some() || parsed.files.as_ref().is_some_and(|f| !f.is_empty());
+    let machine_receipt = is_machine_receipt(&raw_args, &parsed);
     let mut extra_tags = Vec::new();
+    let mut extracted_file_anchors = Vec::new();
 
     if is_codebase && let Some(files) = &parsed.files {
         for f in files {
-            extra_tags.push(format!("file:{f}"));
+            let norm = normalize_file_anchor(f);
+            if !norm.is_empty() {
+                let tag = format!("file:{norm}");
+                if !extra_tags.contains(&tag) {
+                    extra_tags.push(tag);
+                }
+            }
         }
     }
+    if let Some(content) = raw_args.get("content").and_then(Value::as_str) {
+        for path in extract_inline_file_anchors(content) {
+            let tag = format!("file:{path}");
+            if !extra_tags.contains(&tag) {
+                extra_tags.push(tag);
+            }
+            if !extracted_file_anchors.contains(&path) {
+                extracted_file_anchors.push(path);
+            }
+        }
+    }
+
+    // Auto-bind HEAD commit receipt lineage (`derived_from` + `commit:<short7>`) whenever a git
+    // repo path is supplied so every decision/failure/fix enters `causal_walk`'s full-depth
+    // lineage graph automatically instead of stopping behind the 1-`touched`-edge cap.
+    let head_lineage = if machine_receipt {
+        None
+    } else {
+        fence_base_dir(&raw_args, &parsed)
+            .and_then(|repo| resolve_head_commit_lineage(storage.as_ref(), repo))
+    };
+    let mut auto_linked_head_receipt: Option<String> = None;
 
     let mut ingest_payload = raw_args.clone();
     if let Some(obj) = ingest_payload.as_object_mut() {
         if parsed.allow_secrets {
             obj.insert("allowSecrets".into(), json!(true));
+        }
+        if let Some((ref sha, ref receipt_id)) = head_lineage {
+            let short_tag = format!("commit:{}", &sha[..sha.len().min(7)]);
+            let caller_has_commit_tag = obj
+                .get("tags")
+                .and_then(Value::as_array)
+                .is_some_and(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .any(|t| t.starts_with("commit:"))
+                });
+            if !caller_has_commit_tag && !extra_tags.contains(&short_tag) {
+                extra_tags.push(short_tag);
+            }
+            if let Some(rid) = receipt_id {
+                let links_val = obj.entry("links".to_string()).or_insert_with(|| json!([]));
+                if let Some(arr) = links_val.as_array_mut() {
+                    let already_linked = arr.iter().any(|item| {
+                        item.as_str() == Some(rid.as_str())
+                            || item.get("to").and_then(Value::as_str) == Some(rid.as_str())
+                    });
+                    if !already_linked && arr.len() < 16 {
+                        arr.push(json!({ "kind": "derived_from", "to": rid }));
+                        auto_linked_head_receipt = Some(rid.clone());
+                    }
+                }
+            }
         }
         if !extra_tags.is_empty() {
             let existing_tags = obj.entry("tags".to_string()).or_insert_with(|| json!([]));
@@ -125,6 +207,35 @@ pub async fn execute(
             }
         }
     }
+
+    // Hard-Fail Causal Completeness Gate: reject incomplete engineering/codebase saves BEFORE
+    // writing to Strata so agents are forced to provide repo_path, verified files, path:line
+    // frames, tags, and upstream causal lineage (`links` or a Strata HEAD commit receipt).
+    if !machine_receipt && requires_causal_completeness(&raw_args, &parsed) {
+        enforce_causal_completeness(&CausalCompletenessCtx {
+            raw: &raw_args,
+            parsed: &parsed,
+            repo_dir: fence_base_dir(&raw_args, &parsed),
+            extracted_file_anchors: &extracted_file_anchors,
+            head_lineage: head_lineage.as_ref(),
+            auto_linked_head_receipt: auto_linked_head_receipt.as_deref(),
+        })?;
+    }
+
+    let explicit_links: Vec<String> = ingest_payload
+        .get("links")
+        .or_else(|| raw_args.get("links"))
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    v.as_str()
+                        .or_else(|| v.get("to").and_then(Value::as_str))
+                        .map(str::to_owned)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Step 1: Execute Smart Ingest
     let ingest_res = tools::smart_ingest::execute(storage, cognitive, Some(ingest_payload)).await?;
@@ -261,16 +372,12 @@ pub async fn execute(
     let standing_policies = register_standing_policies(storage, scope, &raw_args);
 
     // Wave 14M (#774): Mandatory Birth Certificate & causal-anchor auto-bind.
-    let explicit_links: Vec<String> = raw_args
-        .get("links")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let explicit_files: Vec<String> = parsed.files.clone().unwrap_or_default();
+    let mut explicit_files: Vec<String> = parsed.files.clone().unwrap_or_default();
+    for path in &extracted_file_anchors {
+        if !explicit_files.contains(path) {
+            explicit_files.push(path.clone());
+        }
+    }
     let active_receipt_hash = ingest_res
         .get("receiptId")
         .and_then(Value::as_str)
@@ -329,8 +436,378 @@ pub async fn execute(
         if !standing_policies.is_empty() {
             obj.insert("standing_policies".to_string(), json!(standing_policies));
         }
+        if head_lineage.is_some() || !extracted_file_anchors.is_empty() {
+            let (head_commit, head_receipt_id) = match &head_lineage {
+                Some((sha, rid)) => (Some(sha.as_str()), rid.as_deref()),
+                None => (None, None),
+            };
+            obj.insert(
+                "causal_lineage".to_string(),
+                json!({
+                    "head_commit": head_commit,
+                    "head_receipt_id": head_receipt_id,
+                    "auto_linked": auto_linked_head_receipt.is_some(),
+                    "extracted_file_anchors": extracted_file_anchors,
+                }),
+            );
+        }
     }
     Ok(response)
+}
+
+// hardcode-scan: protocol (file extensions for source/config path:line anchor extraction)
+const CODE_EXTS: &[&str] = &[
+    ".rs", ".ts", ".tsx", ".js", ".mjs", ".jsx", ".svelte", ".py", ".go", ".c", ".h", ".cpp",
+    ".java", ".toml", ".json", ".sql", ".sh", ".md", ".yaml", ".yml",
+];
+
+fn normalize_file_anchor(raw: &str) -> String {
+    let trimmed = raw.trim().replace('\\', "/");
+    let without_dot = trimmed.strip_prefix("./").unwrap_or(&trimmed);
+    let path_only = without_dot.split('#').next().unwrap_or(without_dot);
+    path_only.trim().to_string()
+}
+
+fn is_machine_receipt(raw: &Value, parsed: &RememberArgs) -> bool {
+    if parsed.tags.as_ref().is_some_and(|tags| {
+        tags.iter().any(|t| {
+            t == crate::commit_receipt::AUTO_TAG
+                || t == crate::commit_receipt::RECEIPT_TAG
+                || t == "operator-stop"
+                || t == "operator-rule"
+        })
+    }) {
+        return true;
+    }
+    raw.get("source")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.starts_with("vestige hook ") || s.starts_with("operator-gate"))
+}
+
+fn token_is_source_file(raw: &str) -> bool {
+    let cleaned = raw.trim_matches(|c: char| {
+        matches!(
+            c,
+            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '<' | '>' | '.'
+        )
+    });
+    if cleaned.is_empty() || cleaned.contains("://") {
+        return false;
+    }
+    let candidate = cleaned
+        .rsplit_once(':')
+        .map(|(left, _)| left)
+        .unwrap_or(cleaned)
+        .split('#')
+        .next()
+        .unwrap_or(cleaned);
+    let lower = candidate.to_ascii_lowercase();
+    CODE_EXTS.iter().any(|ext| {
+        lower
+            .strip_suffix(ext)
+            .is_some_and(|stem| stem.bytes().any(|b| b.is_ascii_alphanumeric()))
+    })
+}
+
+fn content_mentions_source_file(content: &str) -> bool {
+    content.split_whitespace().any(token_is_source_file)
+}
+
+fn requires_causal_completeness(raw: &Value, parsed: &RememberArgs) -> bool {
+    if parsed.scope.as_deref() == Some("personal") {
+        return false;
+    }
+    if parsed.repo_path.is_some()
+        || raw.get("repoPath").is_some()
+        || raw.get("cwd").is_some()
+        || parsed.files.as_ref().is_some_and(|f| !f.is_empty())
+    {
+        return true;
+    }
+    if let Some(nt) = raw.get("node_type").and_then(Value::as_str)
+        && matches!(nt, "decision" | "pattern")
+    {
+        return true;
+    }
+    if parsed.tags.as_ref().is_some_and(|tags| {
+        tags.iter().any(|t| {
+            t.starts_with("file:")
+                || t.starts_with("commit:")
+                || t.starts_with("pr:")
+                || t.starts_with("issue:")
+                || t == "git-commit"
+        })
+    }) {
+        return true;
+    }
+    if raw
+        .get("content")
+        .and_then(Value::as_str)
+        .is_some_and(content_mentions_source_file)
+    {
+        return true;
+    }
+    raw.get("items")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("node_type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|nt| matches!(nt, "decision" | "pattern"))
+                    || item
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .is_some_and(content_mentions_source_file)
+            })
+        })
+}
+
+struct CausalCompletenessCtx<'a> {
+    raw: &'a Value,
+    parsed: &'a RememberArgs,
+    repo_dir: Option<&'a str>,
+    extracted_file_anchors: &'a [String],
+    head_lineage: Option<&'a (String, Option<String>)>,
+    auto_linked_head_receipt: Option<&'a str>,
+}
+
+fn file_exists_in_repo(repo_dir: &str, rel_path: &str) -> bool {
+    let base = Path::new(repo_dir);
+    if base.join(rel_path).exists() {
+        return true;
+    }
+    // Deleted files that still exist in HEAD remain valid provenance anchors.
+    std::process::Command::new("git")
+        .args(["-C", repo_dir, "cat-file", "-e", &format!("HEAD:{rel_path}")])
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+fn has_explicit_causal_link(raw: &Value) -> bool {
+    raw.get("links")
+        .and_then(Value::as_array)
+        .is_some_and(|arr| {
+            arr.iter().any(|item| {
+                let kind_ok = item.get("kind").and_then(Value::as_str).is_some_and(|k| {
+                    matches!(
+                        k,
+                        "derived_from" | "evidence_of" | "closes" | "supersedes" | "reopened"
+                    )
+                });
+                let to_ok = item
+                    .get("to")
+                    .and_then(Value::as_str)
+                    .is_some_and(|t| !t.trim().is_empty());
+                kind_ok && to_ok
+            })
+        })
+}
+
+fn enforce_causal_completeness(ctx: &CausalCompletenessCtx<'_>) -> Result<(), String> {
+    let mut violations: Vec<String> = Vec::new();
+
+    // 1. Existing repository root directory (`repo_path`)
+    let valid_repo = match ctx.repo_dir {
+        Some(dir) if Path::new(dir).is_dir() => Some(dir),
+        Some(dir) => {
+            violations.push(format!(
+                "INVALID_REPO_PATH: repo_path `{dir}` does not exist on disk — pass the real absolute git worktree root."
+            ));
+            None
+        }
+        None => {
+            violations.push(
+                "MISSING_REPO_PATH: pass `repo_path` pointing to the absolute git repository root."
+                    .to_string(),
+            );
+            None
+        }
+    };
+
+    // 2. Explicit, non-empty, verified repo-relative `files=[...]`
+    let normalized_files: Vec<String> = ctx
+        .parsed
+        .files
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .map(|f| normalize_file_anchor(f))
+        .filter(|f| !f.is_empty())
+        .collect();
+    if normalized_files.is_empty() {
+        violations.push(
+            "MISSING_FILES: pass non-empty `files: [\"path/to/file.ext\", ...]` listing every touched/relevant repo-relative file."
+                .to_string(),
+        );
+    } else {
+        let invalid_format: Vec<&str> = normalized_files
+            .iter()
+            .filter(|f| {
+                let is_abs = Path::new(f).is_absolute()
+                    || (f.len() >= 2 && f.as_bytes()[1] == b':');
+                let has_structure = f.contains('/') || token_is_source_file(f);
+                is_abs || !has_structure
+            })
+            .map(String::as_str)
+            .collect();
+        if !invalid_format.is_empty() {
+            violations.push(format!(
+                "INVALID_FILES_FORMAT: `files` must contain repo-relative paths (not absolute paths or bare words): {invalid_format:?}."
+            ));
+        }
+        if let Some(repo) = valid_repo {
+            let unverified: Vec<&str> = normalized_files
+                .iter()
+                .filter(|f| !file_exists_in_repo(repo, f))
+                .map(String::as_str)
+                .collect();
+            if !unverified.is_empty() {
+                violations.push(format!(
+                    "UNVERIFIED_FILES: files not found under repo_path `{repo}` (or HEAD): {unverified:?}."
+                ));
+            }
+        }
+    }
+
+    // 3. At least one exact `path/to/file.ext:line` frame inside `content`, and every cited inline file listed in `files`
+    if ctx.extracted_file_anchors.is_empty() {
+        violations.push(
+            "MISSING_LINE_ANCHORS: include exact `path/to/file.ext:line` (or `path/to/file.ext:start-end`) code frames inside `content` so causal_walk stack_frame & git blame resolve."
+                .to_string(),
+        );
+    } else if !normalized_files.is_empty() {
+        let missing_from_files: Vec<&str> = ctx
+            .extracted_file_anchors
+            .iter()
+            .filter(|anchor| !normalized_files.iter().any(|f| f == *anchor))
+            .map(String::as_str)
+            .collect();
+        if !missing_from_files.is_empty() {
+            violations.push(format!(
+                "MISSING_INLINE_FILES_IN_FILES_PARAM: content cites line frames in {missing_from_files:?} that are absent from `files=[...]` — list every cited file in `files`."
+            ));
+        }
+    }
+
+    // 4. Explicit domain/handle tags (`tags=[...]`)
+    let caller_tags = ctx
+        .parsed
+        .tags
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .filter(|t| !t.trim().is_empty())
+        .count();
+    if caller_tags == 0 {
+        violations.push(
+            "MISSING_TAGS: pass non-empty `tags: [\"...\"]` with exact handles for deterministic recall."
+                .to_string(),
+        );
+    }
+
+    // 5. Traversable upstream causal lineage (`links` OR Strata HEAD commit receipt)
+    if !has_explicit_causal_link(ctx.raw) && ctx.auto_linked_head_receipt.is_none() {
+        let head_hint = match ctx.head_lineage {
+            Some((sha, None)) => format!(
+                " (HEAD `{}` has no Strata commit receipt yet — run `session(action='codebase', params={{'action':'ingest_repo','repoPath':'<repo>','dryRun':false}})` or `vestige init --git-hooks`)",
+                &sha[..sha.len().min(7)]
+            ),
+            _ => String::new(),
+        };
+        violations.push(format!(
+            "MISSING_CAUSAL_LINEAGE: pass explicit `links: [{{\"kind\":\"derived_from\"|\"evidence_of\"|\"closes\"|\"supersedes\",\"to\":\"<memory-id>\"}}]` OR ensure HEAD has an ingested Strata commit receipt{head_hint}."
+        ));
+    }
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "CAUSAL_COMPLETENESS_REJECTED ({} missing/invalid requirements — nothing was written to Strata; fix ALL items below and retry remember):\n- {}",
+            violations.len(),
+            violations.join("\n- ")
+        ))
+    }
+}
+
+/// Extract exact repo-relative `path:line` / `path:start-end` code frames written in `content`
+/// so `causal_walk(start_points=[{kind: "stack_frame", ...}])` has deterministic `file:` anchors.
+fn extract_inline_file_anchors(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in content.split_whitespace() {
+        let cleaned = raw.trim_end_matches('.').trim_matches(|c: char| {
+            matches!(
+                c,
+                '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '<' | '>'
+            )
+        });
+        let Some((path_raw, line_part)) = cleaned.rsplit_once(':') else {
+            continue;
+        };
+        let path_part = path_raw.strip_prefix("./").unwrap_or(path_raw);
+        let line_clean = line_part.trim_end_matches('.');
+        let valid_line = !line_clean.is_empty()
+            && line_clean
+                .split('-')
+                .all(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_digit()));
+        if !valid_line || path_part.is_empty() || path_part.contains("://") {
+            continue;
+        }
+        let lower = path_part.to_ascii_lowercase();
+        if !CODE_EXTS.iter().any(|ext| {
+            lower
+                .strip_suffix(ext)
+                .is_some_and(|stem| stem.bytes().any(|b| b.is_ascii_alphanumeric()))
+        }) {
+            continue;
+        }
+        let normalized = path_part.replace('\\', "/");
+        if !out.contains(&normalized) {
+            out.push(normalized);
+            if out.len() >= 16 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Resolve `HEAD` SHA for `repo_dir` and look up its exact Strata commit receipt memory
+/// (`commit:<sha>` / `commit:<short7>`) for automatic `derived_from` lineage chaining.
+fn resolve_head_commit_lineage(storage: &Storage, repo_dir: &str) -> Option<(String, Option<String>)> {
+    let dir = Path::new(repo_dir);
+    if !dir.exists() {
+        return None;
+    }
+    let output = std::process::Command::new("git")
+        .args(["-C", repo_dir, "rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8(output.stdout).ok()?.trim().to_ascii_lowercase();
+    if sha.len() < 7 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let short = &sha[..7];
+    let mut ids = storage.resolve_handle(&format!("commit:{sha}")).ids;
+    if ids.is_empty() {
+        ids = storage.resolve_handle(&format!("commit:{short}")).ids;
+    }
+    // Prefer the machine commit receipt node over secondary memories tagged with the same commit.
+    let receipt_id = ids
+        .iter()
+        .find(|id| {
+            storage.get_node(id).ok().flatten().is_some_and(|n| {
+                n.tags
+                    .iter()
+                    .any(|t| t == crate::commit_receipt::RECEIPT_TAG || t == crate::commit_receipt::AUTO_TAG)
+            })
+        })
+        .cloned()
+        .or_else(|| ids.into_iter().next());
+    Some((sha, receipt_id))
 }
 
 /// Directory a pinned save should project into: an explicit `cwd` or
@@ -500,5 +977,210 @@ mod tests {
 
         let ordinary = remember(&storage, "The cafe serves oat milk.").await;
         assert!(ordinary.get("standing_policies").is_none(), "{ordinary}");
+    }
+
+    #[test]
+    fn extract_inline_file_anchors_captures_exact_path_line_frames() {
+        let content = "Fixed crash in `crates/vestige-core/src/retrieval/plan.rs:142-155` and (src/auth.rs:19). Ignore https://example.com:443 and plain words.";
+        let anchors = extract_inline_file_anchors(content);
+        assert_eq!(
+            anchors,
+            vec![
+                "crates/vestige-core/src/retrieval/plan.rs".to_string(),
+                "src/auth.rs".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn remember_auto_links_derived_from_head_commit_receipt_for_causal_walk() {
+        let (storage, _store_dir) = open();
+        let repo = tempfile::tempdir().unwrap();
+        let git_run = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .current_dir(repo.path())
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?} failed");
+        };
+        git_run(&["init", "-q"]);
+        git_run(&["config", "user.email", "test@example.com"]);
+        git_run(&["config", "user.name", "Test User"]);
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join("src/auth.rs"), "pub fn check() {}\n").unwrap();
+        git_run(&["add", "src/auth.rs"]);
+        git_run(&["commit", "-q", "-m", "add auth check"]);
+
+        // Write the machine post-commit receipt first, matching real git-hook behavior.
+        // `post_commit` runs its own sync tokio runtime internally, so invoke it off the async worker.
+        let receipt_store = crate::commit_receipt::ReceiptStore::Local(storage.clone());
+        let repo_path_owned = repo.path().to_path_buf();
+        let (facts, commit_receipt_id) = tokio::task::spawn_blocking(move || {
+            crate::commit_receipt::post_commit(
+                &receipt_store,
+                &repo_path_owned,
+                Some("cargo test ok"),
+            )
+        })
+        .await
+        .expect("spawn_blocking join")
+        .expect("post_commit receipt");
+
+        // Now call remember(action='save') with complete causal anchors — ZERO manual links needed
+        // because HEAD has a Strata commit receipt that auto-links via derived_from!
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let saved = execute(
+            &storage,
+            &cognitive,
+            Some(json!({
+                "content": "Auth token check updated in `src/auth.rs:1` after review.",
+                "node_type": "decision",
+                "repo_path": repo.path().display().to_string(),
+                "files": ["src/auth.rs"],
+                "tags": ["auth"],
+            })),
+        )
+        .await
+        .expect("remember save");
+
+        assert_eq!(saved["causal_lineage"]["auto_linked"], json!(true), "{saved}");
+        assert_eq!(
+            saved["causal_lineage"]["head_commit"],
+            json!(facts.sha),
+            "{saved}"
+        );
+        assert_eq!(
+            saved["causal_lineage"]["head_receipt_id"],
+            json!(commit_receipt_id),
+            "{saved}"
+        );
+        assert_eq!(
+            saved["causal_lineage"]["extracted_file_anchors"],
+            json!(["src/auth.rs"]),
+            "{saved}"
+        );
+
+        let saved_id = saved["nodeId"].as_str().unwrap().to_string();
+        let node = storage.get_node(&saved_id).unwrap().unwrap();
+        assert!(node.tags.contains(&"file:src/auth.rs".to_string()));
+        assert!(
+            node.tags
+                .contains(&format!("commit:{}", &facts.sha[..7]))
+        );
+
+        // Verify causal_walk follows the auto-attached derived_from edge straight to the commit receipt!
+        let walk = crate::tools::causal_walk::execute(
+            &storage,
+            Some(json!({
+                "action": "walk",
+                "from_handle": saved_id,
+            })),
+        )
+        .await
+        .expect("causal_walk");
+        let cause_ids: Vec<&str> = walk["causes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c["id"].as_str())
+            .collect();
+        assert!(
+            cause_ids.contains(&commit_receipt_id.as_str()),
+            "causal_walk must reach HEAD commit receipt via auto-bound derived_from edge: {walk}"
+        );
+    }
+
+    #[tokio::test]
+    async fn completeness_gate_rejects_incomplete_codebase_saves_with_zero_writes() {
+        let (storage, _store_dir) = open();
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+
+        // A lazy decision OR a sneaky "note" mentioning a source file must HARD-FAIL with all missing fields.
+        for payload in [
+            json!({
+                "content": "Refactored token verification logic.",
+                "node_type": "decision",
+            }),
+            json!({
+                "content": "Fixed regression in src/auth.rs.",
+                "node_type": "note",
+            }),
+        ] {
+            let err = execute(&storage, &cognitive, Some(payload))
+                .await
+                .expect_err("incomplete codebase save must hard-fail");
+            assert!(err.contains("CAUSAL_COMPLETENESS_REJECTED"), "{err}");
+            assert!(err.contains("MISSING_REPO_PATH"), "{err}");
+            assert!(err.contains("MISSING_FILES"), "{err}");
+            assert!(err.contains("MISSING_LINE_ANCHORS"), "{err}");
+            assert!(err.contains("MISSING_TAGS"), "{err}");
+            assert!(err.contains("MISSING_CAUSAL_LINEAGE"), "{err}");
+        }
+
+        assert_eq!(
+            storage.get_stats().unwrap().total_nodes,
+            0,
+            "rejected writes must leave zero nodes in Strata"
+        );
+    }
+
+    #[tokio::test]
+    async fn completeness_gate_rejects_hallucinated_files_and_unlinked_commits() {
+        let (storage, _store_dir) = open();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join("src/real.rs"), "pub fn real() {}\n").unwrap();
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+
+        // Hallucinated file path AND missing causal lineage (no commit receipt & no links).
+        let err = execute(
+            &storage,
+            &cognitive,
+            Some(json!({
+                "content": "Updated `src/fake_hallucinated.rs:10` to fix crash.",
+                "node_type": "decision",
+                "repo_path": repo.path().display().to_string(),
+                "files": ["src/fake_hallucinated.rs"],
+                "tags": ["bugfix"],
+            })),
+        )
+        .await
+        .expect_err("hallucinated file and missing lineage must hard-fail");
+        assert!(err.contains("UNVERIFIED_FILES"), "{err}");
+        assert!(err.contains("MISSING_CAUSAL_LINEAGE"), "{err}");
+
+        // Real file, real path:line, real tag, real explicit link -> SUCCEEDS!
+        let seed = remember(&storage, "Root failure observed on CI.").await;
+        let seed_id = seed["nodeId"].as_str().unwrap();
+        let ok = execute(
+            &storage,
+            &cognitive,
+            Some(json!({
+                "content": "Fixed `src/real.rs:1` root cause.",
+                "node_type": "decision",
+                "repo_path": repo.path().display().to_string(),
+                "files": ["src/real.rs"],
+                "tags": ["bugfix"],
+                "links": [{ "kind": "closes", "to": seed_id }],
+            })),
+        )
+        .await
+        .expect("complete save with verified file and explicit link must pass");
+        assert!(ok["nodeId"].as_str().is_some(), "{ok}");
+    }
+
+    #[tokio::test]
+    async fn unicode_concealment_firewall_rejects_tag_smuggling_with_zero_writes() {
+        let (storage, _store_dir) = open();
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let smuggled = "Normal note\u{E0041}hidden instruction";
+        let err = execute(&storage, &cognitive, Some(json!({ "content": smuggled })))
+            .await
+            .expect_err("Unicode TAG smuggling must be rejected");
+        assert!(err.contains("UNICODE_CONCEALMENT_REJECTED"), "{err}");
+        assert!(err.contains("UNICODE_TAG_SMUGGLING"), "{err}");
+        assert_eq!(storage.get_stats().unwrap().total_nodes, 0);
     }
 }
