@@ -4472,8 +4472,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 pref_on,
                 deficit_a: ctx.deficit_a,
                 res: &ctx.ghostcurrent,
-                t_own,
-                t_mask: &ctx.t_mask,
                 t_exact_mask,
                 q_group_mask: ctx.q_group_mask,
                 k,

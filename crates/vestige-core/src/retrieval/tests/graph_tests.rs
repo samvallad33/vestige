@@ -275,3 +275,118 @@ fn wordnet_hypernym_bridges_a_query_word_the_corpus_never_used() {
     };
     assert_eq!(rank(&overlap).results[0].sessions[0].id, "noise");
 }
+
+#[test]
+fn issue_854_outcome_conductance_redirects_current_with_receipts_and_bit_exact_replay() {
+    use crate::retrieval::graph::ghostcurrent_mdl_q16::{GhostCurrentInput, run_ghostcurrent_mdl_q16};
+
+    let make_corpus = |links_on_seed: Vec<TurnLink>| -> Vec<Session> {
+        vec![
+            Session {
+                id: "s0".into(),
+                date: String::new(),
+                timestamp: 100,
+                turns: vec![Turn {
+                    id: "t0".into(),
+                    role: "user".into(),
+                    content: "CobaltRelay reported a timeout failure.".into(),
+                    links: links_on_seed,
+                    stability: 0.0,
+                }],
+            },
+            Session {
+                id: "s1".into(),
+                date: String::new(),
+                timestamp: 200,
+                turns: vec![Turn {
+                    id: "t1".into(),
+                    role: "user".into(),
+                    content: "CobaltRelay path checked AlphaBreaker module.".into(),
+                    links: Vec::new(),
+                    stability: 0.0,
+                }],
+            },
+            Session {
+                id: "s2".into(),
+                date: String::new(),
+                timestamp: 300,
+                turns: vec![Turn {
+                    id: "t2".into(),
+                    role: "user".into(),
+                    content: "CobaltRelay path checked BetaBreaker module.".into(),
+                    links: Vec::new(),
+                    stability: 0.0,
+                }],
+            },
+        ]
+    };
+
+    let run_gc = |sessions: &[Session]| {
+        let p = Params::default();
+        let ix = build_index(sessions, &p);
+        let q = Query {
+            text: "Which CobaltRelay breaker resolved the timeout?".into(),
+            date: String::new(),
+        };
+        let plan = plan_query(&ix, &q, &p);
+        let q_cnt = plan.groups.len().min(64);
+        let q_mask = if q_cnt == 0 { 0 } else { (1u64 << q_cnt) - 1 };
+        let t_own = vec![10.0f32, 0.0, 0.0];
+        let t_exact_mask = vec![1u64, 0, 0];
+        let final_turns = vec![0usize];
+        let inp = GhostCurrentInput {
+            ix: &ix,
+            plan: &plan,
+            q: &q,
+            eff_it: &plan.intent,
+            t_own: &t_own,
+            t_exact_mask: &t_exact_mask,
+            final_turn_indices: &final_turns,
+            q_group_mask: q_mask,
+            q_group_cnt: q_cnt,
+            deficit_a: false,
+            deficit_b: true,
+            is_encyclopedic_multi_doc: false,
+        };
+        run_ghostcurrent_mdl_q16(&inp)
+    };
+
+    // 1. Baseline (zero outcomes -> 0.00% drift, equal symmetric branches, t1 wins tie-break)
+    let base = run_gc(&make_corpus(Vec::new()));
+    assert!(base.deficit_fired);
+    assert_eq!(base.ranked_targets.first().map(|&(ti, _)| ti), Some(1));
+    assert!(base.witness_receipt_ids.is_empty());
+    let base_g1 = base.target_scores.get(&1).copied().unwrap_or(0);
+    let base_g2 = base.target_scores.get(&2).copied().unwrap_or(0);
+    assert_eq!(base_g1, base_g2, "symmetric branches must tie with zero outcomes");
+
+    // 2. Plasticized with recorded Strata outcomes: reinforce (t0 -> t2), damp (t0 -> t1)
+    let fwd_links = vec![
+        TurnLink { kind: "outcome:dead_end:rcpt-dead-1".into(), to: "t1".into(), degree: 2 },
+        TurnLink { kind: "outcome:closed_by_false_assumption:rcpt-false-2".into(), to: "t1".into(), degree: 2 },
+        TurnLink { kind: "outcome:helpful:rcpt-help-3".into(), to: "t2".into(), degree: 2 },
+        TurnLink { kind: "outcome:accepted:rcpt-acc-4".into(), to: "t2".into(), degree: 2 },
+        TurnLink { kind: "outcome:causal_walk_proved:rcpt-prove-5".into(), to: "t2".into(), degree: 2 },
+    ];
+    let plast = run_gc(&make_corpus(fwd_links.clone()));
+    assert_eq!(
+        plast.ranked_targets.first().map(|&(ti, _)| ti),
+        Some(2),
+        "reinforced helpful/accepted/proved branch must flip current from t1 to t2"
+    );
+    let plast_g1 = plast.target_scores.get(&1).copied().unwrap_or(0);
+    let plast_g2 = plast.target_scores.get(&2).copied().unwrap_or(0);
+    assert!(plast_g2 > base_g2, "reinforced branch conductance must increase ({plast_g2} > {base_g2})");
+    assert!(plast_g1 < base_g1 && plast_g1 > 0, "damped dead_end branch must stay finite and drop ({plast_g1} < {base_g1})");
+    assert!(plast.witness_receipt_ids.iter().any(|r| r == "rcpt-help-3"));
+    assert!(plast.witness_receipt_ids.iter().any(|r| r == "rcpt-acc-4"));
+    assert!(plast.witness_receipt_ids.iter().any(|r| r == "rcpt-prove-5"));
+
+    // 3. Bit-exact order-independent replay determinism
+    let mut rev_links = fwd_links;
+    rev_links.reverse();
+    let replay = run_gc(&make_corpus(rev_links));
+    assert_eq!(plast.ranked_targets, replay.ranked_targets);
+    assert_eq!(plast.target_scores, replay.target_scores);
+    assert_eq!(plast.witness_receipt_ids, replay.witness_receipt_ids);
+}

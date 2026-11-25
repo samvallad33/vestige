@@ -155,6 +155,10 @@ pub(in crate::retrieval) struct TurnIx {
     /// Step 14 ingest-time closed-class user preference/constraint role-object ids (`prose_body` only).
     pub(in crate::retrieval) role_objs: Vec<u32>,
     pub(in crate::retrieval) raw_links: Vec<TurnLink>,
+    /// Self-Plasticizing Strata Conductance (#854): recorded outcome edges
+    /// `(target_turn_idx, outcome_type, receipt_id)` ingested from `TurnLink`.
+    /// Empty on raw benchmark text (guarantees 0.00% static benchmark drift).
+    pub(in crate::retrieval) outcome_edges: Vec<(usize, String, String)>,
     /// True when the turn contains an executed structured `[tool_call ...]` receipt block.
     pub(in crate::retrieval) has_tool_call: bool,
     /// True when any `[tool_call <fn>(...)]` in this turn invokes a state-mutating CRUD verb.
@@ -1014,6 +1018,7 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 first_move_num: step9_first_move_num(prose_body),
                 role_objs,
                 raw_links: t.links.clone(),
+                outcome_edges: Vec::new(),
                 has_tool_call,
                 tool_has_mutation,
                 tool_names,
@@ -1069,12 +1074,47 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
     }
     for ti in 0..turns.len() {
         let pending = std::mem::take(&mut turns[ti].raw_links);
+        let from_id = turns[ti].id.clone();
         for link in pending {
             let Some(&target) = id_at.get(&link.to) else { continue };
             if target == ti {
                 continue;
             }
-            turns[ti].exact_edges.push((link.degree.max(2), target));
+            // Self-Plasticizing Strata Conductance (#854): parse exact recorded outcome links
+            // (`"outcome:<type>"`, `"outcome:<type>:<receipt_id>"`, or bare exact outcome type)
+            // symmetrically onto both endpoints without altering static `exact_edges` topology.
+            let parsed_outcome: Option<(String, String)> =
+                if let Some(rest) = link.kind.strip_prefix("outcome:") {
+                    let (otype, rcpt) = match rest.split_once(':') {
+                        Some((o, r)) if !r.is_empty() => (o, r.to_string()),
+                        Some((o, _)) => (o, format!("outcome:{o}:{from_id}->{}", link.to)),
+                        None => (rest, format!("outcome:{rest}:{from_id}->{}", link.to)),
+                    };
+                    if crate::composition::outcome_conductance_delta_q16(otype) != 0 {
+                        Some((otype.to_string(), rcpt))
+                    } else {
+                        None
+                    }
+                } else if crate::composition::outcome_conductance_delta_q16(&link.kind) != 0 {
+                    Some((
+                        link.kind.clone(),
+                        format!("outcome:{}:{from_id}->{}", link.kind, link.to),
+                    ))
+                } else {
+                    None
+                };
+            if let Some((otype, rcpt)) = parsed_outcome {
+                turns[ti].outcome_edges.push((target, otype.clone(), rcpt.clone()));
+                turns[target].outcome_edges.push((ti, otype, rcpt));
+            } else {
+                turns[ti].exact_edges.push((link.degree.max(2), target));
+            }
+        }
+    }
+    for tr in &mut turns {
+        if !tr.outcome_edges.is_empty() {
+            tr.outcome_edges.sort();
+            tr.outcome_edges.dedup();
         }
     }
 

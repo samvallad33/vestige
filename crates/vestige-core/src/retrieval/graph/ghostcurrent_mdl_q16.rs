@@ -48,7 +48,10 @@ pub(in crate::retrieval) struct GhostCurrentResult {
     pub(in crate::retrieval) can_override_slot0: bool,
     pub(in crate::retrieval) sup_live_leaf_of_h0: Option<usize>,
     pub(in crate::retrieval) ranked_targets: Vec<(usize, u64)>,
+    pub(in crate::retrieval) target_scores: BTreeMap<usize, u64>,
     pub(in crate::retrieval) witness_spine: Vec<usize>,
+    /// Proof-carrying Strata outcome receipt IDs traversed along `witness_spine` (`#854`).
+    pub(in crate::retrieval) witness_receipt_ids: Vec<String>,
 }
 
 /// Read-only inputs to `run_ghostcurrent_mdl_q16`.
@@ -92,8 +95,6 @@ pub(in crate::retrieval) struct GhostCurrentSlot0Ctx<'a> {
     pub(in crate::retrieval) pref_on: bool,
     pub(in crate::retrieval) deficit_a: bool,
     pub(in crate::retrieval) res: &'a GhostCurrentResult,
-    pub(in crate::retrieval) t_own: &'a [f32],
-    pub(in crate::retrieval) t_mask: &'a [u64],
     pub(in crate::retrieval) t_exact_mask: &'a [u64],
     pub(in crate::retrieval) q_group_mask: u64,
     pub(in crate::retrieval) k: usize,
@@ -140,7 +141,21 @@ pub(in crate::retrieval) fn evaluate_epistemic_deficit_gate(
         .count_ones() as usize;
     let head0_full = inp.q_group_cnt > 0 && head0_cov >= inp.q_group_cnt;
     let head0_sup = turn_is_superseded(inp.ix, h0);
-    let head0_q_or_bc = inp.ix.turns[h0].is_pure_info_question || inp.ix.turns[h0].is_backchannel;
+    let head0_meta_echo = crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+        inp.ix,
+        h0,
+        &inp.q.text,
+    );
+    let head0_only_excl = !inp.plan.excluded_ids.is_empty()
+        && inp.ix.turns[h0]
+            .content
+            .iter()
+            .any(|id| inp.plan.excluded_ids.contains(id))
+        && head0_cov <= 1;
+    let head0_q_or_bc = inp.ix.turns[h0].is_pure_info_question
+        || inp.ix.turns[h0].is_backchannel
+        || head0_meta_echo
+        || head0_only_excl;
     let (lr_h0, dur_h0) = eval_li_roth_turn(inp.ix, spec, h0);
     let head0_type_miss = spec.has_wh_answer_class() && (lr_h0 < 0 || dur_h0 < 0);
     let head0_margin_strong = inp.final_turn_indices.get(1).is_none_or(|&h1| {
@@ -183,6 +198,7 @@ pub(in crate::retrieval) fn evaluate_epistemic_deficit_gate(
             || head0_q_or_bc
             || head0_type_miss
             || head0_cov == 0
+            || inp.deficit_a
             || (inp.q_group_cnt >= 2 && head0_cov < inp.q_group_cnt));
 
     (deficit_fired, can_override_slot0)
@@ -217,6 +233,7 @@ impl PartialOrd for SearchState {
 struct PathNode {
     turn: usize,
     parent: Option<usize>,
+    receipt_ids: Vec<String>,
 }
 
 fn reconstruct_path(paths: &[PathNode], idx: usize) -> Vec<usize> {
@@ -231,6 +248,53 @@ fn reconstruct_path(paths: &[PathNode], idx: usize) -> Vec<usize> {
     }
     rev.reverse();
     rev
+}
+
+fn reconstruct_receipt_ids(paths: &[PathNode], idx: usize) -> Vec<String> {
+    let mut chain: Vec<usize> = Vec::new();
+    let mut cur = Some(idx);
+    while let Some(i) = cur {
+        chain.push(i);
+        cur = paths[i].parent;
+        if chain.len() > (MAX_HOPS as usize + MAX_SUP_HOPS as usize + 2) {
+            break;
+        }
+    }
+    chain.reverse();
+    let mut receipts: Vec<String> = Vec::new();
+    for i in chain {
+        for r in &paths[i].receipt_ids {
+            if !receipts.contains(r) {
+                receipts.push(r.clone());
+            }
+        }
+    }
+    receipts
+}
+
+/// Self-Plasticizing Strata Conductance (`#854`): deterministic `Q16.16` outcome multiplier
+/// `M_outcome(u, v)` and exact proof receipt IDs for hop `(u, v)`.
+/// Returns `(CONDUCTANCE_Q16_ONE, [])` in O(1) whenever no outcome receipts exist (0.00% drift).
+fn edge_outcome_plasticity_q16(ix: &Index, u: usize, v: usize) -> (u64, Vec<String>) {
+    let edges = &ix.turns[u].outcome_edges;
+    if edges.is_empty() {
+        return (crate::composition::CONDUCTANCE_Q16_ONE, Vec::new());
+    }
+    let mut outcomes: Vec<&str> = Vec::new();
+    let mut receipts: Vec<String> = Vec::new();
+    for (target, otype, rcpt) in edges {
+        if *target == v {
+            outcomes.push(otype.as_str());
+            if !rcpt.is_empty() && !receipts.contains(rcpt) {
+                receipts.push(rcpt.clone());
+            }
+        }
+    }
+    if outcomes.is_empty() {
+        return (crate::composition::CONDUCTANCE_Q16_ONE, Vec::new());
+    }
+    let mult_q16 = crate::composition::outcome_conductance_multiplier_q16(&outcomes);
+    (mult_q16, receipts)
 }
 
 fn path_contains(paths: &[PathNode], idx: usize, target: usize) -> bool {
@@ -335,6 +399,7 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         paths.push(PathNode {
             turn: seed_ti,
             parent: None,
+            receipt_ids: Vec::new(),
         });
         heap.push(SearchState {
             conductance_q16: init_g,
@@ -347,10 +412,71 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         });
     }
 
-    // Dual Source B: Virtual Query Node `Q` injecting via KITE/WordNet/GeoNames bridge IDs
-    let virt_ids = spec.virtual_query_vocab_ids();
+    // Dual Source B: Virtual Query Node `Q` injecting via KITE/WordNet/GeoNames/Wikidata bridge IDs
+    let mut virt_ids = spec.virtual_query_vocab_ids();
+    if inp.deficit_a {
+        let sp_single = crate::retrieval::lexical::tier_bridge_q16::detect_single_subject_speaker(
+            inp.ix,
+            inp.plan,
+            &inp.q.text,
+        );
+        let push_lex = |virt_ids: &mut Vec<u32>, lemma: &str| {
+            for part in lemma.split_ascii_whitespace() {
+                if part.len() < 3 || virt_ids.len() >= 48 {
+                    continue;
+                }
+                let st = crate::retrieval::stem(part);
+                for cid in [
+                    inp.ix.vocab.get(part),
+                    inp.ix.vocab.get(&crate::retrieval::stem_term(&st)),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if !inp.plan.excluded_ids.contains(&cid) && !virt_ids.contains(&cid) {
+                        virt_ids.push(cid);
+                    }
+                }
+            }
+        };
+        for g_word in &inp.plan.groups {
+            if g_word.starts_with('\u{1}')
+                || g_word.len() < 3
+                || !crate::retrieval::is_content(g_word)
+                || sp_single
+                    .as_deref()
+                    .is_some_and(|sp| g_word.eq_ignore_ascii_case(sp))
+            {
+                continue;
+            }
+            for g_inst in crate::geonames::geo_class_instances(g_word).into_iter().take(8) {
+                push_lex(&mut virt_ids, &g_inst);
+            }
+            for (g_nb, _) in crate::geonames::geo_neighbors(g_word).into_iter().take(6) {
+                push_lex(&mut virt_ids, g_nb);
+            }
+            for w_inst in crate::wordnet::class_to_instances(g_word, 2).into_iter().take(8) {
+                push_lex(&mut virt_ids, w_inst);
+            }
+            for (w_nb, _) in crate::wordnet::full_lexicon_neighbors(g_word).into_iter().take(8) {
+                push_lex(&mut virt_ids, w_nb);
+            }
+            for wd_inst in crate::wikidata::direct_instances_of(g_word, 12)
+                .into_iter()
+                .chain(crate::wikidata::upward_containers(g_word, 2))
+            {
+                push_lex(&mut virt_ids, &wd_inst);
+            }
+            if virt_ids.len() >= 48 {
+                break;
+            }
+        }
+    }
     let mut virt_seeded = 0usize;
-    for &vid in virt_ids.iter().take(24) {
+    for &vid in virt_ids.iter().take(32) {
+        if inp.plan.excluded_ids.contains(&vid) {
+            continue;
+        }
         if let Some(post) = inp.ix.t_postings.get(vid as usize) {
             let df = post.len() as u32;
             if df == 0 || df > max_df {
@@ -369,6 +495,7 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                 paths.push(PathNode {
                     turn: ti,
                     parent: None,
+                    receipt_ids: Vec::new(),
                 });
                 heap.push(SearchState {
                     conductance_q16: g_virt,
@@ -380,12 +507,12 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                     path_idx: p_idx,
                 });
                 virt_seeded += 1;
-                if virt_seeded >= 24 {
+                if virt_seeded >= 32 {
                     break;
                 }
             }
         }
-        if virt_seeded >= 24 {
+        if virt_seeded >= 32 {
             break;
         }
     }
@@ -394,6 +521,7 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
     // clue paths ADD linearly while duplicate paths on the same carrier cannot double-count.
     let mut per_target_carrier: BTreeMap<(usize, u32), u64> = BTreeMap::new();
     let mut best_path_for_target: BTreeMap<usize, (u64, usize)> = BTreeMap::new();
+    let mut target_receipt_ids: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut settled = 0usize;
     let mut visited_state: BTreeMap<(usize, u32), u64> = BTreeMap::new();
 
@@ -420,17 +548,25 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
             if st.sup_hops < MAX_SUP_HOPS
                 && let Some(nexts) = fwd_sup.get(&st.turn)
             {
-                let g_fwd = ((st.conductance_q16 as u128 * SUP_FORWARD_DECAY_Q16 as u128) >> 16)
+                let g_fwd_base = ((st.conductance_q16 as u128 * SUP_FORWARD_DECAY_Q16 as u128) >> 16)
                     as u64;
-                if g_fwd >= MIN_CURRENT_Q16 {
+                if g_fwd_base >= MIN_CURRENT_Q16 {
                     for &nxt in nexts.iter().take(4) {
                         if path_contains(&paths, st.path_idx, nxt) {
+                            continue;
+                        }
+                        let (m_q16, rcpts) = edge_outcome_plasticity_q16(inp.ix, st.turn, nxt);
+                        let g_fwd = crate::composition::apply_outcome_conductance_q16(
+                            g_fwd_base, m_q16,
+                        );
+                        if g_fwd < MIN_CURRENT_Q16 {
                             continue;
                         }
                         let p_idx = paths.len();
                         paths.push(PathNode {
                             turn: nxt,
                             parent: Some(st.path_idx),
+                            receipt_ids: rcpts,
                         });
                         heap.push(SearchState {
                             conductance_q16: g_fwd,
@@ -489,6 +625,15 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                     }
                 })
                 .or_insert((sink_g, st.path_idx));
+            let path_rcpts = reconstruct_receipt_ids(&paths, st.path_idx);
+            if !path_rcpts.is_empty() {
+                let entry = target_receipt_ids.entry(st.turn).or_default();
+                for r in path_rcpts {
+                    if !entry.contains(&r) {
+                        entry.push(r);
+                    }
+                }
+            }
         }
 
         if st.depth >= MAX_HOPS {
@@ -498,17 +643,23 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         // Expand outgoing typed carriers with strict Hashimoto non-backtracking (c != last_carrier)
         let mut carriers: Vec<(u32, u64)> = Vec::new();
         for &eid in &tr.entities {
-            if eid != st.last_carrier {
+            if eid != st.last_carrier && !inp.plan.excluded_ids.contains(&eid) {
                 carriers.push((eid, TIER_ENTITY));
             }
         }
         for &cid in &tr.coref_entities {
-            if cid != st.last_carrier && !carriers.iter().any(|&(c, _)| c == cid) {
+            if cid != st.last_carrier
+                && !inp.plan.excluded_ids.contains(&cid)
+                && !carriers.iter().any(|&(c, _)| c == cid)
+            {
                 carriers.push((cid, TIER_ENTITY));
             }
         }
         for &tid in &tr.content {
-            if tid != st.last_carrier && !carriers.iter().any(|&(c, _)| c == tid) {
+            if tid != st.last_carrier
+                && !inp.plan.excluded_ids.contains(&tid)
+                && !carriers.iter().any(|&(c, _)| c == tid)
+            {
                 carriers.push((tid, TIER_CONTENT));
             }
         }
@@ -531,21 +682,25 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         scored_carriers.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
         for (g_edge, cid) in scored_carriers.into_iter().take(10) {
-            let g_series = series_conductance_q16(st.conductance_q16, g_edge);
-            let mdl_cost = if st.depth >= 1 { HOP_MDL_COST_Q16 } else { 0 };
-            let g_next = g_series.saturating_sub(mdl_cost);
-            if g_next < MIN_CURRENT_Q16 {
-                continue;
-            }
             let Some(post) = inp.ix.t_postings.get(cid as usize) else {
                 continue;
             };
+            let mdl_cost = if st.depth >= 1 { HOP_MDL_COST_Q16 } else { 0 };
             for &raw_v in post.iter().take(MAX_NEIGHBORS_PER_CARRIER) {
                 let v = raw_v as usize;
                 if v == st.turn || v >= nt || inp.ix.turns[v].is_backchannel {
                     continue;
                 }
                 if path_contains(&paths, st.path_idx, v) {
+                    continue;
+                }
+                // #854 Self-Plasticizing Strata Conductance: scale wire conductance by recorded
+                // outcome multiplier BEFORE Ohm/Kirchhoff series combination (`r = Q16^2 / kappa_eff`).
+                let (m_q16, rcpts) = edge_outcome_plasticity_q16(inp.ix, st.turn, v);
+                let g_edge_eff = crate::composition::apply_outcome_conductance_q16(g_edge, m_q16);
+                let g_series = series_conductance_q16(st.conductance_q16, g_edge_eff);
+                let g_next = g_series.saturating_sub(mdl_cost);
+                if g_next < MIN_CURRENT_Q16 {
                     continue;
                 }
                 let u_sess = inp.ix.turns[st.turn].session;
@@ -567,6 +722,7 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                 paths.push(PathNode {
                     turn: v,
                     parent: Some(st.path_idx),
+                    receipt_ids: rcpts,
                 });
                 heap.push(SearchState {
                     conductance_q16: g_hop,
@@ -589,8 +745,10 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
             {
                 continue;
             }
-            let g_edge = hub_conductance_q16(TIER_SUPERSEDE, deg.max(2));
-            let g_next = series_conductance_q16(st.conductance_q16, g_edge)
+            let (m_q16, rcpts) = edge_outcome_plasticity_q16(inp.ix, st.turn, target_ti);
+            let g_edge_base = hub_conductance_q16(TIER_SUPERSEDE, deg.max(2));
+            let g_edge_eff = crate::composition::apply_outcome_conductance_q16(g_edge_base, m_q16);
+            let g_next = series_conductance_q16(st.conductance_q16, g_edge_eff)
                 .saturating_sub(if st.depth >= 1 { HOP_MDL_COST_Q16 } else { 0 });
             if g_next < MIN_CURRENT_Q16 {
                 continue;
@@ -599,6 +757,7 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
             paths.push(PathNode {
                 turn: target_ti,
                 parent: Some(st.path_idx),
+                receipt_ids: rcpts,
             });
             heap.push(SearchState {
                 conductance_q16: g_next,
@@ -621,7 +780,7 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
             .or_insert(g);
     }
 
-    let mut ranked: Vec<(usize, u64)> = totals.into_iter().collect();
+    let mut ranked: Vec<(usize, u64)> = totals.iter().map(|(&ti, &g)| (ti, g)).collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     ranked.truncate(12);
 
@@ -630,13 +789,21 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         .and_then(|&(ti, _)| best_path_for_target.get(&ti).copied())
         .map(|(_, p_idx)| reconstruct_path(&paths, p_idx))
         .unwrap_or_default();
+    let mut witness_receipt_ids = ranked
+        .first()
+        .and_then(|&(ti, _)| target_receipt_ids.remove(&ti))
+        .unwrap_or_default();
+    witness_receipt_ids.sort();
+    witness_receipt_ids.dedup();
 
     GhostCurrentResult {
         deficit_fired,
         can_override_slot0,
         sup_live_leaf_of_h0,
         ranked_targets: ranked,
+        target_scores: totals,
         witness_spine,
+        witness_receipt_ids,
     }
 }
 
@@ -741,7 +908,12 @@ pub(in crate::retrieval) fn apply_ghostcurrent_stage11_injection(
             }
             continue;
         }
-        let victim = (2..top5_len).rev().find(|&s| {
+        let min_victim_slot = if (ctx.deficit_a || ctx.eff_it.multi_hop) && !pref_guard {
+            1usize
+        } else {
+            2usize
+        };
+        let victim = (min_victim_slot..top5_len).rev().find(|&s| {
             let inc_ti = ctx.final_turn_indices[s];
             let inc_sess = ctx.ix.turns[inc_ti].session;
             let dup_sess = ctx.final_turn_indices[..s]
@@ -773,8 +945,9 @@ pub(in crate::retrieval) fn apply_ghostcurrent_stage11_injection(
 /// Only overrides Slot 0 when EITHER:
 ///   1. `h0` is directly superseded AND GhostCurrent proved `sup_live_leaf_of_h0` along `h0`'s own
 ///      forward revision chain (never a random unrelated hop!), OR
-///   2. `h0` has ZERO exact query-group coverage (`h0_cov == 0`, true epistemic deficit) AND
-///      `best_ti` recovers query coverage or strong WH-typed Kirchhoff convergence (`>= 0.5 Q16`).
+///   2. `h0` exhibits a verified structural epistemic deficit (`h0_non_sp_cov == 0` under `deficit_a`,
+///      meta-echo/sign-off closure, or excluded-only match) AND `best_ti` is a declarative,
+///      speaker-aligned witness beating `h0` by `>= 1.25x` integer Kirchhoff current.
 pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
     ctx: &mut GhostCurrentSlot0Ctx<'_>,
 ) {
@@ -785,9 +958,37 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
         return;
     };
     let h0_sup = turn_is_superseded(ctx.ix, h0);
-    let h0_cov = (ctx.t_exact_mask.get(h0).copied().unwrap_or(0) & ctx.q_group_mask).count_ones();
-    let h0_any_mask = (ctx.t_mask.get(h0).copied().unwrap_or(0) & ctx.q_group_mask).count_ones();
-    let h0_own_zero = ctx.t_own.get(h0).copied().unwrap_or(0.0) <= 0.0;
+    let sp_single = crate::retrieval::lexical::tier_bridge_q16::detect_single_subject_speaker(
+        ctx.ix,
+        ctx.plan,
+        &ctx.q.text,
+    );
+    let mut non_sp_group_mask = 0u64;
+    for (gi, gw) in ctx.plan.groups.iter().enumerate().take(64) {
+        if sp_single
+            .as_deref()
+            .is_some_and(|sp| gw.eq_ignore_ascii_case(sp))
+        {
+            continue;
+        }
+        non_sp_group_mask |= 1u64 << gi;
+    }
+    let h0_non_sp_cov =
+        (ctx.t_exact_mask.get(h0).copied().unwrap_or(0) & ctx.q_group_mask & non_sp_group_mask)
+            .count_ones();
+    let h0_is_meta_echo =
+        crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+            ctx.ix,
+            h0,
+            &ctx.q.text,
+        );
+    let h0_only_excluded = !ctx.plan.excluded_ids.is_empty()
+        && ctx.ix.turns[h0]
+            .content
+            .iter()
+            .any(|id| ctx.plan.excluded_ids.contains(id))
+        && h0_non_sp_cov == 0;
+    let h0_deficit = (ctx.deficit_a && h0_non_sp_cov == 0) || h0_is_meta_echo || h0_only_excluded;
     let h0_protected = ctx.ix.turns[h0].is_standing_policy
         || ctx.ix.turns[h0].is_personal_constraint
         || ctx.ix.turns[h0].has_tool_call
@@ -826,31 +1027,69 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
         None
     };
 
-    // Case 2: True zero-signal epistemic deficit (`deficit_a`, zero exact & inherited mask, zero own score,
-    // and NOT a standing policy / personal constraint / tool call / event-ordering head)
+    // Case 2: Un-handcuffed epistemic deficit rescue (`h0_non_sp_cov == 0`, meta-echo, or excluded-only head)
+    // gated by speaker alignment and strict `>= 1.25x` integer Kirchhoff current margin over `h0`.
     let zero_cov_rescue = if proven_sup_leaf.is_none()
-        && ctx.deficit_a
-        && h0_cov == 0
-        && h0_any_mask == 0
-        && h0_own_zero
+        && h0_deficit
         && !h0_protected
         && !pref_guard
     {
-        ctx.res.ranked_targets.first().and_then(|&(best_ti, best_g)| {
+        let h0_g = ctx.res.target_scores.get(&h0).copied().unwrap_or(0);
+        let spec = build_query_at1_spec(ctx.ix, ctx.plan, ctx.q);
+        ctx.res.ranked_targets.iter().copied().find_map(|(best_ti, best_g)| {
             if best_ti == h0
                 || turn_is_superseded(ctx.ix, best_ti)
                 || ctx.ix.turns[best_ti].is_pure_info_question
                 || ctx.ix.turns[best_ti].is_backchannel
                 || (!allow_standing_policy_gc && ctx.ix.turns[best_ti].is_standing_policy)
+                || crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                    ctx.ix,
+                    best_ti,
+                    &ctx.q.text,
+                )
             {
                 return None;
             }
-            let best_cov =
-                (ctx.t_exact_mask.get(best_ti).copied().unwrap_or(0) & ctx.q_group_mask).count_ones();
-            let spec = build_query_at1_spec(ctx.ix, ctx.plan, ctx.q);
+            if !ctx.plan.excluded_ids.is_empty()
+                && ctx.ix.turns[best_ti]
+                    .content
+                    .iter()
+                    .any(|id| ctx.plan.excluded_ids.contains(id))
+            {
+                let b_ns = (ctx.t_exact_mask.get(best_ti).copied().unwrap_or(0)
+                    & ctx.q_group_mask
+                    & non_sp_group_mask)
+                    .count_ones();
+                if b_ns == 0 {
+                    return None;
+                }
+            }
+            if let Some(sp) = sp_single.as_deref() {
+                let sp_ok = ctx.ix.turns[best_ti].speaker.eq_ignore_ascii_case(sp)
+                    || ctx.ix.turns[best_ti]
+                        .body_for_headers
+                        .to_ascii_lowercase()
+                        .contains(sp);
+                if !sp_ok {
+                    return None;
+                }
+            }
+            if best_g.saturating_mul(4) < h0_g.saturating_mul(5) {
+                return None;
+            }
+            let best_cov = (ctx.t_exact_mask.get(best_ti).copied().unwrap_or(0)
+                & ctx.q_group_mask
+                & non_sp_group_mask)
+                .count_ones();
             let (lr_b, dur_b) = eval_li_roth_turn(ctx.ix, &spec, best_ti);
             let best_type_hit = spec.has_wh_answer_class() && (lr_b > 0 || dur_b > 0);
-            if best_cov >= 1 || (best_type_hit && best_g >= (Q16 * 3) / 4) {
+            let has_proven_receipt = !ctx.res.witness_receipt_ids.is_empty()
+                && ctx.res.ranked_targets.first().is_some_and(|&(t0, _)| t0 == best_ti);
+            let strong_enough = best_cov >= 1
+                || (best_type_hit && best_g >= (Q16 * 3) / 4)
+                || (has_proven_receipt && best_g >= (Q16 >> 1))
+                || ((h0_is_meta_echo || h0_only_excluded) && best_g >= (Q16 >> 1));
+            if strong_enough {
                 Some(best_ti)
             } else {
                 None
