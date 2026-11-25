@@ -61,7 +61,10 @@ pub(in crate::retrieval) fn is_open_domain_inferential_shape(tokens: &[&str]) ->
     let is_wh = matches!(first.as_str(), "what" | "which" | "how" | "who" | "where");
     let has_aux_modal = tokens.iter().any(|w| {
         let low = norm_modal_token(w);
-        matches!(low.as_str(), "may" | "should" | "shouldn't" | "shouldnt")
+        matches!(
+            low.as_str(),
+            "may" | "should" | "shouldn't" | "shouldnt" | "prefer" | "prefers" | "suspected"
+        )
     });
     if is_wh && has_aux_modal {
         return true;

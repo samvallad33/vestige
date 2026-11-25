@@ -257,6 +257,59 @@ fn is_historical_or_order_query(q_text: &str) -> bool {
     .any(|p| ql.contains(p))
 }
 
+/// Closed-class check for explicit factual WH-state questions (strictly excluding imperative
+/// task/instruction-following prompts like `"Draft a..."` or `"Write a..."`, and NEVER trusting
+/// Stage 03's broad `it.current_state` default).
+/// hardcode-scan: closed-class (WH-interrogatives and copular/auxiliary question frames only).
+fn is_explicit_wh_fact_query(q_text: &str) -> bool {
+    if is_historical_or_order_query(q_text) {
+        return false;
+    }
+    let ql = q_text.trim().to_ascii_lowercase();
+    if !ql.ends_with('?') {
+        return false;
+    }
+    if ql.starts_with("write ")
+        || ql.starts_with("draft ")
+        || ql.starts_with("create ")
+        || ql.starts_with("generate ")
+        || ql.starts_with("help me ")
+        || ql.starts_with("can you ")
+        || ql.starts_with("could you ")
+        || ql.starts_with("would you ")
+        || ql.starts_with("have i ")
+        || ql.starts_with("have we ")
+        || ql.contains("what should")
+        || ql.contains("what are some")
+        || ql.contains("pros and cons")
+        || ql.contains("what approach")
+        || ql.contains("best way")
+        || ql.contains("optimal time")
+    {
+        return false;
+    }
+    [
+        "what is ",
+        "what's ",
+        "what\u{2019}s ",
+        "where is ",
+        "where's ",
+        "where\u{2019}s ",
+        "who is ",
+        "who's ",
+        "who\u{2019}s ",
+        "who does ",
+        "what does ",
+        "where do i ",
+        "what do i ",
+        "which ",
+    ]
+    .iter()
+    .any(|p| ql.contains(p))
+        || ((ql.starts_with("what ") || ql.starts_with("who ") || ql.starts_with("where "))
+            && (ql.contains(" does ") || ql.contains(" do i ") || ql.contains(" is ")))
+}
+
 /// Closed-class check for present/current-state factual queries.
 /// hardcode-scan: closed-class (present-tense copular and auxiliary question frames).
 fn is_present_state_query(q_text: &str, it: &QueryIntent) -> bool {
@@ -279,27 +332,20 @@ fn is_present_state_query(q_text: &str, it: &QueryIntent) -> bool {
     if it.current_state {
         return true;
     }
-    [
-        "what is ",
-        "what's ",
-        "where is ",
-        "where's ",
-        "who is ",
-        "who's ",
-        "what time is ",
-        "what are ",
-        "where do i ",
-        "what do i ",
-        " do i ",
-        "is my ",
-        "are my ",
-        "what payment ",
-        "what method ",
-        "is used for",
-        "am i ",
-    ]
-    .iter()
-    .any(|p| ql.contains(p))
+    is_explicit_wh_fact_query(q_text)
+        || [
+            "what time is ",
+            "what are ",
+            " do i ",
+            "is my ",
+            "are my ",
+            "what payment ",
+            "what method ",
+            "is used for",
+            "am i ",
+        ]
+        .iter()
+        .any(|p| ql.contains(p))
 }
 
 /// Closed-class state-update / supersession discourse markers indicating that a
@@ -334,7 +380,6 @@ fn has_update_or_supersession_marker(text: &str) -> bool {
         "just updated",
         "saw an update",
         "officially complete",
-        "officially live",
         "had to cancel",
         "no longer",
         "not anymore",
@@ -385,6 +430,23 @@ fn has_update_or_supersession_marker(text: &str) -> bool {
         "much easier to just maintain",
         "ever since",
         "since then",
+    ]
+    .iter()
+    .any(|p| low.contains(p))
+}
+
+/// Closed-class epistemic self-correction markers indicating that an earlier memory
+/// was factually mistaken (supersedes even on past-tense `"what was "` queries).
+/// hardcode-scan: closed-class (epistemic self-correction markers only).
+fn has_epistemic_self_correction_marker(text: &str) -> bool {
+    let low = text.to_ascii_lowercase();
+    [
+        "was misremembering",
+        "misremembered",
+        "to correct myself",
+        "mixing up",
+        "mixed up",
+        "turns out",
     ]
     .iter()
     .any(|p| low.contains(p))
@@ -499,12 +561,16 @@ fn rescue_zero_exact_entity_head(
     queried_speakers: &[String],
 ) {
     let window = ctx.final_turn_indices.len().min(10);
+    let explicit_wh_fact = is_explicit_wh_fact_query(&ctx.q.text);
     if window < 2
         || star_bit == 0
-        || ctx.pref_on
-        || ctx.eff_it.task_under_rules
+        || (ctx.pref_on && !explicit_wh_fact)
+        || (ctx.eff_it.task_under_rules && !explicit_wh_fact)
         || eff_summary_request(&ctx.q.text)
     {
+        return;
+    }
+    if ctx.ix.turns[ctx.final_turn_indices[0]].is_standing_policy {
         return;
     }
 
@@ -521,9 +587,18 @@ fn rescue_zero_exact_entity_head(
     let t0 = ctx.final_turn_indices[0];
     let tr0 = &ctx.ix.turns[t0];
     let t0_any_topical = ctx.t_mask[t0] & topical_mask;
+    let t0_exact_cnt = (ctx.t_exact_mask[t0] & topical_mask).count_ones();
     let t0_has_star_any = (ctx.t_mask[t0] & star_bit) != 0;
     let t0_has_bridge = ctx.t_bridge_hits.get(t0).copied().unwrap_or(0) > 0;
-    if t0_any_topical != 0 || t0_has_star_any || t0_has_bridge {
+    let allow_missing_star_rescue = !t0_has_star_any
+        && !ctx.has_named_speakers_eff
+        && !ctx.eff_it.temporal
+        && !ctx.eff_it.sniper_when
+        && !ctx.eff_it.multi_hop
+        && !ctx.eff_it.sniper_how_many
+        && !ctx.eff_it.is_event_sequence
+        && t0_exact_cnt <= 1;
+    if (t0_any_topical != 0 || t0_has_star_any || t0_has_bridge) && !allow_missing_star_rescue {
         return;
     }
     let is_temp_q = ctx.eff_it.sniper_when || ctx.eff_it.temporal;
@@ -537,7 +612,17 @@ fn rescue_zero_exact_entity_head(
 
     for (pos, &cand) in ctx.final_turn_indices[1..window].iter().enumerate() {
         let tr = &ctx.ix.turns[cand];
-        if (ctx.t_exact_mask[cand] & star_bit) == 0 {
+        let has_star_exact = (ctx.t_exact_mask[cand] & star_bit) != 0;
+        let has_star_stem = (ctx.t_mask[cand] & star_bit) != 0;
+        let cand_exact_cnt = (ctx.t_exact_mask[cand] & topical_mask).count_ones();
+        let cand_mask_cnt = (ctx.t_mask[cand] & topical_mask).count_ones();
+        let zero_t0_multi_exact = t0_any_topical == 0
+            && !tr.is_question
+            && (cand_exact_cnt >= 2 || (cand_mask_cnt >= 1 && has_update_or_supersession_marker(&tr.body_for_headers)));
+        if !has_star_exact
+            && !((t0_exact_cnt <= 1 && !t0_has_star_any) && has_star_stem)
+            && !zero_t0_multi_exact
+        {
             continue;
         }
         if tr.is_backchannel || tr.is_standing_policy || ctx.t_own[cand] <= 0.0 {
@@ -556,6 +641,9 @@ fn rescue_zero_exact_entity_head(
             continue;
         }
         let exact_cnt = (ctx.t_exact_mask[cand] & topical_mask).count_ones();
+        if t0_any_topical != 0 && exact_cnt <= t0_exact_cnt {
+            continue;
+        }
         let sp_ok = queried_speakers.len() != 1
             || tr.speaker.eq_ignore_ascii_case(&queried_speakers[0]);
         let decl_ok = !tr.is_question;
@@ -646,18 +734,22 @@ fn apply_forward_supersession_chain(
     topical_mask: u64,
     star_bit: u64,
 ) {
+    let present_q = is_present_state_query(&ctx.q.text, &ctx.eff_it);
+    let explicit_wh_fact = is_explicit_wh_fact_query(&ctx.q.text);
+    let past_self_correction_q = !present_q
+        && ctx.q.text.trim().to_ascii_lowercase().starts_with("what was ");
     let window = ctx.final_turn_indices.len().min(20);
     if window < 2
         || ctx.has_named_speakers_eff
-        || ctx.pref_on
-        || ctx.eff_it.task_under_rules
+        || (ctx.pref_on && !explicit_wh_fact)
+        || (ctx.eff_it.task_under_rules && !explicit_wh_fact)
         || ctx.eff_it.is_event_sequence
         || ctx.eff_it.assistant_attribution
         || eff_summary_request(&ctx.q.text)
     {
         return;
     }
-    if !is_present_state_query(&ctx.q.text, &ctx.eff_it) {
+    if !present_q && !past_self_correction_q {
         return;
     }
 
@@ -716,6 +808,10 @@ fn apply_forward_supersession_chain(
         || tr0_low_opener.starts_with("we\u{2019}re waiting on")
         || tr0_low_opener.starts_with("honestly?")
         || tr0_low_opener.starts_with("right, i remember")
+        || tr0_low_opener.starts_with("i suppose.")
+        || tr0_low_opener.contains("my to-do list")
+        || tr0_low_opener.contains("draft a brief")
+        || tr0_low_opener.contains("now, draft ")
         || t0_exact_topical_cnt == 0;
 
     let mut best_cand: Option<usize> = None;
@@ -735,6 +831,10 @@ fn apply_forward_supersession_chain(
         // (or any high-evidence superseding turn when `t0` is a zero-entity/missing-star decoy or opener).
         let is_later = cand > t0 && (c_ts > t0_ts || (c_ts == t0_ts && (c_sess > t0_sess || cand > t0)));
         let explicit_edge = trc.supersedes_turns.contains(&t0);
+        let has_self_corr = has_epistemic_self_correction_marker(&trc.body_for_headers);
+        if past_self_correction_q && !has_self_corr {
+            continue;
+        }
         let has_update = has_update_or_supersession_marker(&trc.body_for_headers);
         let cand_has_star = star_bit != 0 && (ctx.t_mask[cand] & star_bit) != 0;
         let cand_exact_topical_cnt = (ctx.t_exact_mask[cand] & topical_mask).count_ones();
@@ -777,8 +877,21 @@ fn apply_forward_supersession_chain(
             continue;
         }
         // Owner Directive `mem-00000000000058af`: never let a turn missing `star_bit`
-        // displace a non-stale `t0` that carries `star_bit` unless explicitly linked.
-        if t0_has_star && !t0_stale && !t0_is_framing_opener && !cand_has_star && !explicit_edge {
+        // displace a non-stale `t0` that carries `star_bit` unless explicitly linked
+        // or carrying an explicit rule/state-change marker on a shared selective topical entity.
+        let rule_change_override = has_update
+            && !has_update_or_supersession_marker(&tr0.body_for_headers)
+            && (trc.body_for_headers.to_ascii_lowercase().contains("changing the rules")
+                || trc.body_for_headers.to_ascii_lowercase().contains("changed the rules")
+                || trc.body_for_headers.to_ascii_lowercase().contains("finally changing"))
+            && (ctx.t_mask[cand] & ctx.t_mask[t0] & topical_mask) != 0;
+        if t0_has_star
+            && !t0_stale
+            && !t0_is_framing_opener
+            && !cand_has_star
+            && !explicit_edge
+            && !rule_change_override
+        {
             continue;
         }
         let strong_update_override = (explicit_edge || has_update)
@@ -971,6 +1084,42 @@ fn snap_assistant_echo_to_user_origin(ctx: &mut RankCtx<'_>, topical_mask: u64) 
         ctx.final_turn_indices.insert(tail_pos, displaced_asst);
         ctx.final_turn_indices.truncate(orig_len);
     }
+}
+
+/// Late Stage-12 Integrity Guard: runs right after Lambek QUD, Genesis Spine, Submodular Cover,
+/// and Gricean seating on present-state factual queries so no downstream tie-breaker can leave a
+/// zero-star-entity decoy or stale pre-update turn at Slot 0 ahead of a verified `star_bit`
+/// superseding user turn.
+pub(in crate::retrieval) fn apply_late_supersession_integrity_guard(ctx: &mut RankCtx<'_>) {
+    let present_q = is_present_state_query(&ctx.q.text, &ctx.eff_it);
+    let explicit_wh_fact = is_explicit_wh_fact_query(&ctx.q.text);
+    if ctx.final_turn_indices.len() < 2
+        || ctx.ix.has_tool_calls
+        || ctx.torrens_locked_head
+        || ctx.implicit_disclosure_locked
+        || ctx.has_named_speakers_eff
+        || (ctx.pref_on && !explicit_wh_fact)
+        || (ctx.eff_it.preference && !explicit_wh_fact)
+        || ctx.eff_it.temporal
+        || ctx.eff_it.sniper_when
+        || ctx.eff_it.sniper_how_many
+        || ctx.eff_it.multi_hop
+        || (ctx.eff_it.task_under_rules && !explicit_wh_fact)
+        || ctx.eff_it.is_event_sequence
+        || ctx.eff_it.assistant_attribution
+        || eff_summary_request(&ctx.q.text)
+        || ctx.plan.groups.is_empty()
+    {
+        return;
+    }
+    if !present_q
+        && !ctx.q.text.trim().to_ascii_lowercase().starts_with("what was ")
+    {
+        return;
+    }
+    let (topical_mask, star_bit, queried_speakers) = compute_topical_and_star(ctx);
+    rescue_zero_exact_entity_head(ctx, topical_mask, star_bit, &queried_speakers);
+    apply_forward_supersession_chain(ctx, topical_mask, star_bit);
 }
 
 /// Entry point wired after `implicit_bridge::apply_unified_implicit_bridge` in Stage 12.

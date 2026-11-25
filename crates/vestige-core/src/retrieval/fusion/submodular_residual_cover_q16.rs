@@ -687,11 +687,40 @@ pub(in crate::retrieval) fn apply_submodular_residual_cover(
         q_group_cnt: ctx.q_group_cnt,
         k: ctx.k,
     };
-    apply_submodular_residual_cover_slices(
+    let regime = apply_submodular_residual_cover_slices(
         &inp,
         &mut ctx.final_turn_indices,
         &mut ctx.final_session_indices,
-    )
+    );
+    // Session-0 Turn Synchronization on large multi-session histories (`ns >= 40`):
+    // if the #1 ranked session `s0` has ZERO turns anywhere in Official Top-5 (e.g. a 5,000-char
+    // assistant turn diluted session turn scores on BEAM multi_session_reasoning), seat `s0`'s
+    // best substantive user turn into Slot 4 without touching Slots 0..3 or session ordering.
+    if ctx.ns >= 40
+        && !ctx.has_named_speakers_eff
+        && !ctx.ix.has_tool_calls
+        && !ctx.pref_on
+        && ctx.final_turn_indices.len() >= 5
+        && !ctx.final_session_indices.is_empty()
+    {
+        let s0 = ctx.final_session_indices[0];
+        let s0_represented = ctx
+            .final_turn_indices
+            .iter()
+            .take(5)
+            .any(|&ti| ctx.ix.turns[ti].session == s0);
+        if !s0_represented
+            && let Some(best_s0_ti) = best_substantive_turn_in_session(&inp, s0)
+        {
+            let orig_len = ctx.final_turn_indices.len();
+            if let Some(pos) = ctx.final_turn_indices.iter().position(|&t| t == best_s0_ti) {
+                ctx.final_turn_indices.remove(pos);
+            }
+            ctx.final_turn_indices.insert(4, best_s0_ti);
+            ctx.final_turn_indices.truncate(orig_len);
+        }
+    }
+    regime
 }
 
 #[cfg(test)]

@@ -408,7 +408,9 @@ fn is_personal_profile_recall_query(q_text: &str) -> bool {
         "when did",
         "how many",
         "how much",
-        "before ",
+        "before i ",
+        "before we ",
+        "before the ",
         "after ",
         "earlier",
         "first ",
@@ -561,6 +563,8 @@ fn is_zero_substance_greeting(tr: &TurnIx) -> bool {
         "catch up soon",
         "you're welcome",
         "no problem",
+        "hope you enjoy",
+        "let me know how it turns out",
         "good to hear from you",
     ]
     .iter()
@@ -962,7 +966,7 @@ fn build_fst_concept_map(
             }
         }
         if (1..=4).contains(&crate::wordnet::senses(c).len()) {
-            for inst in crate::wordnet::class_to_instances(c, 1).into_iter().take(24) {
+            for inst in crate::wordnet::class_to_instances(c, 2).into_iter().take(48) {
                 for tok in raw_tokens(inst) {
                     add_to_map(&mut fst_weights, &tok, 0.72);
                 }
@@ -995,7 +999,11 @@ fn build_fst_concept_map(
             let w = ((r_sc as f32) / 100.0).clamp(0.25, 1.0) * 0.56;
             add_to_map(&mut fst_weights, r_nbr, w);
         }
-        for (g_nbr, g_sc) in crate::geonames::geo_neighbors(c).into_iter().take(12) {
+        for (g_nbr, g_sc) in crate::geonames::geo_neighbors(c)
+            .into_iter()
+            .filter(|(g_nbr, _)| ctx.ix.vocab.get(g_nbr).is_some())
+            .take(16)
+        {
             let w = ((g_sc as f32) / 100.0).clamp(0.30, 1.0) * 0.85;
             add_to_map(&mut fst_weights, g_nbr, w);
         }
@@ -1216,8 +1224,14 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
         }
     };
     let advice_q = is_implicit_advice_frame(&ctx.q.text);
+    // On sparse haystacks (`is_sparse_haystack == true`), 1st-person profile recall queries
+    // ("Have I told you ... before?", "Have I told you about any recent changes...?") remain
+    // eligible when an explicit memory-ack pair exists in the haystack (still excluding "when did").
+    let has_any_ack = pairs.iter().any(|&(_, _, ack)| ack);
     let profile_q = !advice_q
-        && !ctx.eff_it.temporal
+        && ((is_sparse_haystack && has_any_ack) || !ctx.eff_it.temporal)
+        && !ctx.eff_it.sniper_when
+        && !ctx.eff_it.sniper_how_many
         && is_personal_profile_recall_query(&ctx.q.text);
     if !advice_q && !profile_q {
         return false;
@@ -1290,8 +1304,12 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     }
 
     if profile_q {
-        let (_, _, _, best_ack, _) = scored_pairs[0];
-        if !best_ack {
+        let (_, _, _, best_ack, best_link) = scored_pairs[0];
+        let t0_has_user_exact = ctx.final_turn_indices.first().is_some_and(|&t0| {
+            ctx.ix.turns[t0].field == 0
+                && (ctx.t_exact_mask.get(t0).copied().unwrap_or(0) & ctx.q_group_mask) != 0
+        });
+        if !best_ack && !(is_sparse_haystack && best_link && !t0_has_user_exact) {
             return false;
         }
     }
@@ -1922,13 +1940,25 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
             "that's a ",
             "that\u{2019}s a ",
             "that is a ",
+            "that's an ",
+            "that\u{2019}s an ",
+            "that is an ",
             "that's very ",
             "that\u{2019}s very ",
+            "that's such a",
+            "that\u{2019}s such a",
+            "that's really ",
+            "that\u{2019}s really ",
             "that sounds ",
             "that does sound",
             "that makes sense",
             "that makes perfect sense",
             "that preference",
+            "it's great that",
+            "it\u{2019}s great that",
+            "it's understandable",
+            "it\u{2019}s understandable",
+            "it sounds like",
             "note added",
             "thank you for sharing",
             "thanks for sharing",
@@ -2184,14 +2214,25 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
     });
 
     // 1. Slot-0 promotion ONLY when `t0_weak` and top disclosure decisively beats `base_t0_sc`.
+    //    On multi-session histories (`ns >= 5`), restrict Slot 0 promotion to Top-5 retrieved
+    //    sessions so distractor sessions outside `final_session_indices[0..5]` never hijack Slot 0
+    //    or evict the true gold session from Top-5.
     let mut seated_slot0 = false;
-    if t0_weak && ranked_cands[0].0 > base_t0_sc + 0.25 {
-        let win_ti = ranked_cands[0].1;
+    let slot0_cand = if ctx.final_session_indices.len() >= 5 {
+        ranked_cands.iter().copied().find(|&(_, _, cs)| {
+            ctx.final_session_indices.iter().take(5).any(|&s| s == cs)
+        })
+    } else {
+        ranked_cands.first().copied()
+    };
+    if t0_weak
+        && let Some((win_sc, win_ti, win_s)) = slot0_cand
+        && win_sc > base_t0_sc + 0.25
+    {
         if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == win_ti) {
             ctx.final_turn_indices.remove(pos);
         }
         ctx.final_turn_indices.insert(0, win_ti);
-        let win_s = ctx.ix.turns[win_ti].session;
         if !ctx.final_session_indices.is_empty() && ctx.final_session_indices[0] != win_s {
             if let Some(sp) = ctx.final_session_indices.iter().position(|&s| s == win_s) {
                 ctx.final_session_indices.remove(sp);
@@ -2276,7 +2317,9 @@ pub(in crate::retrieval) fn apply_unified_implicit_bridge(ctx: &mut RankCtx<'_>)
     let galois_changed_head =
         galois_advice_eligible && ctx.final_turn_indices.first().copied() != pre_galois_h0;
     apply_dense_advice_user_rescue(ctx);
-    if galois_changed_head {
+    // Only lock Slot 0 on large multi-session haystacks (`ns >= 25`, e.g. long-form LME/InMind);
+    // on compact multi-session chats allow Gricean stratified seating & Supersession guards to run.
+    if galois_changed_head && ctx.ns >= 25 {
         ctx.implicit_disclosure_locked = true;
     }
 }

@@ -4559,6 +4559,9 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         crate::retrieval::rank::supersession_and_guard::snap_assistant_echo_to_user_origin_late(
             ctx,
         );
+        crate::retrieval::rank::supersession_and_guard::apply_late_supersession_integrity_guard(
+            ctx,
+        );
     }
     // Breakthrough #4A: Post-Gatekeeper Official Top-5 Standing-Rule Co-Seating.
     // Protects Slots 0..2 unconditionally (and Slot 3 for single-rule seating) while ensuring

@@ -139,6 +139,44 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             let add = 0.02 * dph_bonus + 0.018 * lgd_bonus;
             sc_own += add;
             sc += add;
+            // Algo 4 (ClausIE Atomic Clause Micro-Span Max-P): on long multi-paragraph turns
+            // (`>= 1200` bytes), BM25 length normalization can bury a dense 1-sentence needle.
+            // Measure max distinct exact query groups inside any single sentence/clause and apply
+            // a bounded Max-P lift (`<= 1.24x`) when a single clause covers >= 2 exact query groups.
+            if !ix.has_tool_calls
+                && ix.session_turns.len() >= 60
+                && t.body_for_headers.len() >= 1600
+                && em_own.count_ones() >= 2
+                && plan.groups.len() >= 2
+            {
+                let mut best_clause_g = 0u32;
+                for clause in t.body_for_headers.split(['\n', '.', '!', '?']) {
+                    if clause.len() < 16 {
+                        continue;
+                    }
+                    let mut cmask = 0u64;
+                    for tok in raw_tokens(clause) {
+                        if let Some(id) = ix.vocab.get(&tok)
+                            && let Some(&gi) = plan.group_of.get(&id)
+                            && gi < 64
+                        {
+                            cmask |= 1u64 << gi;
+                        }
+                    }
+                    let cg = (cmask & em_own).count_ones();
+                    if cg > best_clause_g {
+                        best_clause_g = cg;
+                        if best_clause_g >= 4 {
+                            break;
+                        }
+                    }
+                }
+                if best_clause_g >= 2 {
+                    let maxp_mult = (1.0 + 0.06 * (best_clause_g.min(4) as f32)).min(1.24);
+                    sc_own *= maxp_mult;
+                    sc *= maxp_mult;
+                }
+            }
         }
         t_own[ti] = sc_own;
         t_raw[ti] = sc;
