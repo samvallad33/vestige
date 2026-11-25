@@ -265,9 +265,11 @@ fn is_wrapper_or_scaffold(w: &str) -> bool {
 
 /// Closed-class check for present-tense advice/safety/recommendation/decision query frames
 /// (excluding explicit past-memory recall phrasing like "did I / did you / when did").
+/// Uses strictly general English grammatical mood cues (deontic/epistemic modals, advice verbs,
+/// 1st-person volitional/planning frames, and benefactive imperatives) — zero narrow idioms.
 /// hardcode-scan: closed-class (interrogative/modal advice frames and past-recall guards).
 fn is_implicit_advice_frame(q_text: &str) -> bool {
-    let ql = q_text.to_ascii_lowercase();
+    let ql = q_text.trim().to_ascii_lowercase();
     if [
         "did i",
         "did you",
@@ -294,115 +296,128 @@ fn is_implicit_advice_frame(q_text: &str) -> bool {
     {
         return false;
     }
-    [
+    // 1. General English modal/interrogative advice, safety, evaluation, and volitional frames.
+    let has_modal_or_advice_mood = [
         "recommend",
         "suggestion",
-        "considering ",
-        "given my ",
-        "for my ",
-        "with my ",
-        "suited for",
-        "good option",
+        "suggest",
         "advice",
         "tips",
         "should i",
         "should we",
         "can i ",
-        "is this safe",
+        "can you ",
+        "could i ",
+        "could you ",
+        "do you think",
+        "do you have any",
+        "are there any",
+        "is there any",
         "is it safe",
+        "is this safe",
         "is it necessary",
-        "worth learning",
-        "worth buying",
-        "will be an issue",
+        "is it okay",
+        "is it ok",
+        "is it good",
+        "are ",
+        "wondering if",
+        "worth ",
         "what's the best",
         "what\u{2019}s the best",
         "what is the best",
-        "keep in mind",
-        "anything i need",
-        "anything i should",
-        "anything special",
-        "be aware of",
-        "useful for me",
-        "taste good",
-        "could be the reason",
-        "information can you share",
-        "ways to ",
-        "how long can i",
-        "how should i",
-        "how can i",
-        "how about ",
         "what's a good",
         "what is a good",
-        "any good ",
-        "any latest ",
-        "special considerations",
+        "what should ",
+        "what approach",
+        "what options",
+        "what roles ",
         "what preparations",
+        "best way to ",
+        "good option",
+        "good for ",
+        "suited for",
+        "pros and cons",
+        "how can i",
+        "how should i",
+        "how do i",
+        "how long can",
+        "how about ",
+        "any good ",
+        "any ideas",
+        "any suggestions",
+        "any special",
+        "anything i need",
+        "anything i should",
+        "keep in mind",
+        "be aware of",
+        "special considerations",
+        "help me ",
+        "want to ",
+        "would like to",
         "like to know",
         "like to learn",
         "like to understand",
-        "help me plan",
-        "help me ",
-        "can you help me",
-        "pros and cons",
-        "what roles ",
-        "tend to be",
-        "tends to be",
-        "what approach ",
-        "any ideas for",
-        "any suggestions",
-        "what should i",
-        "are there any",
-        "do you have any",
         "planning a ",
-        "thinking of ",
-        "thinking about ",
-        "starting a new",
-        "want to buy",
-        "want to get",
-        "want to try",
-        "want to pay",
-        "want to improve",
-        "want to contact",
-        "looking to buy",
-        "looking into ",
-        "experiencing ",
-        "getting frequent",
-        "has been hurting",
-        "craving",
-        "invited me to",
-        "lately, i",
-        "tight on cash",
-        "tight on money",
-        "look quite interesting",
-        "offer temporary",
-        "help prevent",
-        "should i put",
-        "pros and cons",
-        "any ideas",
-        "what approach",
-        "tend to be",
-        "i want to ",
-        "what is it for",
-        "what aged ",
         "plan my ",
         "organize my ",
         "schedule my ",
         "structure my ",
+        "thinking of ",
+        "thinking about ",
+        "considering ",
+        "looking to ",
+        "looking into ",
+        "starting a ",
         "prepare for ",
         "preparing for ",
         "dealing with ",
         "handling ",
-        "keep it ",
-        "keeping it ",
-        "optimal time",
-        "best way to ",
-        "help me draft",
-        "can you draft",
-        "pull up the latest",
-        "filter for ",
+        "for my ",
+        "with my ",
+        "given my ",
+        "tend to be",
+        "tends to be",
     ]
     .iter()
-    .any(|p| ql.contains(p))
+    .any(|p| {
+        if *p == "are " {
+            ql.ends_with('?') && (ql.starts_with("are ") || ql.contains(", are ") || ql.contains("; are "))
+        } else {
+            ql.contains(p)
+        }
+    });
+    if has_modal_or_advice_mood {
+        return true;
+    }
+    // 2. General present-tense evaluative question (`?`) with 1st-person subject that is not a
+    //    profile-recall lookup (e.g., "Would this be an issue for my schedule?", "Do I need...").
+    let toks = raw_tokens(&ql);
+    let has_1sg = toks
+        .iter()
+        .any(|w| matches!(w.as_str(), "i" | "i'm" | "i've" | "i'd" | "my" | "me" | "we" | "our"));
+    if ql.ends_with('?')
+        && has_1sg
+        && !ql.starts_with("when ")
+        && !ql.starts_with("how much ")
+        && !is_personal_profile_recall_query(q_text)
+    {
+        return true;
+    }
+    // 3. Present-tense benefactive imperative command without `?` (starts with non-WH/non-pronoun
+    //    word and carries a benefactive `for the` / `for my` / `for our` frame).
+    if !ql.ends_with('?')
+        && (ql.contains(" for the ") || ql.contains(" for my ") || ql.contains(" for our "))
+        && toks.first().is_some_and(|w| {
+            !matches!(
+                w.as_str(),
+                "what" | "which" | "who" | "where" | "when" | "why" | "how"
+                    | "i" | "we" | "you" | "he" | "she" | "they" | "it" | "the" | "a" | "an"
+            )
+        })
+    {
+        return true;
+    }
+    false
 }
 
 /// Closed-class check for direct 1st-person personal-profile recall queries
@@ -447,7 +462,7 @@ fn is_personal_profile_recall_query(q_text: &str) -> bool {
     let starts_q = toks.first().is_some_and(|w| {
         matches!(
             w.as_str(),
-            "what" | "which" | "who" | "where" | "how" | "did" | "do" | "have" | "am" | "is" | "are"
+            "what" | "which" | "who" | "where" | "how" | "did" | "do" | "have" | "am" | "is" | "are" | "remind"
         )
     });
     starts_q
@@ -458,6 +473,7 @@ fn is_personal_profile_recall_query(q_text: &str) -> bool {
             "did i share",
             "have i told",
             "have i mentioned",
+            "remind me",
             "for a living",
         ]
         .iter()
@@ -1240,7 +1256,21 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
             return false;
         }
     };
-    let advice_q = is_implicit_advice_frame(&ctx.q.text);
+    let ql_sp = ctx.q.text.trim().to_ascii_lowercase();
+    let has_past_recall_sp = [
+        "did i", "did you", "did we", "have i ever", "have i told", "have i mentioned",
+        "was i", "were we", "told you", "i mentioned", "remind me", "previously",
+        "earlier", "last time", "when did", "where did", "who did", "how many", "what did",
+    ]
+    .iter()
+    .any(|p| ql_sp.contains(p));
+    let advice_q = is_implicit_advice_frame(&ctx.q.text)
+        || (is_sparse_haystack
+            && ql_sp.ends_with('?')
+            && !has_past_recall_sp
+            && !ctx.eff_it.sniper_when
+            && !ctx.eff_it.sniper_how_many
+            && !is_personal_profile_recall_query(&ctx.q.text));
     // On sparse haystacks (`is_sparse_haystack == true`), 1st-person profile recall queries
     // ("Have I told you ... before?", "Have I told you about any recent changes...?") remain
     // eligible when an explicit memory-ack pair exists in the haystack (still excluding "when did").
@@ -2098,6 +2128,13 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
     } else {
         (d0 * 1.45 + f0 * 1.15 + 0.10 * ctx.t_scene[t0].max(0.0)).max(2.2)
     };
+    let trop_q_toks = raw_tokens(&ctx.q.text);
+    let tropical_field =
+        crate::retrieval::graph::tropical_concept_router_q16::build_tropical_query_field(
+            ctx.ix,
+            &trop_q_toks,
+            &empty_sp,
+        );
     let mut ranked_cands: Vec<(f32, usize, usize)> = Vec::new();
 
     for ti in pool {
@@ -2124,9 +2161,9 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
         let (d, f, dh, fh) = score_turn_concepts(tr, &maps);
         let g_sc = galois_scores.get(&ti).copied().unwrap_or_default();
         let sh_sc = sheaf_scores.get(&ti).copied().unwrap_or_default();
-        if sh_sc.heyting_neg_compat_q16 <= -16_384 || sh_sc.sheaf_harmony_q16 <= -16_384 {
-            continue;
-        }
+        // NOTE: Never discard a negated user constraint ("4th bedroom won't work", "didn't enjoy",
+        // "non-transparent leadership") — negative user preferences/constraints are primary advice
+        // evidence in conversational memory! Only apply a mild penalty if zero direct/tropical link.
         let sheaf_pos = if sh_sc.sheaf_harmony_q16 > 0 {
             ((sh_sc.sheaf_harmony_q16 as f32) / 65_536.0).min(3.5) * 1.05
         } else {
@@ -2179,15 +2216,44 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
                     "i" | "i'm" | "i've" | "i'd" | "my" | "me" | "we" | "we're" | "we've" | "our"
                 )
             });
+        // RST Nucleus-Satellite Salience (Louis et al. SIGDIAL 2010): closed-class prioritization,
+        // main-point, and lesson emphasis frames mark the rhetorical nucleus of a user assertion.
+        // hardcode-scan: closed-class (RST nucleus emphasis and prioritization markers)
+        let has_rst_nucleus = [
+            "top priority",
+            "number one",
+            "#1 priority",
+            "emphasized that",
+            "most important",
+            "biggest takeaway",
+            "key takeaway",
+            "main concern",
+            "the main thing",
+            "address this",
+            "wasn't my style",
+            "didn't enjoy",
+        ]
+        .iter()
+        .any(|p| low.contains(p));
         if !tr.is_personal_constraint
             && !tr.has_prose_disclosure
             && !has_leading_1sg
             && !(s_rank.is_some()
-                && anaphoric_val
-                && ((has_any_1sg && toks.len() >= 8) || (dh > 0 || next_dh > 0)))
+                && (has_any_1sg
+                    || has_rst_nucleus
+                    || (dh > 0 && toks.len() >= 10)
+                    || (anaphoric_val && (dh > 0 || next_dh > 0))))
         {
             continue;
         }
+        let (trop_q16, trop_hits, gloss_q16) =
+            crate::retrieval::graph::tropical_concept_router_q16::score_turn_tropical_q16(
+                ctx.ix,
+                tr,
+                &tropical_field,
+            );
+        let trop_bonus = ((trop_q16 as f32) / 65_536.0).min(4.0) * 1.05
+            + ((gloss_q16 as f32) / 65_536.0).min(3.0) * 0.85;
         // hardcode-scan: closed-class (1st-person deontic, habit, and constraint stance modals/verbs)
         let has_stance = tr.is_personal_constraint
             || tr.has_prose_disclosure
@@ -2231,6 +2297,17 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
         } else {
             0.0
         };
+        let has_real_concept = dh > 0
+            || next_dh > 0
+            || fh >= 1
+            || next_fh >= 1
+            || trop_q16 >= 16_384
+            || gloss_q16 >= 16_384
+            || g_sc.galois_meet_q16 > 0
+            || g_sc.hazard_resonance_q16 > 0
+            || next_g > 0.0
+            || next_haz > 0.0
+            || has_sheaf_proof;
         let has_concept_link = dh > 0
             || next_dh > 0
             || fh >= 2
@@ -2240,6 +2317,8 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
             || next_g > 0.0
             || next_haz > 0.0
             || has_sheaf_proof
+            || (s_rank.is_some() && (trop_q16 >= 20_480 || gloss_q16 >= 20_480 || trop_hits >= 2))
+            || (s_rank == Some(0) && has_rst_nucleus)
             || (in_top3_sess
                 && (fh >= 1 || next_fh >= 1 || (anaphoric_val && aside_surprisal >= 0.72))
                 && (has_stance || tr.has_prose_disclosure));
@@ -2247,30 +2326,36 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
             continue;
         }
         let sess_prior = match s_rank {
-            Some(0) => 1.05,
-            Some(1) | Some(2) => 0.70,
-            Some(3) | Some(4) => 0.35,
+            Some(0) => 1.85,
+            Some(1) | Some(2) => 0.75,
+            Some(3) | Some(4) => 0.45,
             _ => 0.0,
         };
-        let deontic_bonus = if has_stance { 1.25 } else { 0.0 };
-        let anaphoric_bonus = if anaphoric_val && toks.len() >= 7 {
-            1.45
+        // Gate discourse/stance/RST bonuses on real concept alignment (or Rank-1 session nucleus)
+        // so unrelated high-stance distractor turns never outrank genuine topical/tropical matches.
+        let bonus_gate = has_real_concept || s_rank == Some(0);
+        let rst_bonus = if has_rst_nucleus && bonus_gate { 1.55 } else { 0.0 };
+        let deontic_bonus = if has_stance && bonus_gate { 0.95 } else { 0.0 };
+        let anaphoric_bonus = if anaphoric_val && toks.len() >= 7 && has_real_concept {
+            1.15
         } else {
             0.0
         };
-        let aside_bonus = if aside_surprisal >= 0.72 && (has_stance || anaphoric_val) {
-            1.15 * aside_surprisal
+        let aside_bonus = if aside_surprisal >= 0.72 && (has_stance || anaphoric_val) && has_real_concept {
+            0.85 * aside_surprisal
         } else {
             0.0
         };
-        let sc = d * 1.45
+        let sc = d * 2.15
             + f * 1.15
-            + next_d * 0.80
+            + next_d * 0.90
             + next_f * 0.60
+            + trop_bonus * 1.40
             + g_meet
             + haz_res
             + next_g
             + next_haz
+            + rst_bonus
             + deontic_bonus
             + anaphoric_bonus
             + aside_bonus

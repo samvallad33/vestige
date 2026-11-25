@@ -527,7 +527,7 @@ pub(in crate::retrieval) fn split_wordnet_compound(w: &str) -> Option<(&str, &st
 /// hardcode-scan: closed-class (English derivational morphology suffixes only).
 pub(in crate::retrieval) fn derivational_base_stems(w: &str) -> Vec<String> {
     let bytes = w.as_bytes();
-    if bytes.len() < 6 || !bytes.iter().all(|b| b.is_ascii_lowercase()) {
+    if bytes.len() < 5 || !bytes.iter().all(|b| b.is_ascii_lowercase()) {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -540,11 +540,12 @@ pub(in crate::retrieval) fn derivational_base_stems(w: &str) -> Vec<String> {
             out.push(cand);
         }
     };
-    // hardcode-scan: closed-class (English derivational morphology suffix rules only).
+    // hardcode-scan: closed-class (English & Latinate derivational/morphophonemic suffix rules only).
     const SUFFIX_RULES: &[(&str, &[&str])] = &[
         ("ational", &["ation", "ate"]),
         ("ation", &["ate", ""]),
         ("ition", &["ite", ""]),
+        ("ption", &["be", "b", "pt"]),
         ("tion", &["te", "t", ""]),
         ("sion", &["de", "d", "se", ""]),
         ("ment", &[""]),
@@ -556,6 +557,11 @@ pub(in crate::retrieval) fn derivational_base_stems(w: &str) -> Vec<String> {
         ("ive", &["", "e"]),
         ("ous", &["", "e", "y"]),
         ("ist", &["", "ism", "e"]),
+        ("ery", &["e", "", "t"]),
+        ("ry", &["e", ""]),
+        ("ing", &["ery"]),
+        ("nt", &["n", "nery"]),
+        ("scribe", &["scription"]),
     ];
     for &(suf, repls) in SUFFIX_RULES {
         if let Some(base) = w.strip_suffix(suf)

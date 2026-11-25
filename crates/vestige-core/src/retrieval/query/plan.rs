@@ -407,6 +407,53 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
             group_of.insert(id, g);
             focal_ids.insert(id);
         }
+        // Stage-01 Latinate & English Morphophonemic Derivation Bridge (`subscription -> subscribe`,
+        // `joint -> joinery`, `baking -> bakery`): emit WordNet-attested stem-changing morphophonemic
+        // cognates (`stem(w) != stem(deriv)`) that exist in the corpus under group `g`.
+        if w.is_ascii() && w.len() >= 5 && w.bytes().all(|b| b.is_ascii_alphabetic()) {
+            let w_df = ix.vocab.get(w).map(|id| corpus_df(id)).unwrap_or(0);
+            let w_st = stem(w);
+            let is_morpho_suffix = w.ends_with("ption")
+                || w.ends_with("ery")
+                || w.ends_with("nt")
+                || w.ends_with("ing");
+            let df_cap = if is_morpho_suffix { 6 } else { 2 };
+            if w_df <= df_cap {
+                for deriv in crate::retrieval::index::normalize::derivational_base_stems(w) {
+                    let dst = stem(&deriv);
+                    if dst == w_st {
+                        continue;
+                    }
+                    let dw = if w_df == 0 { 0.85 } else { 0.72 };
+                    if let Some(did) = ix.vocab.get(&deriv)
+                        && corpus_df(did) > 0
+                    {
+                        terms.push(QTerm {
+                            id: did,
+                            weight: dw,
+                            group: Some(g),
+                            exact_hit: w_df == 0,
+                        });
+                        group_of.entry(did).or_insert(g);
+                        if w_df == 0 {
+                            focal_ids.insert(did);
+                        }
+                    }
+                    if p.enable_stemming && dst.len() >= 4
+                        && let Some(sid) = ix.vocab.get(&stem_term(&dst))
+                        && corpus_df(sid) > 0
+                    {
+                        terms.push(QTerm {
+                            id: sid,
+                            weight: dw * 0.90,
+                            group: Some(g),
+                            exact_hit: w_df == 0,
+                        });
+                        group_of.entry(sid).or_insert(g);
+                    }
+                }
+            }
+        }
         // Stage-01 Vocab-Attested Compound Splitting (`len >= 6`, e.g. "roadtrip" -> "road" + "trip"):
         // If `w` splits into two corpus-attested content words (`len >= 3` each), emit both under group `g`
         // so BM25F, MRF, and `s_exact_mask` match at Stage 01 without waiting for downstream bridges.

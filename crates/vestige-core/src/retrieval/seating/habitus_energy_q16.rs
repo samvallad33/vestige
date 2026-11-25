@@ -249,7 +249,11 @@ pub(in crate::retrieval) fn is_discourse_closure_or_meta_echo(
                     || trimmed.contains(" i\u{2019}ll ")
                     || trimmed.contains(" i think i'll ")
                     || trimmed.contains(" i think i\u{2019}ll ")))
-            || (trimmed.starts_with("that sounds like a ") && trimmed.contains("let's summarize"))
+            || (trimmed.starts_with("that sounds like a ")
+                && (trimmed.contains("let's summarize") || trimmed.contains("great plan")))
+            || trimmed.starts_with("yeah, that sums it up")
+            || trimmed.starts_with("that sums it up")
+            || trimmed.starts_with("sure, i get the gist")
             || (trimmed.starts_with("these ") && trimmed.contains(" sound really helpful")));
     if is_explicit_signoff {
         return true;

@@ -221,7 +221,7 @@ pub(in crate::retrieval) fn rank_standing_rules(
         || it.temporal
         || (!multi_evidence && q_words.iter().any(|&w| w == "date" || w == "dates"));
 
-    let mut latest_by_key: DetHashMap<&str, (usize, i32, i32, i64, bool, i32)> = DetHashMap::default();
+    let mut latest_by_key: DetHashMap<(&str, &[String]), (usize, i32, i32, i64, bool, i32)> = DetHashMap::default();
     for (ri, r) in ix.standing_rules.iter().enumerate() {
         let mut scope_hits = r.scope.iter().filter(|id| plan.focal_ids.contains(id)).count() as i32;
         if scope_hits == 0 && crate::retrieval::seating::c2_policy_inflects_query(ix, r.turn, plan) {
@@ -328,10 +328,11 @@ pub(in crate::retrieval) fn rank_standing_rules(
         }
         let scope_neg_len = -(r.scope.len() as i32);
         let cand = (ri, spec, scope_neg_len, r.ts, all_cond_matched, unmatched_cond);
-        match latest_by_key.get(r.policy_key.as_str()) {
+        let r_key = (r.policy_key.as_str(), r.condition_words.as_slice());
+        match latest_by_key.get(&r_key) {
             Some(&cur) if (cur.3, cur.1, cur.2) >= (cand.3, cand.1, cand.2) => {}
             _ => {
-                latest_by_key.insert(r.policy_key.as_str(), cand);
+                latest_by_key.insert(r_key, cand);
             }
         }
     }
@@ -343,8 +344,8 @@ pub(in crate::retrieval) fn rank_standing_rules(
         .map(|(ri, mut spec, scope_neg_len, ts, all_cond, unmatched)| {
             if any_full_cond && !all_cond && unmatched > 0 {
                 spec = (spec - 5 * unmatched).max(1);
-            } else if unmatched >= 2 {
-                spec = (spec - 2 * unmatched).max(1);
+            } else if unmatched > 0 {
+                spec = (spec - 3 * unmatched).max(1);
             }
             (ri, spec, scope_neg_len, ts)
         })
@@ -466,6 +467,16 @@ pub(in crate::retrieval) fn rule_condition_word_matches(cw: &str, qw: &str) -> b
         || ((1..=4).contains(&crate::wordnet::senses(cw).len())
             && lemma_hits(&crate::wordnet::class_to_instances(cw, 1), qw))
         || lemma_hits(&crate::wordnet::gloss_and_compound_concepts(cw), qw)
+        || ((1..=5).contains(&crate::wordnet::senses(cw).len())
+            && crate::wordnet::gloss_tokens_of(cw)
+                .into_iter()
+                .take(16)
+                .any(|gt| gt.len() >= 4 && morph_eq(gt, qw)))
+        || ((1..=5).contains(&crate::wordnet::senses(qw).len())
+            && crate::wordnet::gloss_tokens_of(qw)
+                .into_iter()
+                .take(16)
+                .any(|gt| gt.len() >= 4 && morph_eq(gt, cw)))
         || crate::wordnet::full_lexicon_neighbors(qw)
             .into_iter()
             .take(24)

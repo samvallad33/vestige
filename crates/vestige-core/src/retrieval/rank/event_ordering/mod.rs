@@ -422,11 +422,13 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
         }
     }
 
-    // Multi-session summarization (`eff_summary_request`): preserve Top-3 incumbent turns (both
-    // `field == 0` user and `field == 1` assistant summaries!), then seat the best non-echo turn
-    // (either role) from any newly promoted early-genesis Top-5 sessions into Slots 3..4 while
-    // keeping all remaining incumbent turns up to `target_k` (zero Top-10 drop).
+    // Multi-session summarization (`eff_summary_request`): preserve Top-2 incumbent turns (both
+    // `field == 0` user and `field == 1` assistant summaries!), then compute First-Story Detection
+    // (FSD) Concept Birth-Time scores over Top-8 sessions (either role) and seat up to 3 unseated
+    // distinct-session genesis turns into Slots 2..4 while keeping all remaining incumbent turns
+    // up to `target_k` (zero Top-10 drop).
     if is_multi_sess_summary {
+        use crate::retrieval::fusion::aspect_coverage_q16::aspect_ic_q16;
         let target_k = ctx.k.max(ctx.final_turn_indices.len()).max(5);
         let mut reprojected: Vec<usize> = Vec::with_capacity(target_k);
         let mut covered_sessions: Vec<usize> = Vec::with_capacity(5);
@@ -439,15 +441,33 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
                 }
             }
         }
-        for &si in final_session_indices.iter().take(5) {
-            if reprojected.len() >= 5 {
-                break;
+        // Compute earliest turn index (`first_turn`) for each rare exact query term (`df <= max(6, ns/3)`).
+        let max_birth_df = ((ns_total as u32) / 3).max(6);
+        let mut rare_birth: Vec<(u32, u64, usize)> = Vec::new(); // (tid, ic_q16, first_ti)
+        for qt in &ctx.plan.terms {
+            if !qt.exact_hit || rare_birth.iter().any(|&(id, _, _)| id == qt.id) {
+                continue;
             }
+            let df = ix.s_stats.df.get(&qt.id).copied().unwrap_or(0);
+            if (1..=max_birth_df).contains(&df) {
+                if let Some(f_ti) = ix.turns.iter().position(|t| {
+                    !t.is_backchannel
+                        && !t.is_standing_policy
+                        && (t.content.contains(&qt.id) || t.feats.iter().any(|f| f.id == qt.id))
+                }) {
+                    rare_birth.push((qt.id, aspect_ic_q16(df, ns_total as u32), f_ti));
+                }
+            }
+        }
+        // Pick the best genesis-weighted substantive turn (either role) per unseated session in Top-8.
+        let mut sess_picks: Vec<(u64, usize, usize)> = Vec::new(); // (score_q16, si, chosen_ti)
+        let scan_s = final_session_indices.len().min(8);
+        for (s_rank, &si) in final_session_indices.iter().take(scan_s).enumerate() {
             if covered_sessions.contains(&si) {
                 continue;
             }
             let members = &ix.session_turns[si];
-            let best_turn = members
+            let valid: Vec<usize> = members
                 .iter()
                 .copied()
                 .filter(|&ti| {
@@ -458,16 +478,64 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
                             ix, ti, query,
                         )
                 })
-                .max_by(|&a, &b| {
-                    let sa = ctx.t_scene.get(a).copied().unwrap_or(0.0);
-                    let sb = ctx.t_scene.get(b).copied().unwrap_or(0.0);
-                    sa.partial_cmp(&sb)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| b.cmp(&a))
-                });
-            if let Some(chosen) = best_turn
-                && !reprojected.contains(&chosen)
-            {
+                .collect();
+            if valid.is_empty() {
+                continue;
+            }
+            let sess_peak = valid
+                .iter()
+                .map(|&ti| ctx.t_scene.get(ti).copied().unwrap_or(0.0))
+                .fold(0.0f32, f32::max);
+            let mut best_ti = valid[0];
+            let mut best_sc: u64 = 0;
+            for (pos_in_s, &ti) in valid.iter().enumerate() {
+                let tr = &ix.turns[ti];
+                let mut b_mass: u64 = 0;
+                for &(tid, ic_q16, f_ti) in &rare_birth {
+                    if tr.content.contains(&tid) || tr.feats.iter().any(|f| f.id == tid) {
+                        let dist = ti.saturating_sub(f_ti);
+                        let decay = if dist <= 1 {
+                            Q16_ONE
+                        } else if dist <= 4 {
+                            Q16_ONE >> 1
+                        } else {
+                            Q16_ONE >> 2
+                        };
+                        b_mass = b_mass.saturating_add(
+                            ((ic_q16 as u128).saturating_mul(decay as u128) >> 16) as u64,
+                        );
+                    }
+                }
+                let tsc = ctx.t_scene.get(ti).copied().unwrap_or(0.0).max(0.0);
+                let rel_q16 = if sess_peak > 0.0 {
+                    ((tsc / sess_peak).clamp(0.0, 1.0) * (Q16_ONE as f32)) as u64
+                } else {
+                    0
+                };
+                // Reward earliest opener/reply (`pos_in_s <= 1`) when it carries substantive relevance.
+                let opener_q16 = if pos_in_s <= 1 && (sess_peak <= 0.0 || tsc >= 0.35 * sess_peak) {
+                    Q16_ONE >> 1
+                } else {
+                    0
+                };
+                let rank_prior = if s_rank < 5 { Q16_ONE >> 1 } else { 0 };
+                let total = b_mass
+                    .saturating_add(rel_q16)
+                    .saturating_add(opener_q16)
+                    .saturating_add(rank_prior);
+                if total > best_sc || (total == best_sc && ti < best_ti) {
+                    best_sc = total;
+                    best_ti = ti;
+                }
+            }
+            sess_picks.push((best_sc, si, best_ti));
+        }
+        sess_picks.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
+        for &(_, si, chosen) in &sess_picks {
+            if reprojected.len() >= 5 {
+                break;
+            }
+            if !reprojected.contains(&chosen) {
                 reprojected.push(chosen);
                 covered_sessions.push(si);
             }

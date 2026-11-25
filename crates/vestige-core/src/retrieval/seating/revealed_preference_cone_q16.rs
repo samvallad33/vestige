@@ -91,6 +91,13 @@ pub(in crate::retrieval) fn is_recommendation_request_query(query: &str, pref_on
         || ql.contains("might find interesting")
         || ql.contains("complement my ")
         || ql.contains("for me to ")
+        || ql.starts_with("how can i ")
+        || ql.starts_with("how should i ")
+        || ql.starts_with("how would you suggest")
+        || ql.starts_with("can you show me how")
+        || ql.starts_with("can you walk me through")
+        || ql.starts_with("can you explain step by step")
+        || ql.contains("what steps would you")
 }
 
 /// Closed-class detector for 1st-person self-disclosure / ownership / learning / aspiration

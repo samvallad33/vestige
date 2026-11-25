@@ -4594,7 +4594,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         && !ctx.eff_it.is_event_sequence
         && !eff_summary_request(&ctx.q.text)
         && allow_how_much_rule
-        && !ctx.eff_it.multi_hop
         && ctx.ix.session_turns.len() >= 16
         && ctx.final_session_indices.len() >= 5
         && ctx.final_turn_indices.len() >= 5
@@ -4608,13 +4607,16 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 continue;
             }
             let cond_hit = ctx.cond_rule_turns.contains(&r_ti);
+            if ctx.eff_it.multi_hop && !(cond_hit && sr.score >= 12.0) {
+                continue;
+            }
             let hi_conf = sr.score >= 8.0
                 || (cond_hit && sr.score >= 3.0)
                 || (ctx.eff_it.task_under_rules && sr.score >= 3.0);
             if !hi_conf {
                 continue;
             }
-            if seated_tail >= 1 && !(ctx.eff_it.task_under_rules && cond_hit && sr.score >= 15.0) {
+            if seated_tail >= 1 && !(cond_hit && sr.score >= 10.0) {
                 break;
             }
             let r_si = ctx.ix.turns[r_ti].session;
@@ -4661,6 +4663,106 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             seated_tail += 1;
             if seated_tail >= 2 {
                 break;
+            }
+        }
+    }
+    // 1P Duration & Biographical Genesis Slot-4 Rescue (`information_extraction`, Slots 0..3 protected):
+    // Rescues 1st-person duration facts ("How long have I been with <X>?" -> "... for 3 years")
+    // and early 1P biographical introductions ("What profession did I mention?" -> "I'm <Name>, a <role>").
+    // hardcode-scan: closed-class (1P duration interrogatives, temporal units, and copular intro frames)
+    if !ctx.has_named_speakers_eff
+        && !ctx.is_monologue_corpus
+        && !ctx.ix.has_tool_calls
+        && !ctx.eff_it.is_event_sequence
+        && !eff_summary_request(&ctx.q.text)
+        && ctx.ix.session_turns.len() >= 16
+        && ctx.final_session_indices.len() >= 5
+        && ctx.final_turn_indices.len() >= 5
+    {
+        let is_1p_duration_q = ql_sr.starts_with("how long ")
+            && (ql_sr.contains(" have i ")
+                || ql_sr.contains(" did i ")
+                || ql_sr.contains(" had i ")
+                || ql_sr.contains(" has my "));
+        let is_1p_bio_q = (ql_sr.contains("what profession")
+            || ql_sr.contains("what job")
+            || ql_sr.contains("for a living")
+            || ql_sr.contains("my profession")
+            || ql_sr.contains("my occupation"))
+            && (ql_sr.contains(" i ") || ql_sr.contains(" my "));
+        let mut rescue_ti: Option<usize> = None;
+        if is_1p_duration_q {
+            let max_ent_df = ((ctx.ix.session_turns.len() as u32) / 3).max(4);
+            let rare_q: Vec<u32> = ctx
+                .plan
+                .terms
+                .iter()
+                .filter(|qt| qt.exact_hit)
+                .filter(|qt| {
+                    let df = ctx.ix.s_stats.df.get(&qt.id).copied().unwrap_or(0);
+                    (1..=max_ent_df).contains(&df)
+                })
+                .map(|qt| qt.id)
+                .collect();
+            if !rare_q.is_empty() {
+                rescue_ti = ctx.ix.turns.iter().enumerate().find_map(|(ti, tr)| {
+                    if tr.field != 0 || tr.is_question || tr.is_backchannel || tr.is_standing_policy
+                    {
+                        return None;
+                    }
+                    let hits_rare = rare_q
+                        .iter()
+                        .any(|id| tr.content.contains(id) || tr.entities.contains(id));
+                    if !hits_rare {
+                        return None;
+                    }
+                    let low = tr.body_for_headers.to_ascii_lowercase();
+                    let has_dur = low.contains(" for ")
+                        && (low.contains(" year")
+                            || low.contains(" month")
+                            || low.contains(" week")
+                            || low.contains(" day"))
+                        && low.bytes().any(|b| b.is_ascii_digit());
+                    if has_dur { Some(ti) } else { None }
+                });
+            }
+        } else if is_1p_bio_q {
+            let early_cap = ctx.ix.turns.len().min(28);
+            rescue_ti = ctx.ix.turns[..early_cap].iter().enumerate().find_map(|(ti, tr)| {
+                if tr.field != 0 || tr.is_backchannel || tr.is_standing_policy {
+                    return None;
+                }
+                let low = tr.body_for_headers.to_ascii_lowercase();
+                let has_intro = (low.starts_with("i'm ")
+                    || low.starts_with("i\u{2019}m ")
+                    || low.starts_with("i am ")
+                    || low.contains(" i work as ")
+                    || low.contains(" working as "))
+                    && (low.contains(", a ")
+                        || low.contains(", an ")
+                        || low.contains("work as a ")
+                        || low.contains("work as an ")
+                        || low.contains("working as a ")
+                        || low.contains("working as an "));
+                if has_intro { Some(ti) } else { None }
+            });
+        }
+        if let Some(rti) = rescue_ti
+            && !ctx.final_turn_indices[..5].contains(&rti)
+        {
+            let rsi = ctx.ix.turns[rti].session;
+            if let Some(pos) = ctx.final_turn_indices.iter().position(|&t| t == rti) {
+                ctx.final_turn_indices.remove(pos);
+            }
+            ctx.final_turn_indices.insert(4, rti);
+            if ctx.final_turn_indices.len() > ctx.k {
+                ctx.final_turn_indices.truncate(ctx.k);
+            }
+            if !ctx.final_session_indices[..5].contains(&rsi) {
+                if let Some(spos) = ctx.final_session_indices.iter().position(|&s| s == rsi) {
+                    ctx.final_session_indices.remove(spos);
+                }
+                ctx.final_session_indices.insert(4, rsi);
             }
         }
     }

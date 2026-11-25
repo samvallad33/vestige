@@ -20,6 +20,7 @@ pub(in crate::retrieval) mod synapse_activation_q16;
 pub(in crate::retrieval) mod taxa;
 pub(in crate::retrieval) mod temporal_allen;
 pub(in crate::retrieval) mod torrens;
+pub(in crate::retrieval) mod tropical_concept_router_q16;
 pub(in crate::retrieval) mod two_hop_rm3_ppr;
 
 pub(in crate::retrieval) use self::bridge::*;
