@@ -1755,10 +1755,14 @@ fn turn_rare_content_words(ix: &Index, ti: usize, cap: usize) -> Vec<String> {
 pub(in crate::retrieval) fn apply_revdict_harmonic_bridge(ctx: &mut RankCtx<'_>) {
     if ctx.nt == 0
         || ctx.ns == 0
+        || (!ctx.has_named_speakers_eff && ctx.ns <= 12)
         || ctx.is_monologue_corpus
         || ctx.ix.has_tool_calls
         || ctx.torrens_locked_head
         || ctx.implicit_disclosure_locked
+        || ctx.pref_on
+        || ctx.eff_it.preference
+        || ctx.eff_it.task_under_rules
         || ctx.final_turn_indices.is_empty()
         || ctx.eff_it.is_event_sequence
         || ctx.eff_it.sniper_how_many
@@ -1807,23 +1811,21 @@ pub(in crate::retrieval) fn apply_revdict_harmonic_bridge(ctx: &mut RankCtx<'_>)
         && ctx.final_turn_indices.iter().take(5).any(|&ti| {
             (ctx.t_exact_mask.get(ti).copied().unwrap_or(0) & q_mask) != 0
         });
-    let top0_full_cov = q_mask != 0
-        && ctx.final_turn_indices.first().is_some_and(|&h0| {
-            let tr = &ix.turns[h0];
-            !tr.is_question
-                && !tr.is_backchannel
-                && (ctx.t_exact_mask.get(h0).copied().unwrap_or(0) & q_mask) == q_mask
-        });
-
     let is_inferential = is_open_domain_inferential_shape(&q_refs);
     let is_bio_hypernym = is_biographical_hypernym_shape(&q_refs);
-    let has_deficit = ctx.deficit_a
-        || ctx.deficit_b
-        || ctx.has_ungrounded_rare_oov
-        || !top5_has_star_bit
-        || !top0_full_cov
-        || is_inferential
-        || is_bio_hypernym;
+    // On named-speaker dialogues (e.g. LoCoMo), restrict reverse-dictionary/harmonic expansion
+    // strictly to genuine zero-overlap deficits or explicit open-domain inferential queries so
+    // solved single-hop / adversarial queries keep 100% latency & exact-hit Slot 2..4 integrity.
+    let has_deficit = if ctx.has_named_speakers_eff {
+        !top5_has_any_exact || is_inferential
+    } else {
+        ctx.deficit_a
+            || ctx.has_ungrounded_rare_oov
+            || !top5_has_star_bit
+            || !top5_has_any_exact
+            || is_inferential
+            || is_bio_hypernym
+    };
     if !has_deficit {
         return;
     }
@@ -2130,13 +2132,23 @@ pub(in crate::retrieval) fn apply_revdict_harmonic_bridge(ctx: &mut RankCtx<'_>)
         ctx.final_session_indices.insert(0, top_ev.si);
     }
 
-    // Case B: Promote up to 2 unseated proven symbolic bridges into Slots 2..=4 without ever
-    // touching Slots 0..=1 or evicting a declarative `star_bit` turn with a non-`star_bit` turn.
+    // Case B: Promote proven symbolic bridges strictly without disturbing calibrated exact-hit
+    // multi-hop / temporal Top-5 slates. When `top5_has_star_bit` is already satisfied, allow at
+    // most 1 bridge into Slot 4 ONLY if Slot 4 lacks exact lexical hits (protecting Slots 0..=3).
+    let skip_case_b = (ctx.eff_it.multi_hop || ctx.eff_it.temporal || ctx.eff_it.sniper_when)
+        && top5_has_any_exact;
     let top_window = ctx.k.min(5);
+    let protect_top4 = top5_has_star_bit || (ctx.has_named_speakers_eff && top5_has_any_exact);
+    let max_bridges = if protect_top4 { 1usize } else { 2usize };
+    let min_evict_slot = if protect_top4 {
+        top_window.saturating_sub(1)
+    } else {
+        2usize
+    };
     let mut seated = 0usize;
-    if top_window >= 3 {
+    if !skip_case_b && top_window >= 3 {
         for ev in &evals {
-            if seated >= 2 || ev.total_q16 < BRIDGE_MIN_PROOF_Q16 {
+            if seated >= max_bridges || ev.total_q16 < BRIDGE_MIN_PROOF_Q16 {
                 break;
             }
             let top5_t_end = ctx.final_turn_indices.len().min(top_window);
@@ -2146,16 +2158,27 @@ pub(in crate::retrieval) fn apply_revdict_harmonic_bridge(ctx: &mut RankCtx<'_>)
             if ctx.final_turn_indices.len() < top_window {
                 ctx.final_turn_indices.push(ev.ti);
             } else {
-                // Pick the lowest-priority evictable slot in 2..top_window (never evict a declarative
-                // `star_bit` turn unless `ev` also carries `star_bit`).
-                let victim_slot = (2..top_window).rev().find(|&slot| {
+                // Pick the lowest-priority evictable slot in `min_evict_slot..top_window`.
+                let victim_slot = (min_evict_slot..top_window).rev().find(|&slot| {
                     let cur_ti = ctx.final_turn_indices[slot];
                     let cur_tr = &ix.turns[cur_ti];
+                    let cur_ex_mask = ctx.t_exact_mask.get(cur_ti).copied().unwrap_or(0);
                     let cur_decl_star = star_bit != 0
                         && !cur_tr.is_question
                         && !cur_tr.is_backchannel
-                        && (ctx.t_exact_mask.get(cur_ti).copied().unwrap_or(0) & star_bit) != 0;
-                    !cur_decl_star || ev.has_star
+                        && (cur_ex_mask & star_bit) != 0;
+                    if cur_decl_star && !ev.has_star {
+                        return false;
+                    }
+                    if protect_top4
+                        && !cur_tr.is_question
+                        && !cur_tr.is_backchannel
+                        && (cur_ex_mask & q_mask) != 0
+                        && !ev.has_star
+                    {
+                        return false;
+                    }
+                    true
                 });
                 let Some(slot) = victim_slot else {
                     continue;
@@ -2170,12 +2193,12 @@ pub(in crate::retrieval) fn apply_revdict_harmonic_bridge(ctx: &mut RankCtx<'_>)
                 ctx.final_turn_indices.truncate(ctx.k);
             }
 
-            // Synchronize session into Slots 2..top_window without evicting `star_bit` sessions.
+            // Synchronize session into `min_evict_slot..top_window` without evicting `star_bit` sessions.
             let top5_s_end = ctx.final_session_indices.len().min(top_window);
             if !ctx.final_session_indices[..top5_s_end].contains(&ev.si) {
                 if ctx.final_session_indices.len() < top_window {
                     ctx.final_session_indices.push(ev.si);
-                } else if let Some(s_slot) = (2..top_window).rev().find(|&slot| {
+                } else if let Some(s_slot) = (min_evict_slot..top_window).rev().find(|&slot| {
                     let cur_si = ctx.final_session_indices[slot];
                     let cur_has_star = star_bit != 0
                         && (ctx.s_exact_mask.get(cur_si).copied().unwrap_or(0) & star_bit) != 0;

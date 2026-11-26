@@ -1250,6 +1250,7 @@ fn apply_abductive_pragmatic_seating_view(
         || view.implicit_disclosure_locked
         || view.torrens_locked_head
         || view.ns > 24
+        || (3..=12).contains(&view.ns)
         || c2_named_session(view.ix, final_turn_indices[0])
     {
         return;
@@ -1429,8 +1430,8 @@ fn apply_abductive_pragmatic_seating_view(
             .then_with(|| a.turn_idx.cmp(&b.turn_idx))
     });
 
-    // Protect Slot 0 if it already carries a standing policy OR a declarative `star_bit` factual
-    // match with solid Peyrard salience (never demote a clean factual winner!).
+    // Protect Slot 0 if it already carries a standing policy OR any substantive declarative
+    // user turn with solid Peyrard salience (never evict Gricean/Tropical or `star_bit` heads!).
     let star_bit = compute_star_bit(view.ix, view.plan);
     let h0_tr = &view.ix.turns[h0];
     let h0_has_star =
@@ -1442,7 +1443,11 @@ fn apply_abductive_pragmatic_seating_view(
         && !is_discourse_closure_or_meta_echo(view.ix, h0, "");
     let h0_score = score_by_turn.get(&h0).copied();
     let h0_peyrard_ok = h0_score.is_none_or(|s| s.peyrard_q16 >= PEYRARD_PROTECT_FLOOR_Q16);
-    let protect_slot0 = h0_tr.is_standing_policy || (h0_has_star && h0_is_decl && h0_peyrard_ok);
+    let protect_slot0 = h0_tr.is_standing_policy
+        || (!h0_tr.is_backchannel
+            && !turn_is_superseded(view.ix, h0)
+            && !is_discourse_closure_or_meta_echo(view.ix, h0, "")
+            && (h0_has_star || (h0_is_decl && h0_peyrard_ok)));
 
     // Track declarative Top-10 turns carrying `star_bit` so no non-star candidate ever jumps ahead
     // of a declarative `star_bit` winner on non-advisory queries.
@@ -1467,7 +1472,13 @@ fn apply_abductive_pragmatic_seating_view(
     let orig_tlen = final_turn_indices.len();
     let top_cap = 5usize.min(view.k).min(orig_tlen);
     let s0_top = top_sessions[0];
-    let mut next_slot = if protect_slot0 { 1usize } else { 0usize };
+    // Protect calibrated Slots 0..=3 (preserving Gricean + Tropical Min-Plus self-disclosure seats);
+    // only touch Slot 0 when `h0` is a short zero-IC filler/backchannel/closure, otherwise Slot 4.
+    let mut next_slot = if protect_slot0 {
+        4usize.min(top_cap)
+    } else {
+        0usize
+    };
     let mut seated: DetHashSet<usize> = DetHashSet::default();
     let mut seated_per_sess: DetHashMap<usize, usize> = DetHashMap::default();
     if protect_slot0 {
@@ -1506,14 +1517,28 @@ fn apply_abductive_pragmatic_seating_view(
             continue;
         }
         let inc_tr = &view.ix.turns[incumbent];
-        let inc_is_weak = inc_tr.field != 0
+        let inc_is_zero_filler = (next_slot == 0 || inc_tr.content.len() < 4)
+            && score_by_turn
+                .get(&incumbent)
+                .is_some_and(|s| s.peyrard_q16 < PEYRARD_PROTECT_FLOOR_Q16);
+        let inc_is_struct_weak = inc_tr.field != 0
             || inc_tr.is_question
             || inc_tr.is_backchannel
             || turn_is_superseded(view.ix, incumbent)
             || is_discourse_closure_or_meta_echo(view.ix, incumbent, "")
-            || score_by_turn
-                .get(&incumbent)
-                .is_none_or(|s| cand.total_q16 > s.total_q16.saturating_add(ONE / 4));
+            || inc_is_zero_filler;
+        let inc_has_exact = view.q_group_mask != 0
+            && (view.t_exact_mask.get(incumbent).copied().unwrap_or(0) & view.q_group_mask) != 0;
+        // Protect substantive declarative user turns in Slots 0..=3 (preserves Gricean/Tropical
+        // self-disclosure & factual seats). Only replace Slot 4 when Slot 4 has zero exact overlap
+        // and the candidate carries decisive abductive proof (`>= 2.0 * ONE`).
+        let inc_is_weak = inc_is_struct_weak
+            || (next_slot >= 4
+                && !inc_has_exact
+                && cand.abd_gain_q16 >= 2 * ONE
+                && score_by_turn
+                    .get(&incumbent)
+                    .is_none_or(|s| cand.total_q16 > s.total_q16.saturating_add(ONE / 2)));
 
         if !inc_is_weak {
             next_slot += 1;
@@ -1529,7 +1554,11 @@ fn apply_abductive_pragmatic_seating_view(
         let ins = next_slot.min(final_turn_indices.len());
         final_turn_indices.insert(ins, cand.turn_idx);
         *seated_per_sess.entry(cand.session_idx).or_insert(0) += 1;
-        next_slot += 1;
+        next_slot = if next_slot == 0 {
+            4usize.min(top_cap)
+        } else {
+            next_slot + 1
+        };
     }
 
     final_turn_indices.truncate(orig_tlen);

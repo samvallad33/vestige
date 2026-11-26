@@ -724,66 +724,67 @@ pub(in crate::retrieval) fn apply_hawkes_genesis_spine(ctx: &mut RankCtx<'_>) ->
         return false;
     }
 
-    // Preserve up to 2 strongest valid non-policy, non-ack incumbent turns (from distinct
-    // sessions) so mid/late gold hits already ranked high by BM25F / topic_thread stay safe.
-    let mut incumbent_anchors: Vec<(usize, usize)> = Vec::with_capacity(2);
-    for &ti in ctx.final_turn_indices.iter().take(5) {
-        if incumbent_anchors.len() >= 2 {
+    // On summarization queries, protect Slots 0..=3 (preserving calibrated Bysani/silhouette Top-4)
+    // and only inject at most 1 Hawkes genesis root into Slot 4 when Slot 4's session score is weak.
+    // On event-ordering queries, protect Slots 0..=2 and allow up to 2 earlier genesis roots in Slots 3..=4.
+    let protect_n = if is_sum { 4usize } else { 3usize };
+    let max_add = if is_sum { 1usize } else { 2usize };
+    if is_sum {
+        let max_s_sc = ctx.s_score.iter().copied().fold(0.0f32, f32::max);
+        let s4_sc = ctx
+            .final_session_indices
+            .get(4)
+            .and_then(|&si| ctx.s_score.get(si).copied())
+            .unwrap_or(0.0);
+        if max_s_sc > 0.0 && s4_sc >= 0.35 * max_s_sc {
+            return false;
+        }
+    }
+    let mut top5_sessions: Vec<usize> = ctx.final_session_indices.iter().take(protect_n).copied().collect();
+    let mut top5_turns: Vec<usize> = ctx.final_turn_indices.iter().take(protect_n).copied().collect();
+    let max_top3_sess = top5_sessions.iter().copied().max().unwrap_or(0);
+
+    let mut added = 0usize;
+    for cand in &spine {
+        if top5_sessions.len() >= 5 || added >= max_add {
             break;
         }
-        let tr = &ctx.ix.turns[ti];
-        if tr.is_standing_policy
-            || tr.is_backchannel
-            || (!allow_assistant && tr.field != 0)
-            || is_discourse_closure_or_meta_echo(ctx.ix, ti, &ctx.q.text)
-            || is_short_courtesy_ack(ctx.ix, ti, 0, is_seq)
+        if top5_sessions.contains(&cand.session_idx) || top5_turns.contains(&cand.turn_idx) {
+            continue;
+        }
+        // Require either a genuinely earlier session than the protected Top-3 ceiling OR strong
+        // left-directed QueryNovelty / Kleinberg onset so late noise never evicts calibrated Slots 3..4.
+        if cand.session_idx >= max_top3_sess
+            && !cand.burst_onset
+            && cand.query_novelty < (ONE >> 1)
         {
             continue;
         }
-        if !incumbent_anchors.iter().any(|&(_, si)| si == tr.session) {
-            incumbent_anchors.push((ti, tr.session));
-        }
+        top5_sessions.push(cand.session_idx);
+        top5_turns.push(cand.turn_idx);
+        added += 1;
     }
 
-    let mut top5_turns: Vec<usize> = Vec::with_capacity(5);
-    let mut top5_sessions: Vec<usize> = Vec::with_capacity(5);
-
-    // Slot 0: #1 Hawkes/Hearst/Kleinberg exogenous genesis root.
-    top5_turns.push(spine[0].turn_idx);
-    top5_sessions.push(spine[0].session_idx);
-
-    // Slots 1..=2: Up to 2 valid distinct-session incumbent BM25/topic_thread anchors.
-    for (inc_ti, inc_si) in incumbent_anchors {
-        if top5_turns.len() >= 3 {
-            break;
-        }
-        if !top5_sessions.contains(&inc_si) {
-            top5_turns.push(inc_ti);
-            top5_sessions.push(inc_si);
-        }
+    if added == 0 {
+        return false;
     }
 
-    // Slots 3..=4: Remaining Martschat-Markert epoch-diverse Hawkes genesis turns.
-    for cand in spine.iter().skip(1) {
+    // Preserve any existing Slot 3/4 incumbents when fewer than max_add Hawkes roots were injected.
+    for &old_ti in ctx.final_turn_indices.iter().skip(protect_n) {
         if top5_turns.len() >= 5 {
             break;
         }
-        if !top5_sessions.contains(&cand.session_idx) {
-            top5_turns.push(cand.turn_idx);
-            top5_sessions.push(cand.session_idx);
+        if !top5_turns.contains(&old_ti) {
+            top5_turns.push(old_ti);
         }
     }
-
-    // For explicit event-ordering queries, sort the selected Top-5 genesis + milestone spine
-    // into ascending chronological order (earliest turn / session first).
-    if is_seq {
-        let mut pairs: Vec<(usize, usize)> = top5_turns
-            .into_iter()
-            .zip(top5_sessions.into_iter())
-            .collect();
-        pairs.sort_by_key(|&(ti, si)| (ctx.ix.session_ts.get(si).copied().unwrap_or(0), si, ti));
-        top5_turns = pairs.iter().map(|&(ti, _)| ti).collect();
-        top5_sessions = pairs.iter().map(|&(_, si)| si).collect();
+    for &old_si in ctx.final_session_indices.iter().skip(protect_n) {
+        if top5_sessions.len() >= 5 {
+            break;
+        }
+        if !top5_sessions.contains(&old_si) {
+            top5_sessions.push(old_si);
+        }
     }
 
     let target_t = ctx.k.max(ctx.final_turn_indices.len()).max(5);

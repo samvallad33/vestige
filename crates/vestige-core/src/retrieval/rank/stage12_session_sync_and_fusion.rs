@@ -4550,10 +4550,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             );
         }
         // Breakthrough #3 (Gricean Maxim-of-Quantity Conditional Information-Gain Intra-Session Turn Selector):
-        crate::retrieval::graph::revdict::apply_revdict_harmonic_bridge(ctx);
         crate::retrieval::seating::gricean_constraint_turn_q16::apply_gricean_constraint_turn_seating(
             ctx,
         );
+        crate::retrieval::graph::revdict::apply_revdict_harmonic_bridge(ctx);
         crate::retrieval::seating::abduct::apply_abductive_pragmatic_seating(ctx);
         crate::retrieval::fusion::emgr::apply_emgr_steiner_dpp_fusion(ctx);
         crate::retrieval::graph::rtec::apply_rtec_discourse_dbm(ctx);

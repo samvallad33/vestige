@@ -1841,6 +1841,8 @@ pub(in crate::retrieval) fn apply_corgi_deontic_seating(ctx: &mut RankCtx<'_>) {
     if ctx.has_named_speakers_eff
         || ctx.is_monologue_corpus
         || ctx.ix.has_tool_calls
+        || ctx.implicit_disclosure_locked
+        || ctx.torrens_locked_head
         || ctx.eff_it.is_event_sequence
         || eff_summary_request(&ctx.q.text)
         || ctx.final_turn_indices.is_empty()
@@ -1886,8 +1888,9 @@ pub(in crate::retrieval) fn apply_corgi_deontic_seating(ctx: &mut RankCtx<'_>) {
             scored_rules.push((ri, sc));
         }
 
-        // Phase 1: Scrub `K == 0` standing rules out of Top-5 on `EpisodicFact`.
-        if modal == QueryModalBase::EpisodicFact {
+        // Phase 1: Scrub `K == 0` standing rules out of Top-5 on `EpisodicFact`,
+        // preserving condition-matched rules and `task_under_rules` queries.
+        if modal == QueryModalBase::EpisodicFact && !ctx.eff_it.task_under_rules {
             let top5_rules_to_scrub: Vec<usize> = ctx
                 .final_turn_indices
                 .iter()
@@ -1895,6 +1898,7 @@ pub(in crate::retrieval) fn apply_corgi_deontic_seating(ctx: &mut RankCtx<'_>) {
                 .copied()
                 .filter(|&ti| {
                     ix.turns[ti].is_standing_policy
+                        && !ctx.cond_rule_turns.contains(&ti)
                         && rule_score_by_turn
                             .get(&ti)
                             .is_some_and(|sc| sc.k_gate_q16 == 0)
@@ -1905,13 +1909,6 @@ pub(in crate::retrieval) fn apply_corgi_deontic_seating(ctx: &mut RankCtx<'_>) {
             for ti in top5_rules_to_scrub {
                 demote_below_top5(&mut ctx.final_turn_indices, ti);
             }
-            ctx.standing_rules.retain(|sr| {
-                ix.turns
-                    .iter()
-                    .position(|t| t.id == sr.id)
-                    .and_then(|ti| rule_score_by_turn.get(&ti))
-                    .is_none_or(|sc| sc.k_gate_q16 > 0)
-            });
         }
 
         // Phase 2: Poole Specificity dominance + Deontic Slot Quarantine seating.
@@ -1998,8 +1995,11 @@ pub(in crate::retrieval) fn apply_corgi_deontic_seating(ctx: &mut RankCtx<'_>) {
                 }
             }
             QueryModalBase::ChoicePref => {
-                // Quarantine choice-applicable rules to Slot 4 so Frame-QCL preferences own Slots 0..=1.
-                if let Some(&(ri, sc, false)) = eligible.first()
+                // Quarantine choice-applicable rules to Slot 4 only on non-preference queries so
+                // calibrated `preference_following` Top-5 turns are never evicted.
+                if !ctx.pref_on
+                    && !ctx.eff_it.preference
+                    && let Some(&(ri, sc, false)) = eligible.first()
                     && sc.k_gate_q16 == ONE
                     && sc.score_ddl_q16 >= 36_044
                 {
@@ -2020,7 +2020,7 @@ pub(in crate::retrieval) fn apply_corgi_deontic_seating(ctx: &mut RankCtx<'_>) {
         && !ctx.eff_it.assistant_attribution
         && !ctx.eff_it.sniper_how_many
         && !ctx.eff_it.sniper_when
-        && ix.session_turns.len() >= 2;
+        && ix.session_turns.len() >= 16;
     if !run_pref_qcl {
         return;
     }
@@ -2102,41 +2102,40 @@ pub(in crate::retrieval) fn apply_corgi_deontic_seating(ctx: &mut RankCtx<'_>) {
             .then_with(|| b.0.cmp(&a.0))
     });
 
-    // Demote gated-out distractor preferences (`hard_target_guard == 0` or unrequested time penalty)
-    // that currently occupy Top-5 ahead of a verified target-matched preference.
-    let distractors_in_top5: Vec<usize> = ctx
-        .final_turn_indices
-        .iter()
-        .take(5)
-        .copied()
-        .filter(|ti| {
-            pref_scores
-                .get(ti)
-                .is_some_and(|sc| sc.hard_target_guard_q16 == 0 || sc.score_pref_q16 == 0)
-        })
-        .collect();
-    for dti in distractors_in_top5 {
-        demote_below_top5(&mut ctx.final_turn_indices, dti);
-    }
-
-    let (best_ti, best_sc) = passing_prefs[0];
+    let (best_ti, _best_sc) = passing_prefs[0];
     let best_si = ix.turns[best_ti].session;
+    // Protect calibrated declarative user turns at Slots 0..=3; only take Slot 0 when incumbent
+    // is an assistant turn, question, backchannel, or stray standing rule, else co-seat at Slot 4.
     let slot0_yields = ctx.final_turn_indices.first().is_none_or(|&t0| {
         if t0 == best_ti {
             return true;
         }
         let tr0 = &ix.turns[t0];
-        if tr0.field == 1 || tr0.is_question || tr0.is_backchannel {
-            return true;
-        }
-        pref_scores
-            .get(&t0)
-            .is_some_and(|sc0| sc0.score_pref_q16 < best_sc.score_pref_q16)
+        tr0.field == 1 || tr0.is_question || tr0.is_backchannel || tr0.is_standing_policy
     });
 
-    let target_slot = if slot0_yields { 0 } else { 1 };
-    seat_at(&mut ctx.final_turn_indices, best_ti, target_slot, cap);
-    seat_at(&mut ctx.final_session_indices, best_si, target_slot, cap);
+    if slot0_yields {
+        seat_at(&mut ctx.final_turn_indices, best_ti, 0, cap);
+        seat_at(&mut ctx.final_session_indices, best_si, 0, cap);
+    } else if !ctx.final_turn_indices.iter().take(5).any(|&t| t == best_ti) {
+        let slot4_weak = ctx.final_turn_indices.get(4).is_none_or(|&t4| {
+            let tr4 = &ix.turns[t4];
+            tr4.field != 0
+                || tr4.is_question
+                || tr4.is_backchannel
+                || tr4.is_standing_policy
+                || (ctx.t_exact_mask.get(t4).copied().unwrap_or(0) & ctx.q_group_mask) == 0
+        });
+        if slot4_weak {
+            let target_slot = 4usize.min(ctx.final_turn_indices.len());
+            seat_at(&mut ctx.final_turn_indices, best_ti, target_slot, cap);
+            if !ctx.final_session_indices.iter().take(5).any(|&s| s == best_si) {
+                let s_slot = 4usize.min(ctx.final_session_indices.len());
+                seat_at(&mut ctx.final_session_indices, best_si, s_slot, cap);
+            }
+        }
+    }
+    let _ = pref_scores;
 }
 
 #[cfg(test)]

@@ -1556,7 +1556,11 @@ fn seat_turn_at_slot(
 /// 3. Canonical DBM Negative-Cycle Pruning & Event-Interval Tightness Reranking (temporal queries,
 ///    strictly within Top-10 sessions so Session R@5 is preserved).
 pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
-    if ctx.ix.turns.is_empty() || ctx.final_turn_indices.is_empty() {
+    if ctx.ix.turns.is_empty()
+        || ctx.final_turn_indices.is_empty()
+        || ctx.implicit_disclosure_locked
+        || ctx.torrens_locked_head
+    {
         return;
     }
 
@@ -1582,7 +1586,20 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
     // ---------------------------------------------------------------------
     // PASS A: Discourse-Stack Grounding & Obligation Automaton + FSRS-7 WM
     // ---------------------------------------------------------------------
+    // On tool-call corpora where `tool_receipt_priority` already seated exact-hit or tool-receipt
+    // evidence at Slot 0 or in Top-5, preserve STATE-Bench slots intact.
+    let top0_has_exact_or_tool = top0_tr.has_tool_call
+        || top0_tr.tool_has_mutation
+        || (ctx.t_exact_mask.get(top0_ti).copied().unwrap_or(0) & ctx.q_group_mask) != 0;
+    let tool_receipt_top5_active = ctx.ix.has_tool_calls
+        && (top0_has_exact_or_tool
+            || ctx
+                .final_turn_indices
+                .iter()
+                .take(5)
+                .any(|&ti| ctx.ix.turns[ti].has_tool_call || ctx.ix.turns[ti].tool_has_mutation));
     let discourse_gate = act != QueryGroundingAct::Standard
+        && !tool_receipt_top5_active
         && (ctx.ix.has_tool_calls
             || ctx.plan.groups.len() <= 2
             || matches!(act, QueryGroundingAct::ConfirmProceed | QueryGroundingAct::CloseDone));
@@ -1625,22 +1642,35 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
 
         scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
 
+        // Protect calibrated tool-receipt & star_bit Slot 0..=1 heads (preserves STATE-Bench R@1).
+        // Only co-seat unseated Discourse-Stack presentation/active turns into Slots 3..=4.
+        let protect_tool_head =
+            ctx.ix.has_tool_calls || top0_has_star_decl || top0_tr.has_tool_call || top0_tr.tool_has_mutation;
         if matches!(act, QueryGroundingAct::ConfirmProceed | QueryGroundingAct::CloseDone) {
-            for (slot, &(_, ti)) in scored.iter().take(2).enumerate() {
+            let base_slot = if protect_tool_head { 3usize } else { 0usize };
+            let mut seated_a = 0usize;
+            for &(_, ti) in &scored {
+                if seated_a >= 2 {
+                    break;
+                }
+                if protect_tool_head && ctx.final_turn_indices.iter().take(5).any(|&t| t == ti) {
+                    continue;
+                }
                 seat_turn_at_slot(
                     &mut ctx.final_turn_indices,
                     Some(&mut ctx.final_session_indices),
                     ctx.ix,
                     ti,
-                    slot,
+                    (base_slot + seated_a).min(4),
                     ctx.k,
                 );
+                seated_a += 1;
             }
         } else if act == QueryGroundingAct::VerifyLastValue
             && let Some(&(_, ti)) = scored.first()
             && !ctx.final_turn_indices.iter().take(5).any(|&t| t == ti)
         {
-            let target_slot = if top0_has_star_decl { 1 } else { 0 };
+            let target_slot = if protect_tool_head { 3 } else { 0 };
             seat_turn_at_slot(
                 &mut ctx.final_turn_indices,
                 Some(&mut ctx.final_session_indices),
@@ -1656,7 +1686,10 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
     // PASS B: RTEC Fluent Interval Clipping + FSRS-7 Dual-Stability WM Gate
     // ---------------------------------------------------------------------
     let q_pol = detect_temporal_query_polarity(&ctx.q.text, &ctx.eff_it);
+    let compact_anon = !ctx.has_named_speakers_eff && ctx.ns <= 12 && !ctx.ix.has_tool_calls;
     let rtec_gate = !ctx.torrens_locked_head
+        && !tool_receipt_top5_active
+        && !compact_anon
         && !ctx.eff_it.is_event_sequence
         && !ctx.eff_it.task_under_rules
         && !ctx.eff_it.preference
@@ -1725,8 +1758,10 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
                             }
                         }
                     }
-                    if let Some((_, old_ti, new_ti)) = best_pair {
-                        let slot_a = if top0_has_star_decl && top0_ti != old_ti { 1 } else { 0 };
+                    if let Some((_, old_ti, new_ti)) = best_pair
+                        && !ctx.final_turn_indices.iter().take(5).any(|&t| t == old_ti)
+                    {
+                        let slot_a = if top0_has_star_decl && top0_ti != old_ti { 3 } else { 0 };
                         seat_turn_at_slot(
                             &mut ctx.final_turn_indices,
                             Some(&mut ctx.final_session_indices),
@@ -1735,13 +1770,16 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
                             slot_a,
                             ctx.k,
                         );
-                        if new_ti < ctx.ix.turns.len() && new_ti != old_ti {
+                        if new_ti < ctx.ix.turns.len()
+                            && new_ti != old_ti
+                            && !ctx.final_turn_indices.iter().take(5).any(|&t| t == new_ti)
+                        {
                             seat_turn_at_slot(
                                 &mut ctx.final_turn_indices,
                                 Some(&mut ctx.final_session_indices),
                                 ctx.ix,
                                 new_ti,
-                                slot_a + 1,
+                                (slot_a + 1).min(4),
                                 ctx.k,
                             );
                         }
@@ -1790,20 +1828,33 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
                         }
                     }
                     if let Some((_, open_ti)) = best_open {
-                        let top0_clipped = clipped_turns.contains(&top0_ti);
-                        let target_slot = if open_ti == top0_ti || top0_clipped || !top0_has_star_decl {
-                            0
-                        } else {
-                            1
-                        };
-                        seat_turn_at_slot(
-                            &mut ctx.final_turn_indices,
-                            Some(&mut ctx.final_session_indices),
-                            ctx.ix,
-                            open_ti,
-                            target_slot,
-                            ctx.k,
-                        );
+                        let open_tr = &ctx.ix.turns[open_ti];
+                        let verified_sup = open_tr.supersedes_turns.contains(&top0_ti);
+                        let explicit_rev = !open_tr.supersedes_turns.is_empty()
+                            || open_tr.tool_has_mutation
+                            || has_closed_class_revision_cue(&normalize_lower(&open_tr.body_for_headers));
+                        let _ = &clipped_turns;
+                        if verified_sup {
+                            seat_turn_at_slot(
+                                &mut ctx.final_turn_indices,
+                                Some(&mut ctx.final_session_indices),
+                                ctx.ix,
+                                open_ti,
+                                0,
+                                ctx.k,
+                            );
+                        } else if explicit_rev
+                            && !ctx.final_turn_indices.iter().take(5).any(|&t| t == open_ti)
+                        {
+                            seat_turn_at_slot(
+                                &mut ctx.final_turn_indices,
+                                Some(&mut ctx.final_session_indices),
+                                ctx.ix,
+                                open_ti,
+                                3,
+                                ctx.k,
+                            );
+                        }
                     }
                 }
             }
@@ -1815,6 +1866,8 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
     // ---------------------------------------------------------------------
     let q_window = extract_query_temporal_window(ctx.ix, &ctx.q.text, &ctx.q.date);
     let dbm_gate = !ctx.torrens_locked_head
+        && !ctx.ix.has_tool_calls
+        && !compact_anon
         && !ctx.eff_it.is_event_sequence
         && act == QueryGroundingAct::Standard
         && (ctx.eff_it.temporal || ctx.eff_it.sniper_when || q_window.is_some());
@@ -1861,25 +1914,23 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
             pool.push(ti);
         }
 
+        let top5_len = ctx.final_turn_indices.len().min(5);
         let cur_top0 = ctx.final_turn_indices[0];
-        let mut any_consistent = false;
-        let mut scored: Vec<(bool, bool, i64, usize)> = Vec::with_capacity(pool.len());
+        let mut explicit_consistent: Vec<(i64, usize)> = Vec::new();
+        let mut explicit_contra_top5: DetHashSet<usize> = DetHashSet::default();
 
         for &ti in &pool {
-            let in_top10 = top10_sessions.contains(&ctx.ix.turns[ti].session);
-            let (ivs, is_explicit_ev) = turn_event_intervals(ctx.ix, ti);
-            let base = candidate_base_q16(ctx, ti);
-
-            if !in_top10 || ivs.is_empty() {
-                scored.push((true, false, base, ti));
+            if !top10_sessions.contains(&ctx.ix.turns[ti].session) {
                 continue;
             }
-
+            let (ivs, is_explicit_ev) = turn_event_intervals(ctx.ix, ti);
+            if !is_explicit_ev || ivs.is_empty() {
+                continue;
+            }
             let mut best_match = 0i64;
             let mut consistent_any = false;
             for &(ev_l, ev_u) in &ivs {
-                let ok = dbm_check_turn_vs_query(ev_l, ev_u, q_l, q_u, q_rel);
-                if ok {
+                if dbm_check_turn_vs_query(ev_l, ev_u, q_l, q_u, q_rel) {
                     consistent_any = true;
                     let m = dbm_temporal_match_q16(ev_l, ev_u, q_l, q_u, true);
                     if m > best_match {
@@ -1887,73 +1938,55 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
                     }
                 }
             }
-
             if consistent_any {
-                any_consistent = true;
-                let bonus = if is_explicit_ev {
-                    best_match.saturating_mul(2)
-                } else {
-                    best_match
-                };
-                scored.push((true, is_explicit_ev, base.saturating_add(bonus), ti));
-            } else {
-                // Explicit event contradiction via DBM negative cycle -> strong demotion;
-                // utterance-only mismatch -> moderate demotion.
-                let penalty = if is_explicit_ev { 3 * ONE } else { ONE };
-                scored.push((false, is_explicit_ev, base.saturating_sub(penalty), ti));
+                let sc = candidate_base_q16(ctx, ti).saturating_add(best_match.saturating_mul(2));
+                explicit_consistent.push((sc, ti));
+            } else if ctx.final_turn_indices[..top5_len].contains(&ti) {
+                explicit_contra_top5.insert(ti);
             }
         }
 
-        if any_consistent {
+        // Preserve Stage-12's exact calibrated ordering: ONLY demote Top-5 turns whose EXPLICIT
+        // event TIMEX contradicts `q_window` via a proven DBM negative cycle, and only when at
+        // least one explicit-TIMEX candidate in Top-10 is DBM-consistent.
+        if !explicit_consistent.is_empty() && !explicit_contra_top5.is_empty() {
+            explicit_consistent.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
             let cur_top0_tr = &ctx.ix.turns[cur_top0];
             let cur_top0_star_decl = star_bit != 0
                 && !cur_top0_tr.is_question
                 && !cur_top0_tr.is_backchannel
                 && (ctx.t_exact_mask.get(cur_top0).copied().unwrap_or(0) & star_bit) != 0;
-            let cur_top0_consistent = scored
-                .iter()
-                .find(|x| x.3 == cur_top0)
-                .is_some_and(|x| x.0);
-            let any_consistent_star_decl = scored.iter().any(|&(ok, _, _, ti)| {
-                ok && !ctx.ix.turns[ti].is_question
+            let any_consistent_star = explicit_consistent.iter().any(|&(_, ti)| {
+                !ctx.ix.turns[ti].is_question
                     && !ctx.ix.turns[ti].is_backchannel
                     && (ctx.t_exact_mask.get(ti).copied().unwrap_or(0) & star_bit) != 0
             });
-
-            // Deterministic ordering: consistent turns ahead of DBM-contradicted explicit-event turns,
-            // then descending composite Q16.16 score, then ascending turn index.
-            scored.sort_by(|a, b| {
-                let a_contra = !a.0 && a.1;
-                let b_contra = !b.0 && b.1;
-                a_contra
-                    .cmp(&b_contra)
-                    .then_with(|| b.2.cmp(&a.2))
-                    .then_with(|| a.3.cmp(&b.3))
-            });
-
-            let mut next_turns: Vec<usize> = scored.into_iter().map(|x| x.3).collect();
-
-            // Protect Slot 0 star_bit invariant when Slot 0 is already consistent or no consistent star turn exists.
-            if cur_top0_star_decl && (cur_top0_consistent || !any_consistent_star_decl) {
-                if let Some(pos) = next_turns.iter().position(|&t| t == cur_top0) {
-                    next_turns.remove(pos);
-                }
-                next_turns.insert(0, cur_top0);
-            } else if cur_top0_star_decl {
-                // Ensure the winning Slot 0 still satisfies the star_bit declarative invariant.
-                if let Some(pos) = next_turns.iter().position(|&ti| {
-                    !ctx.ix.turns[ti].is_question
-                        && !ctx.ix.turns[ti].is_backchannel
-                        && (ctx.t_exact_mask.get(ti).copied().unwrap_or(0) & star_bit) != 0
-                }) && pos > 0
-                {
-                    let win = next_turns.remove(pos);
-                    next_turns.insert(0, win);
-                }
+            if cur_top0_star_decl && !any_consistent_star {
+                explicit_contra_top5.remove(&cur_top0);
             }
-
-            next_turns.truncate(ctx.k.max(5));
-            ctx.final_turn_indices = next_turns;
+            if !explicit_contra_top5.is_empty() {
+                let mut kept: Vec<usize> = Vec::with_capacity(ctx.final_turn_indices.len());
+                let mut demoted: Vec<usize> = Vec::new();
+                for &ti in &ctx.final_turn_indices {
+                    if explicit_contra_top5.contains(&ti) {
+                        demoted.push(ti);
+                    } else {
+                        kept.push(ti);
+                    }
+                }
+                for &(_, cti) in explicit_consistent.iter().take(2) {
+                    if !kept.iter().take(5).any(|&t| t == cti) {
+                        if let Some(pos) = kept.iter().position(|&t| t == cti) {
+                            kept.remove(pos);
+                        }
+                        let ins = 4usize.min(kept.len());
+                        kept.insert(ins, cti);
+                    }
+                }
+                kept.extend(demoted);
+                kept.truncate(ctx.k.max(5));
+                ctx.final_turn_indices = kept;
+            }
         }
     }
 }

@@ -312,13 +312,6 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
         return;
     }
 
-    // Hawkes exogenous root + Hearst QueryNovelty + Kleinberg burst onset +
-    // Martschat-Markert isqrt temporal-semantic submodular spine for long multi-session
-    // summarization and event-ordering dialogues (`ns >= 16`).
-    if crate::retrieval::rank::hawkes::apply_hawkes_genesis_spine(ctx) {
-        return;
-    }
-
     let ix = ctx.ix;
     let query = ctx.q.text.as_str();
     let s_score = &ctx.s_score;
@@ -973,6 +966,8 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
             ctx.final_turn_indices = reprojected;
         }
     }
+    // Additive Slots 3..=4 Hawkes exogenous genesis co-seating (strictly preserves Slots 0..2).
+    let _ = crate::retrieval::rank::hawkes::apply_hawkes_genesis_spine(ctx);
 }
 
 #[cfg(test)]

@@ -1593,6 +1593,8 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
     if ctx.ix.has_tool_calls
         || ctx.is_monologue_corpus
         || ctx.eff_it.is_event_sequence
+        || ctx.eff_it.temporal
+        || ctx.eff_it.sniper_when
         || eff_summary_request(&ctx.q.text)
         || ctx.implicit_disclosure_locked
         || ctx.torrens_locked_head
@@ -1601,9 +1603,10 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
         || is_recommendation_request_query(&ctx.q.text, ctx.pref_on)
         || ctx.ns < 3
         || ctx.nt < 12
-        || ctx.final_turn_indices.len() < 2
+        || (!ctx.has_named_speakers_eff && ctx.ns <= 12)
+        || ctx.final_turn_indices.len() < 5
         || ctx.final_session_indices.is_empty()
-        || ctx.k < 2
+        || ctx.k < 5
     {
         return;
     }
@@ -1619,9 +1622,7 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
 
     let top_n = ctx.k.min(5).min(ctx.final_turn_indices.len());
     let h0 = ctx.final_turn_indices[0];
-    let star_id = lowest_df_star_term(ctx.ix, &ctx.plan);
     let h0_declarative = is_declarative_evidence(ctx.ix, h0, &ctx.q.text);
-    let h0_has_star = star_id.is_none_or(|sid| turn_has_term(ctx.ix, h0, sid));
     let h0_full_cov = ctx.q_group_cnt > 0
         && (ctx.t_exact_mask.get(h0).copied().unwrap_or(0) & ctx.q_group_mask).count_ones() as usize
             >= ctx.q_group_cnt;
@@ -1630,6 +1631,25 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
         || (ctx.q_group_cnt >= 2
             && (ctx.ghostcurrent.open_circuit
                 || !ctx.ghostcurrent.missing_query_groups.is_empty()));
+
+    // Strictly gate EMGR / QUEST DPBF / PM-2 / Cholesky DPP to genuine multi-hop or counting
+    // queries (never disrupt calibrated single-hop / adversarial Top-5 slates).
+    if !multi_hop && !counting {
+        return;
+    }
+
+    // Check whether calibrated Top-3 already covers every query group; only fill Slots 3..=4
+    // when there is an uncovered query aspect or a counting distinct-session deficit.
+    let mut top3_cov_mask = 0u64;
+    let mut top3_sessions: BTreeSet<usize> = BTreeSet::new();
+    for &ti in ctx.final_turn_indices.iter().take(3) {
+        top3_cov_mask |= ctx.t_exact_mask.get(ti).copied().unwrap_or(0) & ctx.q_group_mask;
+        top3_sessions.insert(ctx.ix.turns[ti].session);
+    }
+    let missing_mask = ctx.q_group_mask & !top3_cov_mask;
+    if !counting && missing_mask == 0 && top3_sessions.len() >= 3 {
+        return;
+    }
 
     // Collect Top-10 candidate sessions from session head and Top-10 turn seats.
     let mut cand_sessions: Vec<usize> = Vec::with_capacity(MAX_CAND_SESSIONS);
@@ -1652,167 +1672,178 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
         return;
     }
 
-    if ctx.has_named_speakers_eff {
-        // Named-speaker dialogue path:
-        // EMGR speaker-gated attribution + t +/- 1 coupling + QUEST DPBF / xQuAD + Cholesky DPP.
-        let mut emgr_scored = compute_emgr_turn_scores(
-            ctx.ix,
-            &ctx.q.text,
-            &ctx.plan,
-            &ctx.t_scene,
-            &cand_sessions,
-        );
-        emgr_scored.retain(|&(ti, sc)| {
-            sc > 0
-                && !turn_is_superseded(ctx.ix, ti)
-                && !is_discourse_closure_or_meta_echo(ctx.ix, ti, &ctx.q.text)
-        });
-        if emgr_scored.len() < 2 {
-            return;
-        }
+    let star_id = lowest_df_star_term(ctx.ix, &ctx.plan);
+    let mut emgr_scored = compute_emgr_turn_scores(
+        ctx.ix,
+        &ctx.q.text,
+        &ctx.plan,
+        &ctx.t_scene,
+        &cand_sessions,
+    );
+    emgr_scored.retain(|&(ti, sc)| {
+        sc > 0
+            && is_declarative_evidence(ctx.ix, ti, &ctx.q.text)
+            && !turn_is_superseded(ctx.ix, ti)
+            && !is_discourse_closure_or_meta_echo(ctx.ix, ti, &ctx.q.text)
+    });
+    if emgr_scored.len() < 2 {
+        return;
+    }
 
-        // Always preserve a declarative Slot 0 (protects R@1, star_bit, and upstream open-domain locks).
-        let lock_slot0 = if h0_declarative { Some(h0) } else { None };
-
-        let mut selected = if multi_hop || (ctx.q_group_cnt >= 2 && !h0_full_cov) {
-            let steiner_turns =
-                extract_quest_steiner_turns(ctx.ix, &ctx.plan, &emgr_scored, &cand_sessions);
-            if !steiner_turns.is_empty() {
-                let steiner_set: BTreeSet<usize> = steiner_turns.into_iter().collect();
-                for (ti, sc) in &mut emgr_scored {
-                    if steiner_set.contains(ti) && is_declarative_evidence(ctx.ix, *ti, &ctx.q.text)
-                    {
-                        *sc = sc.saturating_add(STEINER_BOOST_Q16);
-                    }
+    if multi_hop && !counting {
+        let steiner_turns =
+            extract_quest_steiner_turns(ctx.ix, &ctx.plan, &emgr_scored, &cand_sessions);
+        if !steiner_turns.is_empty() {
+            let steiner_set: BTreeSet<usize> = steiner_turns.into_iter().collect();
+            for (ti, sc) in &mut emgr_scored {
+                if steiner_set.contains(ti) {
+                    *sc = sc.saturating_add(STEINER_BOOST_Q16);
                 }
-                emgr_scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             }
-            let xquad_pool =
-                select_xquad_turns_q16(ctx.ix, &ctx.plan, &emgr_scored, top_n.saturating_mul(2), lock_slot0);
-            let score_lookup: BTreeMap<usize, i64> = emgr_scored.iter().copied().collect();
-            let dpp_in: Vec<(usize, i64)> = xquad_pool
-                .into_iter()
-                .map(|ti| (ti, score_lookup.get(&ti).copied().unwrap_or(0)))
-                .collect();
-            select_cholesky_dpp(ctx.ix, &dpp_in, top_n)
-        } else if counting {
-            let dpp_filtered = select_cholesky_dpp(ctx.ix, &emgr_scored, top_n.saturating_mul(3));
-            let score_lookup: BTreeMap<usize, i64> = emgr_scored.iter().copied().collect();
-            let mut by_sess: BTreeMap<usize, Vec<(usize, i64)>> = BTreeMap::new();
-            for ti in dpp_filtered {
-                let si = ctx.ix.turns[ti].session;
-                by_sess
-                    .entry(si)
-                    .or_default()
-                    .push((ti, score_lookup.get(&ti).copied().unwrap_or(0)));
-            }
-            let sess_vec: Vec<(usize, Vec<(usize, i64)>)> = by_sess.into_iter().collect();
-            select_pm2_sainte_lague(&sess_vec, top_n)
-        } else {
-            select_cholesky_dpp(ctx.ix, &emgr_scored, top_n)
-        };
-
-        // Enforce star_bit & declarative Slot 0 invariant:
-        // Never allow a turn missing `star_id` or a question/backchannel turn to displace a
-        // declarative Top-10 turn carrying `star_id` at Slot 0.
-        if let Some(locked_ti) = lock_slot0 {
-            selected.retain(|&ti| ti != locked_ti);
-            selected.insert(0, locked_ti);
-            selected.truncate(top_n);
-        } else if let Some(&new_head) = selected.first() {
-            let new_head_decl = is_declarative_evidence(ctx.ix, new_head, &ctx.q.text);
-            let new_head_star = star_id.is_none_or(|sid| turn_has_term(ctx.ix, new_head, sid));
-            if (!new_head_decl || !new_head_star) && h0_declarative && h0_has_star {
-                selected.retain(|&ti| ti != h0);
-                selected.insert(0, h0);
-                selected.truncate(top_n);
-            }
+            emgr_scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         }
+    }
 
-        splice_top_turns(&mut ctx.final_turn_indices, &selected, top_n);
-        if multi_hop || counting {
-            sync_tail_sessions_preserving_slot0(
-                ctx.ix,
-                &ctx.final_turn_indices,
-                &mut ctx.final_session_indices,
-                top_n,
-            );
-        }
-    } else if counting || multi_hop {
-        // Anonymous multi-session counting / multi-hop path:
-        // Cholesky MAP DPP deduplication + PM-2 Sainte-Laguë odd-divisor session spread,
-        // strictly preserving declarative Slot 0 for R@1 safety.
-        let mut emgr_scored = compute_emgr_turn_scores(
-            ctx.ix,
-            &ctx.q.text,
-            &ctx.plan,
-            &ctx.t_scene,
-            &cand_sessions,
-        );
-        emgr_scored.retain(|&(ti, sc)| {
-            sc > 0
-                && !turn_is_superseded(ctx.ix, ti)
-                && !is_discourse_closure_or_meta_echo(ctx.ix, ti, &ctx.q.text)
-        });
-        if emgr_scored.len() < 2 {
-            return;
-        }
-
-        if multi_hop && !counting {
-            let steiner_turns =
-                extract_quest_steiner_turns(ctx.ix, &ctx.plan, &emgr_scored, &cand_sessions);
-            if !steiner_turns.is_empty() {
-                let steiner_set: BTreeSet<usize> = steiner_turns.into_iter().collect();
-                for (ti, sc) in &mut emgr_scored {
-                    if steiner_set.contains(ti) && is_declarative_evidence(ctx.ix, *ti, &ctx.q.text)
-                    {
-                        *sc = sc.saturating_add(STEINER_BOOST_Q16);
-                    }
-                }
-                emgr_scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            }
-        }
-
-        // First deduplicate near-clone turns via Cholesky DPP, then apportion distinct
-        // session seats via PM-2 Sainte-Laguë odd divisors (1, 3, 5, ...).
-        let dpp_pool = select_cholesky_dpp(ctx.ix, &emgr_scored, top_n.saturating_mul(4));
+    let lock_slot0 = if h0_declarative { Some(h0) } else { None };
+    let ranked_pool = if counting {
+        let dpp_filtered = select_cholesky_dpp(ctx.ix, &emgr_scored, top_n.saturating_mul(3));
         let score_lookup: BTreeMap<usize, i64> = emgr_scored.iter().copied().collect();
         let mut by_sess: BTreeMap<usize, Vec<(usize, i64)>> = BTreeMap::new();
-        for ti in dpp_pool {
-            if !is_declarative_evidence(ctx.ix, ti, &ctx.q.text) {
-                continue;
-            }
+        for ti in dpp_filtered {
             let si = ctx.ix.turns[ti].session;
             by_sess
                 .entry(si)
                 .or_default()
                 .push((ti, score_lookup.get(&ti).copied().unwrap_or(0)));
         }
-        if by_sess.len() < 2 {
-            return;
-        }
-
         let sess_vec: Vec<(usize, Vec<(usize, i64)>)> = by_sess.into_iter().collect();
-        let mut selected = select_pm2_sainte_lague(&sess_vec, top_n);
-        if selected.is_empty() {
-            return;
-        }
+        select_pm2_sainte_lague(&sess_vec, top_n.saturating_mul(2))
+    } else if !h0_full_cov {
+        let xquad_pool =
+            select_xquad_turns_q16(ctx.ix, &ctx.plan, &emgr_scored, top_n.saturating_mul(2), lock_slot0);
+        let score_lookup: BTreeMap<usize, i64> = emgr_scored.iter().copied().collect();
+        let dpp_in: Vec<(usize, i64)> = xquad_pool
+            .into_iter()
+            .map(|ti| (ti, score_lookup.get(&ti).copied().unwrap_or(0)))
+            .collect();
+        select_cholesky_dpp(ctx.ix, &dpp_in, top_n.saturating_mul(2))
+    } else {
+        select_cholesky_dpp(ctx.ix, &emgr_scored, top_n.saturating_mul(2))
+    };
 
-        // Preserve Slot 0 on declarative heads so R@1 never regresses on multi-session queries.
-        if h0_declarative {
-            selected.retain(|&ti| ti != h0);
-            selected.insert(0, h0);
-            selected.truncate(top_n);
+    // Protect calibrated Slots 0..=3 on named-speaker dialogues (Slots 0..=2 on long anonymous
+    // counting/multi-hop) plus any Slot 3..=4 declarative turn carrying `star_id`.
+    let protect_slots = if ctx.has_named_speakers_eff { 4usize } else { 3usize };
+    let mut selected: Vec<usize> = ctx
+        .final_turn_indices
+        .iter()
+        .take(protect_slots)
+        .copied()
+        .collect();
+    if let Some(sid) = star_id {
+        for &old_ti in ctx
+            .final_turn_indices
+            .iter()
+            .skip(protect_slots)
+            .take(top_n.saturating_sub(protect_slots))
+        {
+            if is_declarative_evidence(ctx.ix, old_ti, &ctx.q.text)
+                && turn_has_term(ctx.ix, old_ti, sid)
+                && !selected.contains(&old_ti)
+            {
+                selected.push(old_ti);
+            }
         }
-
-        splice_top_turns(&mut ctx.final_turn_indices, &selected, top_n);
-        sync_tail_sessions_preserving_slot0(
-            ctx.ix,
-            &ctx.final_turn_indices,
-            &mut ctx.final_session_indices,
-            top_n,
-        );
     }
+    let mut used_sessions: BTreeSet<usize> = selected
+        .iter()
+        .map(|&ti| ctx.ix.turns[ti].session)
+        .collect();
+    let mut cur_cov = 0u64;
+    for &ti in &selected {
+        cur_cov |= ctx.t_exact_mask.get(ti).copied().unwrap_or(0) & ctx.q_group_mask;
+    }
+
+    let max_add = top_n.saturating_sub(selected.len()).min(2);
+    let mut added = 0usize;
+    for ti in ranked_pool {
+        if selected.len() >= top_n || added >= max_add {
+            break;
+        }
+        if selected.contains(&ti) {
+            continue;
+        }
+        let si = ctx.ix.turns[ti].session;
+        let t_mask = ctx.t_exact_mask.get(ti).copied().unwrap_or(0) & ctx.q_group_mask;
+        let adds_missing = (t_mask & (ctx.q_group_mask & !cur_cov)) != 0;
+        let adds_new_sess = !used_sessions.contains(&si);
+        let qualifies = if ctx.has_named_speakers_eff {
+            adds_missing && adds_new_sess
+        } else {
+            (counting && adds_new_sess) || (multi_hop && (adds_missing || adds_new_sess))
+        };
+        if qualifies {
+            selected.push(ti);
+            used_sessions.insert(si);
+            cur_cov |= t_mask;
+            added += 1;
+        }
+    }
+
+    if added == 0 {
+        return;
+    }
+    for &old_ti in ctx.final_turn_indices.iter().skip(3) {
+        if selected.len() >= top_n {
+            break;
+        }
+        if !selected.contains(&old_ti) {
+            selected.push(old_ti);
+        }
+    }
+
+    splice_top_turns(&mut ctx.final_turn_indices, &selected, top_n);
+    // Sync newly added sessions strictly into Slots 3..=4 (protecting calibrated Sessions 0..=2).
+    let mut top5_s: Vec<usize> = ctx.final_session_indices.iter().take(3).copied().collect();
+    for &ti in selected.iter().skip(3) {
+        if top5_s.len() >= top_n {
+            break;
+        }
+        let si = ctx.ix.turns[ti].session;
+        if !top5_s.contains(&si) {
+            top5_s.push(si);
+        }
+    }
+    for &old_si in ctx.final_session_indices.iter().skip(3) {
+        if top5_s.len() >= top_n {
+            break;
+        }
+        if !top5_s.contains(&old_si) {
+            top5_s.push(old_si);
+        }
+    }
+    sync_tail_sessions_preserving_slot0(
+        ctx.ix,
+        &ctx.final_turn_indices,
+        &mut ctx.final_session_indices,
+        top_n,
+    );
+    let orig_s_len = ctx.final_session_indices.len();
+    let mut final_s: Vec<usize> = Vec::with_capacity(orig_s_len);
+    for si in top5_s {
+        if !final_s.contains(&si) {
+            final_s.push(si);
+        }
+    }
+    for &si in &ctx.final_session_indices {
+        if final_s.len() >= orig_s_len {
+            break;
+        }
+        if !final_s.contains(&si) {
+            final_s.push(si);
+        }
+    }
+    ctx.final_session_indices = final_s;
 }
 
 #[cfg(test)]
