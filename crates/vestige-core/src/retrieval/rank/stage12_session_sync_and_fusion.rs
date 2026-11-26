@@ -4556,6 +4556,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         );
         crate::retrieval::seating::abduct::apply_abductive_pragmatic_seating(ctx);
         crate::retrieval::fusion::emgr::apply_emgr_steiner_dpp_fusion(ctx);
+        crate::retrieval::graph::rtec::apply_rtec_discourse_dbm(ctx);
         // Post-Submodular Causal Source-Attribution Snap: ensure Mode B / C distinct-session
         // cover never leaves assistant echo turns (`2k+1`) seated ahead of their substantive
         // originating user turns (`2k`) on user-attributed temporal/counting/update queries.
@@ -4566,7 +4567,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             ctx,
         );
     }
-    crate::retrieval::graph::rtec::apply_rtec_discourse_dbm(ctx);
     // Breakthrough #4A: Post-Gatekeeper Official Top-5 Standing-Rule Co-Seating.
     // Protects Slots 0..2 unconditionally (and Slot 3 for single-rule seating) while ensuring
     // the highest-confidence condition/scope-matched active standing rule from `ctx.standing_rules[0..2]`

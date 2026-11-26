@@ -1755,6 +1755,10 @@ fn turn_rare_content_words(ix: &Index, ti: usize, cap: usize) -> Vec<String> {
 pub(in crate::retrieval) fn apply_revdict_harmonic_bridge(ctx: &mut RankCtx<'_>) {
     if ctx.nt == 0
         || ctx.ns == 0
+        || ctx.is_monologue_corpus
+        || ctx.ix.has_tool_calls
+        || ctx.torrens_locked_head
+        || ctx.implicit_disclosure_locked
         || ctx.final_turn_indices.is_empty()
         || ctx.eff_it.is_event_sequence
         || ctx.eff_it.sniper_how_many

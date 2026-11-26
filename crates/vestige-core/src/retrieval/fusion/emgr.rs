@@ -1599,9 +1599,20 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
         || ctx.eff_it.task_under_rules
         || ctx.eff_it.preference
         || is_recommendation_request_query(&ctx.q.text, ctx.pref_on)
+        || ctx.ns < 3
+        || ctx.nt < 12
         || ctx.final_turn_indices.len() < 2
         || ctx.final_session_indices.is_empty()
         || ctx.k < 2
+    {
+        return;
+    }
+    let q_raw_od = raw_tokens(&ctx.q.text);
+    let q_refs_od: Vec<&str> = q_raw_od.iter().map(String::as_str).collect();
+    if ctx.has_named_speakers_eff
+        && crate::retrieval::lexical::speaker_translation_q16::is_open_domain_inferential_shape(
+            &q_refs_od,
+        )
     {
         return;
     }
@@ -1660,13 +1671,8 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
             return;
         }
 
-        // Preserve Slot 0 on crisp solved single-hop declarative hits carrying the star term.
-        let lock_slot0 = if h0_declarative && h0_has_star && (h0_full_cov || (!multi_hop && !counting))
-        {
-            Some(h0)
-        } else {
-            None
-        };
+        // Always preserve a declarative Slot 0 (protects R@1, star_bit, and upstream open-domain locks).
+        let lock_slot0 = if h0_declarative { Some(h0) } else { None };
 
         let mut selected = if multi_hop || (ctx.q_group_cnt >= 2 && !h0_full_cov) {
             let steiner_turns =

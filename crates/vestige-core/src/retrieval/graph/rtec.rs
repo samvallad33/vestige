@@ -1527,7 +1527,7 @@ fn seat_turn_at_slot(
     k: usize,
 ) {
     if let Some(pos) = final_turns.iter().position(|&t| t == ti) {
-        if pos == slot {
+        if pos <= slot {
             return;
         }
         final_turns.remove(pos);
@@ -1660,6 +1660,7 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
         && !ctx.eff_it.is_event_sequence
         && !ctx.eff_it.task_under_rules
         && !ctx.eff_it.preference
+        && !(ctx.ix.has_tool_calls && act == QueryGroundingAct::Standard)
         && (matches!(
             q_pol,
             TemporalQueryPolarity::LatestCurrentState | TemporalQueryPolarity::GenesisFirst
@@ -1790,7 +1791,11 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
                     }
                     if let Some((_, open_ti)) = best_open {
                         let top0_clipped = clipped_turns.contains(&top0_ti);
-                        let target_slot = if top0_clipped || !top0_has_star_decl { 0 } else { 1 };
+                        let target_slot = if open_ti == top0_ti || top0_clipped || !top0_has_star_decl {
+                            0
+                        } else {
+                            1
+                        };
                         seat_turn_at_slot(
                             &mut ctx.final_turn_indices,
                             Some(&mut ctx.final_session_indices),

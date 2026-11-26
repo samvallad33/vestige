@@ -1319,7 +1319,7 @@ fn apply_abductive_pragmatic_seating_view(
             // Only declarative, non-backchannel, non-superseded user turns may be promoted.
             if tr.field != 0
                 || tr.is_backchannel
-                || tr.is_pure_info_question
+                || tr.is_question
                 || turn_is_superseded(view.ix, ti)
             {
                 score_by_turn.insert(
@@ -1436,7 +1436,7 @@ fn apply_abductive_pragmatic_seating_view(
     let h0_has_star =
         star_bit != 0 && (view.t_exact_mask.get(h0).copied().unwrap_or(0) & star_bit) != 0;
     let h0_is_decl = h0_tr.field == 0
-        && !h0_tr.is_pure_info_question
+        && !h0_tr.is_question
         && !h0_tr.is_backchannel
         && !turn_is_superseded(view.ix, h0)
         && !is_discourse_closure_or_meta_echo(view.ix, h0, "");
@@ -1456,7 +1456,7 @@ fn apply_abductive_pragmatic_seating_view(
             .filter(|&ti| {
                 let tr = &view.ix.turns[ti];
                 tr.field == 0
-                    && !tr.is_pure_info_question
+                    && !tr.is_question
                     && !tr.is_backchannel
                     && !turn_is_superseded(view.ix, ti)
                     && (view.t_exact_mask.get(ti).copied().unwrap_or(0) & star_bit) != 0
@@ -1507,7 +1507,7 @@ fn apply_abductive_pragmatic_seating_view(
         }
         let inc_tr = &view.ix.turns[incumbent];
         let inc_is_weak = inc_tr.field != 0
-            || inc_tr.is_pure_info_question
+            || inc_tr.is_question
             || inc_tr.is_backchannel
             || turn_is_superseded(view.ix, incumbent)
             || is_discourse_closure_or_meta_echo(view.ix, incumbent, "")
