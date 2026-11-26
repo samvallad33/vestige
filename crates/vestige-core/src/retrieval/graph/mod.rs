@@ -11,6 +11,7 @@ pub(in crate::retrieval) mod ghostlink_dgs;
 pub(in crate::retrieval) mod hashimoto_tripartite_q16;
 pub(in crate::retrieval) mod reichenbach_roman_belnap_q16;
 pub(in crate::retrieval) mod revdict;
+pub(in crate::retrieval) mod rtec;
 pub(in crate::retrieval) mod sheaf_dempster_q16;
 pub(in crate::retrieval) mod sheaf_mobius_q16;
 pub(in crate::retrieval) mod signed_galois_fca_q16;

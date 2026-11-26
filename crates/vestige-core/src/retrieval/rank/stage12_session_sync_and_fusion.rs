@@ -4566,6 +4566,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             ctx,
         );
     }
+    crate::retrieval::graph::rtec::apply_rtec_discourse_dbm(ctx);
     // Breakthrough #4A: Post-Gatekeeper Official Top-5 Standing-Rule Co-Seating.
     // Protects Slots 0..2 unconditionally (and Slot 3 for single-rule seating) while ensuring
     // the highest-confidence condition/scope-matched active standing rule from `ctx.standing_rules[0..2]`
