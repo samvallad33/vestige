@@ -4667,6 +4667,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             }
         }
     }
+    crate::retrieval::seating::corgi::apply_corgi_deontic_seating(ctx);
     // 1P Duration & Biographical Genesis Slot-4 Rescue (`information_extraction`, Slots 0..3 protected):
     // Rescues 1st-person duration facts ("How long have I been with <X>?" -> "... for 3 years")
     // and early 1P biographical introductions ("What profession did I mention?" -> "I'm <Name>, a <role>").

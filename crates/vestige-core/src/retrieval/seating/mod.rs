@@ -1,6 +1,7 @@
 //! Stage 7: Final turn seating passes, gatekeeper, C2 lane, W2 passes, and vault closers.
 
 pub(in crate::retrieval) mod afriat_kratzer_garp_q16;
+pub(in crate::retrieval) mod corgi;
 pub(in crate::retrieval) mod cues;
 pub(in crate::retrieval) mod constraint_density_q16;
 pub(in crate::retrieval) mod primacy;
