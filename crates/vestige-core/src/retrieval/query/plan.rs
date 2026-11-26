@@ -413,11 +413,21 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
         if w.is_ascii() && w.len() >= 5 && w.bytes().all(|b| b.is_ascii_alphabetic()) {
             let w_df = ix.vocab.get(w).map(|id| corpus_df(id)).unwrap_or(0);
             let w_st = stem(w);
-            let is_morpho_suffix = w.ends_with("ption")
+            let is_latinate_ption = w.ends_with("ption");
+            let is_morpho_suffix = is_latinate_ption
                 || w.ends_with("ery")
-                || w.ends_with("nt")
+                || (w.ends_with("nt")
+                    && !w.ends_with("ment")
+                    && !w.ends_with("ant")
+                    && !w.ends_with("ent"))
                 || w.ends_with("ing");
-            let df_cap = if is_morpho_suffix { 6 } else { 2 };
+            let df_cap = if is_latinate_ption {
+                ((n_docs / 4) as u32).max(16)
+            } else if is_morpho_suffix {
+                6
+            } else {
+                2
+            };
             if w_df <= df_cap {
                 for deriv in crate::retrieval::index::normalize::derivational_base_stems(w) {
                     let dst = stem(&deriv);

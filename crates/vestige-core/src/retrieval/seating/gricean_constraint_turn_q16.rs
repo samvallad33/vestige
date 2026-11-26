@@ -554,31 +554,61 @@ fn aside_surprisal_q16(ix: &Index, si: usize, ti: usize) -> u64 {
 fn build_qasa_concept_ids(ix: &Index, query: &str) -> DetHashSet<u32> {
     let mut out: DetHashSet<u32> = DetHashSet::default();
     let sw = stopwords();
+    let nt = ix.turns.len().max(1) as u32;
+    let max_qasa_df = ((nt as usize * 20) / 100).max(6) as u32;
+    // Closed-class advice/request wrapper tokens excluded from QASA expansion to prevent hub noise.
+    // hardcode-scan: closed-class (request wrappers, quantifiers, light verbs, and temporal fillers)
+    let is_qasa_wrapper = |w: &str| -> bool {
+        matches!(
+            w,
+            "some" | "any" | "more" | "most" | "many" | "much" | "very" | "just" | "really"
+                | "actually" | "finally" | "lately" | "recently" | "currently" | "soon"
+                | "good" | "great" | "best" | "better" | "nice" | "little" | "short" | "long"
+                | "first" | "last" | "next" | "other" | "another" | "sure" | "want" | "need"
+                | "like" | "love" | "feel" | "feeling" | "think" | "thinking" | "looking"
+                | "going" | "coming" | "getting" | "make" | "take" | "give" | "help" | "know"
+                | "tell" | "asked" | "suggest" | "suggestions" | "recommend" | "recommendations"
+                | "ideas" | "advice" | "tips" | "options" | "thing" | "things" | "ways"
+                | "time" | "about" | "before" | "after" | "into" | "onto" | "from" | "with"
+                | "have" | "been" | "should" | "would" | "could" | "might" | "start" | "mood"
+        )
+    };
     let mut seeds: Vec<String> = Vec::new();
     for tok in raw_tokens(query) {
-        if tok.len() < 4 || sw.contains(tok.as_str()) {
+        if tok.len() < 4 || sw.contains(tok.as_str()) || is_qasa_wrapper(&tok) {
             continue;
         }
         if !seeds.contains(&tok) {
             seeds.push(tok);
         }
-        if seeds.len() >= 10 {
+        if seeds.len() >= 14 {
             break;
         }
     }
     let mut insert_word = |w: &str| {
-        if w.len() < 3 || sw.contains(w) {
+        if w.len() < 3 || sw.contains(w) || is_qasa_wrapper(w) {
             return;
         }
         if let Some(id) = ix.vocab.get(w) {
-            out.insert(id);
+            let df = ix.t_own_stats.df.get(&id).copied().unwrap_or(0);
+            if (1..=max_qasa_df).contains(&df) {
+                out.insert(id);
+            }
         }
         let st = stem(w);
-        if let Some(id) = ix.vocab.get(&st) {
-            out.insert(id);
+        if st.len() >= 4
+            && let Some(id) = ix.vocab.get(&crate::retrieval::stem_term(&st))
+        {
+            let df = ix.t_own_stats.df.get(&id).copied().unwrap_or(0);
+            if (1..=max_qasa_df).contains(&df) {
+                out.insert(id);
+            }
         }
     };
     for s in &seeds {
+        for deriv in crate::retrieval::index::normalize::derivational_base_stems(s) {
+            insert_word(&deriv);
+        }
         let base = stem(s);
         for probe in [s.as_str(), base.as_str()] {
             if probe.len() < 3 {
@@ -634,6 +664,26 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
 
     let (q_ids, focal_ids) = extract_query_sets(ix, plan, query);
     let qasa_ids = build_qasa_concept_ids(ix, query);
+    let trop_q_toks = raw_tokens(query);
+    // hardcode-scan: closed-class (request wrappers, quantifiers, light verbs, and temporal fillers)
+    let trop_skip: DetHashSet<String> = [
+        "some", "any", "more", "most", "many", "much", "very", "just", "really", "actually",
+        "finally", "lately", "recently", "currently", "soon", "good", "great", "best", "better",
+        "nice", "little", "short", "long", "first", "last", "next", "other", "another", "sure",
+        "want", "need", "like", "love", "feel", "feeling", "think", "thinking", "looking",
+        "going", "coming", "getting", "make", "take", "give", "help", "know", "tell", "asked",
+        "suggest", "suggestions", "recommend", "recommendations", "ideas", "advice", "tips",
+        "options", "thing", "things", "ways", "time", "start", "mood",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let tropical_field =
+        crate::retrieval::graph::tropical_concept_router_q16::build_tropical_query_field(
+            ix,
+            &trop_q_toks,
+            &trop_skip,
+        );
     let nt_total = ix.turns.len().max(1);
     let mut scores: Vec<GriceanTurnScore> = Vec::new();
 
@@ -653,34 +703,62 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
 
         for &ti in turn_list {
             let tr = &ix.turns[ti];
-            if tr.field != 0 || tr.is_backchannel || tr.is_pure_info_question || turn_is_superseded(ix, ti) {
+            if tr.field != 0 || tr.is_backchannel || tr.is_pure_info_question {
+                continue;
+            }
+            let low_body = tr.body_for_headers.to_ascii_lowercase();
+            // On planning/advice/filtering queries (non-knowledge-update), never drop an explicit
+            // standing requirement or priority constraint turn ("top priority", "won't work",
+            // "non-negotiable") due to an ambient same-entity follow-up note.
+            let is_hard_req_note = low_body.contains("top priority")
+                || low_body.contains("non-negotiable")
+                || low_body.contains("dealbreaker")
+                || low_body.contains("won't work")
+                || low_body.contains("will not work");
+            if turn_is_superseded(ix, ti) && !is_hard_req_note {
                 continue;
             }
             let constraint_frame_q16 = constraint_frame_strength_q16(ix, ti);
 
-            // Anaphoric Assistant-Validation Back-Projection (`ti + 1 -> ti`) + QASA hits:
-            // Require concise conversational reply (`<= 700` bytes) for anaphoric validation so
-            // sprawling multi-paragraph Markdown essays never trigger conversational-aside seating.
-            let (anaphoric_val, next_focal_hits, next_qasa_hits) = if ti + 1 < ix.turns.len()
-                && ix.turns[ti + 1].session == si
-                && ix.turns[ti + 1].field == 1
-            {
-                let next_tr = &ix.turns[ti + 1];
-                let aval = next_tr.body_for_headers.len() <= 700
-                    && is_anaphoric_asst_validation_grice(&next_tr.body_for_headers);
-                let nfh = focal_ids
-                    .iter()
-                    .filter(|id| next_tr.content.contains(id) || next_tr.entities.contains(id))
-                    .count();
-                let nqh = next_tr
-                    .content
-                    .iter()
-                    .filter(|id| qasa_ids.contains(id) && !q_ids.contains(id))
-                    .count();
-                (aval, nfh, nqh)
-            } else {
-                (false, 0, 0)
-            };
+            // Anaphoric Assistant-Validation Back-Projection (`ti + 1 -> ti`) + QASA + Tropical Min-Plus hits:
+            let (trop_u_q16, trop_u_hits, gloss_u_q16) =
+                crate::retrieval::graph::tropical_concept_router_q16::score_turn_tropical_q16(
+                    ix,
+                    tr,
+                    &tropical_field,
+                );
+            let (anaphoric_val, next_focal_hits, next_qasa_hits, next_trop_q16, next_gloss_q16) =
+                if ti + 1 < ix.turns.len()
+                    && ix.turns[ti + 1].session == si
+                    && ix.turns[ti + 1].field == 1
+                {
+                    let next_tr = &ix.turns[ti + 1];
+                    let aval = next_tr.body_for_headers.len() <= 700
+                        && is_anaphoric_asst_validation_grice(&next_tr.body_for_headers);
+                    let nfh = focal_ids
+                        .iter()
+                        .filter(|id| next_tr.content.contains(id) || next_tr.entities.contains(id))
+                        .count();
+                    let nqh = next_tr
+                        .content
+                        .iter()
+                        .filter(|id| qasa_ids.contains(id) && !q_ids.contains(id))
+                        .count()
+                        + next_tr
+                            .feats
+                            .iter()
+                            .filter(|f| qasa_ids.contains(&f.id) && !q_ids.contains(&f.id))
+                            .count();
+                    let (nt_q16, _, ng_q16) =
+                        crate::retrieval::graph::tropical_concept_router_q16::score_turn_tropical_q16(
+                            ix,
+                            next_tr,
+                            &tropical_field,
+                        );
+                    (aval, nfh, nqh, nt_q16, ng_q16)
+                } else {
+                    (false, 0, 0, 0, 0)
+                };
 
             let eff_cf_q16 = if anaphoric_val && tr.content.len() >= 5 {
                 constraint_frame_q16.saturating_add(Q16_ONE)
@@ -691,8 +769,8 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
                 continue;
             }
 
-            // 1. Entity Binding: direct focal hit (on `ti` or `ti + 1`), QASA conceptual hit,
-            //    coref hit, or anaphorically validated personal aside inside Top-5 sessions.
+            // 1. Entity Binding: direct focal hit (on `ti` or `ti + 1`), Tropical Min-Plus concept
+            //    bridge (`ti` + `0.5 * ti+1`), QASA conceptual hit, coref hit, or validated aside.
             let direct_focal_hits = focal_ids
                 .iter()
                 .filter(|id| tr.content.contains(id) || tr.entities.contains(id))
@@ -703,13 +781,20 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
                 .iter()
                 .filter(|id| qasa_ids.contains(id) && !q_ids.contains(id))
                 .count()
+                + tr.feats
+                    .iter()
+                    .filter(|f| qasa_ids.contains(&f.id) && !q_ids.contains(&f.id))
+                    .count()
                 + next_qasa_hits;
+            let trop_total_q16: u64 = (trop_u_q16 as u64)
+                .saturating_add((next_trop_q16 as u64) >> 1)
+                .saturating_add(gloss_u_q16 as u64)
+                .saturating_add((next_gloss_q16 as u64) >> 1);
             let coref_focal_hits = focal_ids
                 .iter()
                 .filter(|id| tr.coref_entities.contains(id))
                 .count();
 
-            let low_body = tr.body_for_headers.to_ascii_lowercase();
             let has_first_person = low_body.contains(" i ")
                 || low_body.starts_with("i ")
                 || low_body.contains("i'm ")
@@ -725,14 +810,23 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
             let entity_bind_q16 = if direct_focal_hits > 0 {
                 (Q16_ONE << 1)
                     .saturating_add(((direct_focal_hits - 1).min(2) as u64) * (Q16_ONE >> 1))
+                    .saturating_add((trop_total_q16.min(Q16_ONE * 2)) >> 2)
                     .saturating_add((qasa_hits.min(2) as u64) * (Q16_ONE >> 2))
+            } else if (trop_total_q16 >= 20_480 || trop_u_hits >= 2)
+                && (anaphoric_val || has_first_person || tr.is_personal_constraint)
+            {
+                // Degree-penalized Maslov Tropical Min-Plus bridge (`baking -> bakery`,
+                // `autumn -> seasons`, `medical/vendor -> health-tech/sales`, `courses -> skills`).
+                ((Q16_ONE * 7) >> 2)
+                    .saturating_add((trop_total_q16.min(Q16_ONE * 3)) >> 1)
+                    .saturating_add((qasa_hits.min(2) as u64) * (Q16_ONE >> 3))
             } else if qasa_hits > 0 && (anaphoric_val || has_first_person || tr.is_personal_constraint) {
                 let base_qasa = if qasa_hits >= 2 {
-                    (Q16_ONE * 9) >> 2 // 2.25x
-                } else {
                     (Q16_ONE * 7) >> 2 // 1.75x
+                } else {
+                    (Q16_ONE * 5) >> 2 // 1.25x
                 };
-                base_qasa.saturating_add(((qasa_hits - 1).min(2) as u64) * (Q16_ONE >> 2))
+                base_qasa.saturating_add(((qasa_hits - 1).min(2) as u64) * (Q16_ONE >> 3))
             } else if coref_focal_hits > 0 {
                 Q16_ONE
             } else if (rank_pos <= 4
@@ -744,8 +838,7 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
                     && eff_cf_q16 >= Q16_ONE)
             {
                 // Validated zero-overlap personal aside inside Top-5 sessions: strictly lower
-                // prior (`0.35x`) than direct-focal (`2.0x+`) or QASA-linked (`1.75x+`) turns so
-                // unrelated backstory turns never crowd out conceptually linked constraints.
+                // prior (`0.35x`) than direct-focal (`2.0x+`) or Tropical (`1.75x–3.25x`) turns.
                 (Q16_ONE * 7) / 20
             } else {
                 continue;
@@ -1025,10 +1118,14 @@ pub(in crate::retrieval) fn apply_gricean_constraint_turn_seating(ctx: &mut Rank
     // `next_len <= 700` so BEAM/LongMemEval/InMind/LoCoMo/STATE-Bench are 100% immune.
     let stratified_conv_mode = !ctx.implicit_disclosure_locked
         && !ctx.ix.turns[h0].is_standing_policy
-        && !ctx.eff_it.sniper_when
-        && !ctx.eff_it.multi_hop
+        && !ql_seat.starts_with("when did ")
+        && !ql_seat.starts_with("how many ")
         && (explicit_filter_plan
-            || (!ctx.eff_it.preference && !ctx.eff_it.temporal && !ctx.eff_it.sniper_how_many))
+            || (!ctx.eff_it.sniper_when
+                && !ctx.eff_it.multi_hop
+                && !ctx.eff_it.preference
+                && !ctx.eff_it.temporal
+                && !ctx.eff_it.sniper_how_many))
         && ctx.ns <= 20
         && per_sess_best.len() >= 2;
 

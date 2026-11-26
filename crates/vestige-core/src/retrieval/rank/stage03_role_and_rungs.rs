@@ -792,7 +792,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     let has_retro_asst_cue = has_gapped_you_report
         || q_trim_low.contains("did you ")
         || q_trim_low.contains("have you ")
-        || q_trim_low.contains("remind me")
+        || (q_trim_low.contains("remind me") && !q_trim_low.contains(" i "))
         || q_trim_low.contains("last time")
         || q_trim_low.contains("previous conversation")
         || q_trim_low.contains("previous chat")
