@@ -295,29 +295,35 @@ pub(in crate::retrieval) fn solve_fabula_fas_kendall_order(
 /// Strictly gated to multi-event sequence queries; leaves `t_own`, `t_turn_raw`,
 /// and `final_turn_indices[0..5]` untouched.
 pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
-    let ix = ctx.ix;
-    let query = ctx.q.text.as_str();
-    let eff_it = &ctx.eff_it;
-    let s_score = &ctx.s_score;
-    let s_exact_mask = &ctx.s_exact_mask;
-    let final_session_indices = &mut ctx.final_session_indices;
-
-    let total_m = final_session_indices.len().min(KENDALL_ORDER_WINDOW);
+    let total_m = ctx.final_session_indices.len().min(KENDALL_ORDER_WINDOW);
     if total_m < 2 {
         return;
     }
-    let explicit_seq_q = is_closed_class_sequence_order_query(query);
+    let explicit_seq_q = is_closed_class_sequence_order_query(&ctx.q.text);
     let is_multi_sess_summary = !explicit_seq_q
-        && !eff_it.is_event_sequence
+        && !ctx.eff_it.is_event_sequence
         && !ctx.has_named_speakers_eff
         && !ctx.is_monologue_corpus
         && !ctx.ix.has_tool_calls
         && ctx.ns >= 16
-        && crate::retrieval::eff_summary_request(query);
-    let gate_open = eff_it.is_event_sequence || explicit_seq_q;
+        && crate::retrieval::eff_summary_request(&ctx.q.text);
+    let gate_open = ctx.eff_it.is_event_sequence || explicit_seq_q;
     if !gate_open && !is_multi_sess_summary {
         return;
     }
+
+    // Hawkes exogenous root + Hearst QueryNovelty + Kleinberg burst onset +
+    // Martschat-Markert isqrt temporal-semantic submodular spine for long multi-session
+    // summarization and event-ordering dialogues (`ns >= 16`).
+    if crate::retrieval::rank::hawkes::apply_hawkes_genesis_spine(ctx) {
+        return;
+    }
+
+    let ix = ctx.ix;
+    let query = ctx.q.text.as_str();
+    let s_score = &ctx.s_score;
+    let s_exact_mask = &ctx.s_exact_mask;
+    let final_session_indices = &mut ctx.final_session_indices;
 
     // Bysani (NAACL 2010) Query-Conditioned Future-Share + Concept Birth-Time Genesis Injection:
     // On long multi-session dialogues (`ns >= 16`), late high-TF wrap-up sessions crowd out the
