@@ -1400,6 +1400,13 @@ impl Global {
                     || !s.ledger.pending.is_empty()
                     || !s.ledger.unpaired.is_empty()
                     || !s.ledger.unreceipted.is_empty()
+                    || !s.ledger.edited.is_empty()
+                    || !s.ledger.saved.is_empty()
+                    || s.ledger.spiral_stage > 0
+                    || s.ledger.consecutive_same_fail > 0
+                    || !s.ledger.last_fail_key.is_empty()
+                    || s.ledger.spiral_investigated
+                    || s.ledger.spiral_escalated
                     || s.ledger.stop_failure.is_some()
             })
             .map(|(id, s)| {
@@ -2986,6 +2993,10 @@ pub async fn execute_with(
                     | "PostCompact"
                     | "SessionStart"
                     | "SessionEnd"
+                    | "PostToolUse"
+                    | "PostToolUseFailure"
+                    | "UserPromptSubmit"
+                    | "PostToolBatch"
             );
         g.dirty = g.dirty || !wrote.is_empty() || overdue.is_some();
         g.persist(force || overdue.is_some());

@@ -207,6 +207,7 @@ function rpc(binary, args = [], timeoutMs = 210, env = process.env) {
         socket.on('error', () => rejectAll(new Error('Vestige disconnected')));
         socket.on('close', () => rejectAll(new Error('Vestige disconnected')));
         lines = readline.createInterface({ input: socket });
+        lines.on('error', () => rejectAll(new Error('Vestige disconnected')));
         lines.on('line', onLine);
         if (attached.initialBuffer) {
           for (const leftover of attached.initialBuffer.split(/\r?\n/)) {
@@ -221,9 +222,10 @@ function rpc(binary, args = [], timeoutMs = 210, env = process.env) {
         child.on('exit', () => rejectAll(new Error('Vestige disconnected')));
         child.stdin.on('error', rejectAll);
         lines = readline.createInterface({ input: child.stdout });
+        lines.on('error', () => rejectAll(new Error('Vestige disconnected')));
         lines.on('line', onLine);
       }
-      await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vestige-memory-hook', version: '6.2.2' } });
+      await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vestige-memory-hook', version: '7.0.0' } });
       writeRaw('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
     },
     close,
@@ -793,7 +795,11 @@ async function run({ event, client, configFile, input, deadlineMs }) {
 async function main() {
   const args = process.argv.slice(2); const value = flag => args[args.indexOf(flag) + 1];
   const envDeadline = Number(process.env.VESTIGE_HOOK_DEADLINE_MS);
-  const cliCeiling = Number.isFinite(envDeadline) && envDeadline > 0 ? envDeadline + 120 : (process.platform === 'win32' ? 1150 : 205);
+  let cfgDeadline = 0;
+  try { cfgDeadline = Number(JSON.parse(fs.readFileSync(value('--config'), 'utf8')).deadlineMs) || 0; } catch {}
+  const cliCeiling = Number.isFinite(envDeadline) && envDeadline > 0
+    ? envDeadline + 120
+    : (cfgDeadline > 0 ? cfgDeadline + 120 : (process.platform === 'win32' ? 1150 : 205));
   const failOpen = setTimeout(() => { process.stdout.write('{}\n', () => process.exit(0)); }, cliCeiling);
   let raw = ''; for await (const chunk of process.stdin) { raw += chunk; if (raw.length > 65536) throw new Error('hook input too large'); }
   const result = await run({ event: value('--event'), client: value('--client'), configFile: value('--config'), input: JSON.parse(raw || '{}') });

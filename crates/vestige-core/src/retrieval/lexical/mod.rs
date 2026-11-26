@@ -11,6 +11,7 @@ pub(in crate::retrieval) mod qld;
 pub(in crate::retrieval) mod query_frame_ic;
 pub(in crate::retrieval) mod rungs;
 pub(in crate::retrieval) mod sinkhorn_ot_q16;
+pub(in crate::retrieval) mod thot_dbsn_sinkhorn_q16;
 pub(in crate::retrieval) mod speaker_translation_q16;
 pub(in crate::retrieval) mod steps;
 pub(in crate::retrieval) mod tier_bridge_q16;

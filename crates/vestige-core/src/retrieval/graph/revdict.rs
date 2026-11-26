@@ -1813,18 +1813,19 @@ pub(in crate::retrieval) fn apply_revdict_harmonic_bridge(ctx: &mut RankCtx<'_>)
         });
     let is_inferential = is_open_domain_inferential_shape(&q_refs);
     let is_bio_hypernym = is_biographical_hypernym_shape(&q_refs);
-    // On named-speaker dialogues (e.g. LoCoMo), restrict reverse-dictionary/harmonic expansion
-    // strictly to genuine zero-overlap deficits or explicit open-domain inferential queries so
-    // solved single-hop / adversarial queries keep 100% latency & exact-hit Slot 2..4 integrity.
+    // Restrict reverse-dictionary/harmonic expansion strictly to genuine zero-overlap deficits,
+    // explicit open-domain inferential queries, or ungrounded biographical hypernym queries so
+    // solved factual / temporal / multi-session queries keep 100% latency & Top-5 integrity.
     let has_deficit = if ctx.has_named_speakers_eff {
         !top5_has_any_exact || is_inferential
+    } else if ctx.eff_it.temporal || ctx.eff_it.sniper_when || ctx.eff_it.current_state {
+        !top5_has_any_exact
     } else {
         ctx.deficit_a
             || ctx.has_ungrounded_rare_oov
-            || !top5_has_star_bit
             || !top5_has_any_exact
             || is_inferential
-            || is_bio_hypernym
+            || (is_bio_hypernym && !top5_has_star_bit)
     };
     if !has_deficit {
         return;

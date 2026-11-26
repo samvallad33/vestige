@@ -4,7 +4,7 @@ Local memory setup for supported AI clients, with an optional Operator gate of 1
 
 ## Three steps
 
-1. Install the v5.0.1 binaries from [GitHub Releases](https://github.com/samvallad33/vestige/releases) and put `vestige-mcp` on PATH. A missing or older binary gets clear instructions and no configuration changes.
+1. Install the v7.0.0 binaries from [GitHub Releases](https://github.com/samvallad33/vestige/releases) and put `vestige-mcp` and `vestige` on PATH. A missing or older binary gets clear instructions and no configuration changes.
 2. Run `npx @vestige/init`. Choose **Memory only** (default) or **Memory plus guard**, review every file and appended hook, then confirm once. `--yes` uses memory only; `--guard --yes` also requests the guard. A new guard installation requires your own terminal.
 3. Restart your client and approve/trust new hooks in the client's settings when required. Run `npx @vestige/init doctor`. Try: **Tell me something about a friend, then ask me about them later.**
 
@@ -32,11 +32,15 @@ they are remembered reports, not independently verified health facts.
 | Codex | `SessionStart` | `UserPromptSubmit` | `Stop` | `PreCompact` | `SessionEnd` |
 | Gemini CLI | `SessionStart` | `BeforeAgent` | `AfterAgent` | `PreCompress` | `SessionEnd` |
 | Cursor | `sessionStart` | Capture/recall; inject on `postToolUse` | `afterAgentResponse` | `preCompact` | `sessionEnd` |
+| Antigravity | `SessionStart` | `PreInvocation` (+ Reflex + intentions) | `PostToolUse` / `Stop` | `PreToolUse` (Call Coach, Anti-Spiral, Commit Gate, Operator) | `Stop` (auto-save + receipt check) |
 
 Cursor's documented `beforeSubmitPrompt` output cannot carry context. Its
-session hook and post-tool hook inject context using supported fields. On
+session hook and post-tool hook inject context using supported fields. Antigravity
+uses `hooks.json` + `agy-bridge.cjs` to bridge all 6 lifecycle events (`SessionStart`,
+`PreInvocation`, `PreToolUse`, `PostToolUse`, `PostInvocation`, `Stop`) into
+Operator, native Rust Reflex, and Strata `memory_packet`. On
 MCP-only clients (Claude Desktop, VS Code, OpenCode, Windsurf, Junie, Zed,
-Kiro, Antigravity, and Xcode on macOS), this installer connects tools; lifecycle
+Kiro, and Xcode on macOS), this installer connects tools; lifecycle
 automation requires a supported client adapter. Detection uses known config
 locations and executable names, not an exhaustive scan of arbitrary applications.
 

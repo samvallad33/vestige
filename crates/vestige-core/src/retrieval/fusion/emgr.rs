@@ -1543,44 +1543,6 @@ fn splice_top_turns(final_turn_indices: &mut Vec<usize>, prioritized: &[usize], 
     *final_turn_indices = next;
 }
 
-/// Ensure sessions represented by Slots `1..top_n` appear inside Top-`top_n` of
-/// `final_session_indices` without ever altering Slot 0 (`final_session_indices[0]`).
-fn sync_tail_sessions_preserving_slot0(
-    ix: &Index,
-    final_turn_indices: &[usize],
-    final_session_indices: &mut Vec<usize>,
-    top_n: usize,
-) {
-    if final_session_indices.len() < 2 || top_n < 2 {
-        return;
-    }
-    let orig_len = final_session_indices.len();
-    let head_sess = final_session_indices[0];
-    let mut next: Vec<usize> = Vec::with_capacity(orig_len);
-    let mut seen: BTreeSet<usize> = BTreeSet::new();
-    next.push(head_sess);
-    seen.insert(head_sess);
-
-    for &ti in final_turn_indices.iter().take(top_n) {
-        if next.len() >= top_n {
-            break;
-        }
-        let si = ix.turns[ti].session;
-        if seen.insert(si) {
-            next.push(si);
-        }
-    }
-    for &si in final_session_indices.iter() {
-        if next.len() >= orig_len {
-            break;
-        }
-        if seen.insert(si) {
-            next.push(si);
-        }
-    }
-    *final_session_indices = next;
-}
-
 /// Stage 12 pipeline entry point applying EMGR speaker-coupled attribution, QUEST DPBF
 /// Group Steiner / xQuAD multi-hop bridging, PM-2 Sainte-Laguë seat apportionment, and
 /// Cholesky MAP DPP diversification over `RankCtx`.
@@ -1731,9 +1693,10 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
         select_cholesky_dpp(ctx.ix, &emgr_scored, top_n.saturating_mul(2))
     };
 
-    // Protect calibrated Slots 0..=3 on named-speaker dialogues (Slots 0..=2 on long anonymous
-    // counting/multi-hop) plus any Slot 3..=4 declarative turn carrying `star_id`.
-    let protect_slots = if ctx.has_named_speakers_eff { 4usize } else { 3usize };
+    // Protect calibrated Slots 0..=3 everywhere (preserving multi-session & named-speaker Top-4),
+    // plus any Slot 4 declarative turn carrying `star_id`. Only allow an additive Slot-4 co-seat
+    // when it genuinely covers a missing query aspect in a new session (or new counting session).
+    let protect_slots = 4usize.min(top_n);
     let mut selected: Vec<usize> = ctx
         .final_turn_indices
         .iter()
@@ -1764,7 +1727,7 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
         cur_cov |= ctx.t_exact_mask.get(ti).copied().unwrap_or(0) & ctx.q_group_mask;
     }
 
-    let max_add = top_n.saturating_sub(selected.len()).min(2);
+    let max_add = top_n.saturating_sub(selected.len()).min(1);
     let mut added = 0usize;
     for ti in ranked_pool {
         if selected.len() >= top_n || added >= max_add {
@@ -1780,7 +1743,8 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
         let qualifies = if ctx.has_named_speakers_eff {
             adds_missing && adds_new_sess
         } else {
-            (counting && adds_new_sess) || (multi_hop && (adds_missing || adds_new_sess))
+            (counting && adds_new_sess && t_mask != 0)
+                || (multi_hop && (adds_missing || adds_new_sess))
         };
         if qualifies {
             selected.push(ti);
@@ -1793,7 +1757,7 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
     if added == 0 {
         return;
     }
-    for &old_ti in ctx.final_turn_indices.iter().skip(3) {
+    for &old_ti in ctx.final_turn_indices.iter().skip(protect_slots) {
         if selected.len() >= top_n {
             break;
         }
@@ -1803,18 +1767,32 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
     }
 
     splice_top_turns(&mut ctx.final_turn_indices, &selected, top_n);
-    // Sync newly added sessions strictly into Slots 3..=4 (protecting calibrated Sessions 0..=2).
-    let mut top5_s: Vec<usize> = ctx.final_session_indices.iter().take(3).copied().collect();
-    for &ti in selected.iter().skip(3) {
-        if top5_s.len() >= top_n {
-            break;
-        }
-        let si = ctx.ix.turns[ti].session;
-        if !top5_s.contains(&si) {
-            top5_s.push(si);
+    // Sync newly added session strictly into Slot 4 ONLY if it is not already in Top-5 and Slot 4
+    // does not already cover a unique exact query group (protects calibrated Sessions 0..=3).
+    let mut top5_s: Vec<usize> = ctx.final_session_indices.iter().take(4).copied().collect();
+    let mut top4_s_cov = 0u64;
+    for &si in &top5_s {
+        top4_s_cov |= ctx.s_exact_mask.get(si).copied().unwrap_or(0) & ctx.q_group_mask;
+    }
+    let s4_unique_cov = ctx
+        .final_session_indices
+        .get(4)
+        .is_some_and(|&s4| {
+            let m = ctx.s_exact_mask.get(s4).copied().unwrap_or(0) & ctx.q_group_mask;
+            (m & !top4_s_cov) != 0
+        });
+    if !s4_unique_cov {
+        for &ti in selected.iter().skip(4) {
+            if top5_s.len() >= top_n {
+                break;
+            }
+            let si = ctx.ix.turns[ti].session;
+            if !top5_s.contains(&si) {
+                top5_s.push(si);
+            }
         }
     }
-    for &old_si in ctx.final_session_indices.iter().skip(3) {
+    for &old_si in ctx.final_session_indices.iter().skip(4) {
         if top5_s.len() >= top_n {
             break;
         }
@@ -1822,12 +1800,6 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
             top5_s.push(old_si);
         }
     }
-    sync_tail_sessions_preserving_slot0(
-        ctx.ix,
-        &ctx.final_turn_indices,
-        &mut ctx.final_session_indices,
-        top_n,
-    );
     let orig_s_len = ctx.final_session_indices.len();
     let mut final_s: Vec<usize> = Vec::with_capacity(orig_s_len);
     for si in top5_s {

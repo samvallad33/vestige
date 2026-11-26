@@ -468,9 +468,19 @@ fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result
     {
         // A re-saved identical memory leaves a duplicate echo that carries the
         // same tags; walk from the original it points at, not from the echo.
-        let mut found: Vec<vestige_core::KnowledgeNode> = storage
-            .resolve_handle(&handle)
-            .ids
+        let resolved_direct = storage.resolve_handle(&handle);
+        let ids = if !resolved_direct.ids.is_empty() {
+            resolved_direct.ids
+        } else if !handle.contains(':')
+            && !handle.chars().any(char::is_whitespace)
+            && (handle.contains('/') || handle.contains('\\') || handle.contains('.'))
+        {
+            let norm = normalize_path(&handle);
+            storage.resolve_handle(&format!("file:{norm}")).ids
+        } else {
+            resolved_direct.ids
+        };
+        let mut found: Vec<vestige_core::KnowledgeNode> = ids
             .iter()
             .filter_map(|id| storage.get_node(id).ok().flatten())
             .map(|node| {
@@ -1251,7 +1261,22 @@ fn classify_starts(
             row.reason = Some("names a node an earlier start point already walks".to_string());
         } else if !in_scope(storage.as_ref(), &id, scope)? {
             row.status = "not_in_scope";
-            row.reason = Some(format!("node is not recorded in scope '{scope}'"));
+            let actual_scopes: Vec<&str> = ["user", "project", "global"]
+                .into_iter()
+                .filter(|sc| *sc != scope && in_scope(storage.as_ref(), &id, sc).unwrap_or(false))
+                .collect();
+            let hint = if actual_scopes.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; node is recorded in scope {} — pass scope='{}' to walk it",
+                    actual_scopes.join("/"),
+                    actual_scopes[0]
+                )
+            };
+            row.reason = Some(format!(
+                "node is not recorded in scope '{scope}'{hint}"
+            ));
         } else {
             row.status = "walked";
             walkable.push(id);

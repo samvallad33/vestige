@@ -11,9 +11,9 @@ use vestige_core::{KnowledgeNode, Storage};
 
 use super::lexical::{self, HOOK_CHAR_BUDGET};
 
-pub(crate) fn scores(storage: &Storage) -> BTreeMap<String, i128> {
+pub(crate) fn scores_from_receipts(receipts: &[Value]) -> BTreeMap<String, i128> {
     let mut scores = BTreeMap::new();
-    for row in storage.salience_receipts().unwrap_or_default() {
+    for row in receipts {
         if let (Some(id), Some(old), Some(new)) = (
             row["memory_id"].as_str(),
             row["old_stability_q"].as_i64(),
@@ -23,6 +23,11 @@ pub(crate) fn scores(storage: &Storage) -> BTreeMap<String, i128> {
         }
     }
     scores
+}
+
+pub(crate) fn scores(storage: &Storage) -> BTreeMap<String, i128> {
+    let receipts = storage.salience_receipts().unwrap_or_default();
+    scores_from_receipts(&receipts)
 }
 
 pub(crate) fn compare(
@@ -40,16 +45,14 @@ pub(crate) fn compare(
         .then_with(|| b.id.cmp(&a.id))
 }
 
-fn phrase(text: &str, surface: &str) -> bool {
-    let text = text.to_lowercase();
-    let surface = surface.to_lowercase();
-    if surface.is_empty() {
+fn phrase_lower(text_lower: &str, surface_lower: &str) -> bool {
+    if surface_lower.is_empty() {
         return false;
     }
-    text.match_indices(&surface).any(|(at, _)| {
+    text_lower.match_indices(surface_lower).any(|(at, _)| {
         let word = |c: char| c.is_alphanumeric() || c == '_';
-        text[..at].chars().next_back().is_none_or(|c| !word(c))
-            && text[at + surface.len()..]
+        text_lower[..at].chars().next_back().is_none_or(|c| !word(c))
+            && text_lower[at + surface_lower.len()..]
                 .chars()
                 .next()
                 .is_none_or(|c| !word(c))
@@ -116,26 +119,27 @@ const MONTHS: [&str; 12] = [
 ];
 
 /// Whether a stored identity tag (`person:`, `place:`, `food:`, `file:`,
-/// `service:`, `symbol:`) is named in `prompt`. Hierarchical `symbol:<ns>:<leaf>`
-/// tags also match on their leaf token (or space-joined bigram leaf).
-fn entity_matches_prompt(prompt: &str, tag: &str) -> bool {
-    if phrase(prompt, tag)
-        || tag
+/// `service:`, `symbol:`) is named in `prompt_lower` (pre-lowercased prompt).
+/// Hierarchical `symbol:<ns>:<leaf>` tags also match on their leaf token.
+fn entity_matches_prompt_lower(prompt_lower: &str, tag: &str) -> bool {
+    let tag_lower = tag.to_lowercase();
+    if phrase_lower(prompt_lower, &tag_lower)
+        || tag_lower
             .split_once(':')
-            .is_some_and(|(_, surface)| phrase(prompt, surface))
+            .is_some_and(|(_, surface)| phrase_lower(prompt_lower, surface))
     {
         return true;
     }
-    if tag.starts_with("symbol:")
-        && let Some((_, leaf)) = tag.rsplit_once(':')
+    if tag_lower.starts_with("symbol:")
+        && let Some((_, leaf)) = tag_lower.rsplit_once(':')
         && !leaf.is_empty()
     {
-        if phrase(prompt, leaf) {
+        if phrase_lower(prompt_lower, leaf) {
             return true;
         }
         if leaf.contains('~') {
             let spaced = leaf.replace('~', " ");
-            if phrase(prompt, &spaced) {
+            if phrase_lower(prompt_lower, &spaced) {
                 return true;
             }
         }
@@ -209,24 +213,37 @@ fn parse_weekday(token: &str) -> Option<Weekday> {
     }
 }
 
+/// Fast exact ISO/slash date extractor (skips `thing_keys` 1..3-gram allocation).
+fn content_matches_day_hit(content: &str, hits: &BTreeSet<String>) -> bool {
+    for raw in content.split(|c: char| !(c.is_ascii_digit() || c == '-' || c == '/')) {
+        if raw.len() == 10
+            && let Some(date) = parse_iso_or_slash_date(raw)
+        {
+            let key = format!("day:{:04}-{:02}-{:02}", date.year(), date.month(), date.day());
+            if hits.contains(&key) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// A memory joins the prompt's index tags through its stored tags or, for a
 /// memory saved before index tags existed, through an exact ISO/slash day its
 /// own words or `date:` tags carry. Avoid and yearly keys only come from
 /// stored tags: a word in a memory is not a rule against it, and a one-off
 /// date does not recur.
-fn joins_index(node: &KnowledgeNode, hits: &BTreeSet<String>) -> bool {
+fn joins_index(node: &KnowledgeNode, hits: &BTreeSet<String>, has_day_hits: bool) -> bool {
     if hits.is_empty() {
         return false;
     }
-    node.tags.iter().any(|tag| {
+    let tag_hit = node.tags.iter().any(|tag| {
         hits.contains(tag)
-            || ((tag.starts_with("date:") || tag.starts_with("day:"))
-                && index_tags(tag)
-                    .iter()
-                    .any(|d| d.starts_with("day:") && hits.contains(d)))
-    }) || index_tags(&node.content)
-        .iter()
-        .any(|tag| tag.starts_with("day:") && hits.contains(tag))
+            || (has_day_hits
+                && (tag.starts_with("date:") || tag.starts_with("day:"))
+                && content_matches_day_hit(tag, hits))
+    });
+    tag_hit || (has_day_hits && content_matches_day_hit(&node.content, hits))
 }
 
 /// Index-joined memories reserved ahead of lexical hits (salience-pro MAX_FILED_CANDIDATES).
@@ -354,33 +371,49 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
     if prompt.len() > 64 * 1024 {
         return Err("hook prompt exceeds 64 KiB".into());
     }
-    let mut nodes = storage
-        .get_all_nodes_in_scope(scope, i32::MAX, 0)
-        .map_err(|e| e.to_string())?;
-    let retired = storage.superseded_node_ids().map_err(|e| e.to_string())?;
-    let now = chrono::Utc::now();
-    nodes.retain(|n| {
-        !retired.contains(&n.id)
-            && n.valid_from.is_none_or(|t| t <= now)
-            && n.valid_until.is_none_or(|t| t > now)
-    });
-    let count = nodes.len();
-    let scores = scores(storage);
-    let tie = |node: &KnowledgeNode| scores.get(&node.id).copied().unwrap_or_default();
-    let requested = args["limit"].as_u64().unwrap_or(8).clamp(1, 24) as usize;
-    let named = lexical::named_people(&nodes, prompt);
-    let entities: BTreeSet<String> = nodes
-        .iter()
-        .flat_map(|n| n.tags.iter())
-        .filter(|tag| {
-            ["person:", "place:", "food:", "file:", "service:", "symbol:"]
-                .iter()
-                .any(|prefix| tag.starts_with(prefix))
-        })
-        .filter(|tag| entity_matches_prompt(prompt, tag))
-        .cloned()
-        .collect();
     let labile = crate::cognitive_kernel::labile_memory_ids(storage);
+    let requested = args["limit"].as_u64().unwrap_or(8).clamp(1, 24) as usize;
+    let prompt_lower = prompt.to_lowercase();
+    let now = chrono::Utc::now();
+    let (nodes, scores, all_receipts, entities) = if crate::strata_memory::head_seq(storage).is_some() {
+        let snap = crate::circuit_index::cached_packet_snapshot(
+            storage,
+            scope,
+            &labile,
+            &prompt_lower,
+            now,
+        );
+        (snap.nodes, snap.scores, snap.receipts, snap.entities)
+    } else {
+        let mut nodes = storage
+            .get_all_nodes_in_scope(scope, i32::MAX, 0)
+            .map_err(|e| e.to_string())?;
+        let retired = storage.superseded_node_ids().map_err(|e| e.to_string())?;
+        nodes.retain(|n| {
+            !retired.contains(&n.id)
+                && n.valid_from.is_none_or(|t| t <= now)
+                && n.valid_until.is_none_or(|t| t > now)
+        });
+        let all_receipts = storage.salience_receipts().unwrap_or_default();
+        let scores = scores_from_receipts(&all_receipts);
+        let mut entities = BTreeSet::new();
+        for node in &nodes {
+            for tag in &node.tags {
+                if ["person:", "place:", "food:", "file:", "service:", "symbol:"]
+                    .iter()
+                    .any(|prefix| tag.starts_with(prefix))
+                    && !entities.contains(tag.as_str())
+                    && entity_matches_prompt_lower(&prompt_lower, tag)
+                {
+                    entities.insert(tag.clone());
+                }
+            }
+        }
+        (nodes, scores, all_receipts, entities)
+    };
+    let count = nodes.len();
+    let tie = |node: &KnowledgeNode| scores.get(&node.id).copied().unwrap_or_default();
+    let named = lexical::named_people(&nodes, prompt);
     let mut circuit_diag = Value::Null;
     let (selected, selection, ranking): (Vec<&KnowledgeNode>, &str, &str) =
         if prompt.trim().is_empty() {
@@ -441,11 +474,15 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                     .filter_map(|tag| tag.strip_prefix("person:"))
                     .map(|name| format!("facts-of:{name}")),
             );
+            let has_day_hits = index_hits
+                .iter()
+                .any(|t| t.starts_with("day:") || t.starts_with("date:"));
+            let seen_idx: HashSet<usize> = indexes.iter().copied().collect();
             for (index, node) in nodes.iter().enumerate() {
-                if (node.tags.iter().any(|tag| entities.contains(tag))
-                    || joins_index(node, &index_hits))
+                if !seen_idx.contains(&index)
+                    && (node.tags.iter().any(|tag| entities.contains(tag))
+                        || joins_index(node, &index_hits, has_day_hits))
                     && lexical::allows_person(node, &named)
-                    && !indexes.contains(&index)
                 {
                     indexes.push(index);
                 }
@@ -457,7 +494,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             let top_score = hits.iter().map(|hit| hit.score_micro).max().unwrap_or(0);
             let on_target = |index: &usize| {
                 let node = &nodes[*index];
-                joins_index(node, &index_hits)
+                joins_index(node, &index_hits, has_day_hits)
                     || node.tags.iter().any(|tag| entities.contains(tag))
                     || (top_score > 0 && score_of(&node.id) * 2 >= top_score)
             };
@@ -473,7 +510,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             let mut joined: Vec<usize> = indexes
                 .iter()
                 .copied()
-                .filter(|index| joins_index(&nodes[*index], &index_hits))
+                .filter(|index| joins_index(&nodes[*index], &index_hits, has_day_hits))
                 .collect();
             // Safety first: an allergy, health, a condition or a medicine
             // before a preference.
@@ -537,9 +574,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             })
         })
         .collect();
-    let receipts: Vec<Value> = storage
-        .salience_receipts()
-        .map_err(|e| e.to_string())?
+    let receipts: Vec<Value> = all_receipts
         .into_iter()
         .rev()
         .filter(|r| r["memory_id"].as_str().is_some_and(|id| ids.contains(id)))
@@ -596,10 +631,10 @@ mod tests {
     fn an_untagged_memory_joins_by_the_dates_in_its_words() {
         let mut node = KnowledgeNode::default();
         node.content = "Dentist on 2026-11-03".into();
-        assert!(joins_index(&node, &index_tags("what is on 2026-11-03")));
-        assert!(!joins_index(&node, &index_tags("plans for November 3")));
+        assert!(joins_index(&node, &index_tags("what is on 2026-11-03"), true));
+        assert!(!joins_index(&node, &index_tags("plans for November 3"), false));
         node.content = "hot tubs are fun".into();
-        assert!(!joins_index(&node, &index_tags("book a hot tub")));
+        assert!(!joins_index(&node, &index_tags("book a hot tub"), false));
     }
 
     #[test]
@@ -617,20 +652,21 @@ mod tests {
 
     #[test]
     fn entity_surfaces_use_case_insensitive_whole_boundaries() {
+        let phrase = |text: &str, surface: &str| phrase_lower(&text.to_lowercase(), &surface.to_lowercase());
         assert!(phrase("Where should MAYA go?", "Maya"));
         assert!(!phrase("Mayakovsky", "Maya"));
         assert!(phrase("try Bangkok Garden?", "Bangkok Garden"));
         assert!(!phrase("Bangkok Gardens", "Bangkok Garden"));
-        assert!(entity_matches_prompt(
-            "What recipe did I try?",
+        assert!(entity_matches_prompt_lower(
+            &"What recipe did I try?".to_lowercase(),
             "symbol:demo:recipe"
         ));
-        assert!(entity_matches_prompt(
-            "How is Tokyo transit?",
+        assert!(entity_matches_prompt_lower(
+            &"How is Tokyo transit?".to_lowercase(),
             "symbol:demo:tokyo~transit"
         ));
-        assert!(!entity_matches_prompt(
-            "What recipe did I try?",
+        assert!(!entity_matches_prompt_lower(
+            &"What recipe did I try?".to_lowercase(),
             "symbol:demo:garden"
         ));
     }
@@ -641,6 +677,6 @@ mod tests {
         node.tags = vec!["date:2023/03/15 (Wed) 11:56".into()];
         let hits = index_tags("Current Date: 2023/03/25. What appliance did I buy 10 days ago?");
         assert!(hits.contains("day:2023-03-15"), "{hits:?}");
-        assert!(joins_index(&node, &hits));
+        assert!(joins_index(&node, &hits, true));
     }
 }

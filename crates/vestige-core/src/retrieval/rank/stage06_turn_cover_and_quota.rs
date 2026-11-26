@@ -262,6 +262,62 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         }
     }
 
+    // Kernel 1 (GeoRAG Demand Coverage) & Kernel 4 (ScalDPP Cholesky + MST):
+    // Prevent redundant recap turns from filling Slots 1..k on multi-part, summary, or multi-hop queries
+    // while strictly guarding Slot 0 (Rank-1 crisp anchor).
+    if (eff_summary_request(&q.text)
+        || eff_it.is_event_sequence
+        || eff_it.multi_hop
+        || (has_named_speakers_top && ns >= 6))
+        && final_turn_indices.len() >= 4
+        && !pref_on
+        && !eff_it.task_under_rules
+    {
+        let cand_pool: Vec<(usize, u64)> = final_turn_indices
+            .iter()
+            .take(24)
+            .map(|&ti| {
+                let q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                    t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
+                );
+                (ti, q16.max(1))
+            })
+            .collect();
+        let georag_seated = crate::retrieval::fusion::georag_demand_q16::georag_seat_turns_q16(
+            ix,
+            plan,
+            &cand_pool,
+            k.min(12),
+            true,
+        );
+        let mut refined = if eff_summary_request(&q.text) || eff_it.is_event_sequence {
+            let dpp_in: Vec<(usize, u64)> = georag_seated
+                .iter()
+                .map(|&ti| {
+                    let q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                        t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
+                    );
+                    (ti, q16.max(1))
+                })
+                .collect();
+            crate::retrieval::fusion::antimeta_scaldpp_q16::scaldpp_mst_select_q16(
+                ix,
+                &dpp_in,
+                k.min(10),
+                true,
+            )
+        } else {
+            georag_seated
+        };
+        for &ti in &final_turn_indices {
+            if !refined.contains(&ti) {
+                refined.push(ti);
+            }
+        }
+        refined.truncate(final_turn_indices.len());
+        final_turn_indices = refined;
+    }
+
     ctx.t_scene = t_scene;
     ctx.max_per_session_top5 = max_per_session_top5;
     ctx.turn_ts = turn_ts;

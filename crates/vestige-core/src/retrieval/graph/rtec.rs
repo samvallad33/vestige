@@ -1761,7 +1761,7 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
                     if let Some((_, old_ti, new_ti)) = best_pair
                         && !ctx.final_turn_indices.iter().take(5).any(|&t| t == old_ti)
                     {
-                        let slot_a = if top0_has_star_decl && top0_ti != old_ti { 3 } else { 0 };
+                        let slot_a = if ctx.final_turn_indices.len() >= 4 { 3 } else { 0 };
                         seat_turn_at_slot(
                             &mut ctx.final_turn_indices,
                             Some(&mut ctx.final_session_indices),
@@ -1946,23 +1946,20 @@ pub(in crate::retrieval) fn apply_rtec_discourse_dbm(ctx: &mut RankCtx<'_>) {
             }
         }
 
-        // Preserve Stage-12's exact calibrated ordering: ONLY demote Top-5 turns whose EXPLICIT
-        // event TIMEX contradicts `q_window` via a proven DBM negative cycle, and only when at
-        // least one explicit-TIMEX candidate in Top-10 is DBM-consistent.
+        // Preserve Stage-12's exact calibrated Slot 0 and `star_bit` turns: ONLY demote Slots 1..=4
+        // turns whose EXPLICIT event TIMEX contradicts `q_window` via a proven DBM negative cycle
+        // AND that lack the query's rarest anchor (`star_bit`), and only when at least one
+        // explicit-TIMEX candidate in Top-10 is DBM-consistent.
         if !explicit_consistent.is_empty() && !explicit_contra_top5.is_empty() {
             explicit_consistent.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-            let cur_top0_tr = &ctx.ix.turns[cur_top0];
-            let cur_top0_star_decl = star_bit != 0
-                && !cur_top0_tr.is_question
-                && !cur_top0_tr.is_backchannel
-                && (ctx.t_exact_mask.get(cur_top0).copied().unwrap_or(0) & star_bit) != 0;
-            let any_consistent_star = explicit_consistent.iter().any(|&(_, ti)| {
-                !ctx.ix.turns[ti].is_question
-                    && !ctx.ix.turns[ti].is_backchannel
-                    && (ctx.t_exact_mask.get(ti).copied().unwrap_or(0) & star_bit) != 0
-            });
-            if cur_top0_star_decl && !any_consistent_star {
-                explicit_contra_top5.remove(&cur_top0);
+            explicit_contra_top5.remove(&cur_top0);
+            if star_bit != 0 {
+                explicit_contra_top5.retain(|&ti| {
+                    let tr = &ctx.ix.turns[ti];
+                    tr.is_question
+                        || tr.is_backchannel
+                        || (ctx.t_exact_mask.get(ti).copied().unwrap_or(0) & star_bit) == 0
+                });
             }
             if !explicit_contra_top5.is_empty() {
                 let mut kept: Vec<usize> = Vec::with_capacity(ctx.final_turn_indices.len());

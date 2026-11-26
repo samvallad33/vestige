@@ -646,7 +646,23 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
                     && l_c.saturating_mul(2) >= s0_lex))
     });
     let start_idx = usize::from(!can_reorder_head);
-    let cands: Vec<usize> = final_session_indices[start_idx..total_m].to_vec();
+    let raw_slice: Vec<usize> = final_session_indices[start_idx..total_m].to_vec();
+    let (cands, weak_tail): (Vec<usize>, Vec<usize>) = if start_idx == 0 && s0_lex > 0 {
+        let mut strong = Vec::with_capacity(raw_slice.len());
+        let mut weak = Vec::new();
+        for (idx, &si) in raw_slice.iter().enumerate() {
+            let l_c = ieee754_bits_to_q16(s_score.get(si).map_or(0u32, |v| v.to_bits()));
+            let m_c = s_exact_mask.get(si).copied().unwrap_or(0);
+            if idx == 0 || (l_c.saturating_mul(2) >= s0_lex && (s0_mask == 0 || m_c != 0)) {
+                strong.push(si);
+            } else {
+                weak.push(si);
+            }
+        }
+        (strong, weak)
+    } else {
+        (raw_slice, Vec::new())
+    };
     let m = cands.len();
     if m < 2 {
         return;
@@ -810,7 +826,10 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
     }
 
     let ordered = solve_fabula_fas_kendall_order(&cands, &ix.session_ids, pref);
-    final_session_indices[start_idx..total_m].copy_from_slice(&ordered);
+    let mut merged_ord = Vec::with_capacity(ordered.len() + weak_tail.len());
+    merged_ord.extend(ordered);
+    merged_ord.extend(weak_tail);
+    final_session_indices[start_idx..total_m].copy_from_slice(&merged_ord);
 
     // Re-project `final_turn_indices` onto the Kendall-ordered milestone sessions on user/assistant
     // multi-session streams so Turn @1 / @5 / @10 track the chronological session order 1-for-1

@@ -1949,7 +1949,9 @@ pub(in crate::retrieval) fn apply_corgi_deontic_seating(ctx: &mut RankCtx<'_>) {
                     .take(5)
                     .position(|&t| t == def_ti)
                 {
-                    let target = if slot0_protected && def_pos == 0 {
+                    let target = if modal == QueryModalBase::EpisodicFact {
+                        def_pos.max(3)
+                    } else if slot0_protected && def_pos == 0 {
                         1
                     } else {
                         def_pos
@@ -2020,6 +2022,7 @@ pub(in crate::retrieval) fn apply_corgi_deontic_seating(ctx: &mut RankCtx<'_>) {
         && !ctx.eff_it.assistant_attribution
         && !ctx.eff_it.sniper_how_many
         && !ctx.eff_it.sniper_when
+        && !ctx.eff_it.current_state
         && ix.session_turns.len() >= 16;
     if !run_pref_qcl {
         return;

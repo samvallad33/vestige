@@ -157,6 +157,11 @@ pub fn read_store<T>(
     Some(f(&store))
 }
 
+/// Return the O(1) head sequence number of the open Strata log, when active.
+pub fn head_seq(storage: &Storage) -> Option<u64> {
+    read_store(storage, |store| store.log().head().last_acked_seq)
+}
+
 fn live_memory(storage: &Storage) -> Option<Arc<StrataMemory>> {
     if !is_strata_backend(storage) {
         return None;

@@ -81,7 +81,7 @@ pub mod restore;
 pub(crate) mod lexical;
 
 // v1.8: Context Packets
-mod memory_packet;
+pub(crate) mod memory_packet;
 pub mod session_context;
 
 // v1.9: Autonomic tools

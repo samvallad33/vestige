@@ -1,31 +1,31 @@
 #!/usr/bin/env node
 'use strict';
-// Vestige <-> Antigravity hook bridge.
+// Vestige <-> Antigravity unified hook bridge.
 //
 // Antigravity speaks camelCase hook JSON ({conversationId, toolCall:{id,name,args}, stepIdx, ...})
 // and answers with {decision, reason, overwrite} / {injectSteps}. Vestige's shipped hooks speak
-// the Claude Code dialect ({session_id, tool_name, tool_input, ...}). This file translates in
-// both directions and delegates every decision to the shipped components:
+// the Claude Code dialect ({session_id, tool_name, tool_input, ...}). All policy, save-gate,
+// anti-spiral escalation, call-coach, blast-radius, anchor-watch, and stop verification live
+// inside ONE Operator gate + ONE native Rust Reflex engine inside vestige-mcp:
 //
 //   SessionStart   -> Operator turnover + `vestige capsule` + active Intention Graph/list +
 //                     memory hook (`session` packet) + Reflex `SessionStart`.
-//   PreInvocation  -> first call of a turn: Save-Gate `UserPromptSubmit` + memory hook (`prompt`
-//                     recall + RSB) + Reflex `UserPromptSubmit` (+ active intentions on prompt #1);
-//                     later calls: Reflex `PostToolBatch`, plus any pending notices.
-//   PreToolUse     -> Operator gate (`operator-gate.py hook`, FAIL-CLOSED) + Save-Gate commit
-//                     gate + Reflex `PreToolUse` (Context Manifest, Call Coach #520 + overwrite).
-//   PostToolUse    -> Extracts real MCP JSON (`nodeId`, `nodes`, `results`) from transcript/timeline
-//                     for all `mcp__vestige__*` calls, then runs Save-Gate + Reflex.
-//   PostInvocation -> Reflex `PostToolBatch` (queues batch/failure notices for next step).
-//   Stop           -> memory hook (`turn` flush + backfill) + autoSaveAtStop + PostToolUse settle +
-//                     Reflex `Stop` + Save-Gate `Stop` (with single-block-per-prompt guard).
+//   PreInvocation  -> Step 1: memory hook (`prompt` recall + RSB) + Reflex `UserPromptSubmit`
+//                     (+ active intentions); later steps: Reflex `PostToolBatch` + pending alerts.
+//   PreToolUse     -> Operator gate (`operator-gate.py`, FAIL-CLOSED when configured) +
+//                     Reflex `PreToolUse` (Anti-Spiral Stage 1/2, Commit-Gate, Execution Lease,
+//                     Call Coach CC-001..CC-012 + overwrite, Blast-Radius, Chesterton's Fence).
+//   PostToolUse    -> Extracts real MCP JSON (`nodeId`, etc.) from transcript, settles git post-commit
+//                     receipts, and feeds Rust Reflex `PostToolUse` / `PostToolUseFailure`.
+//   PostInvocation -> Reflex `PostToolBatch` (queues batch/spin/spiral notices for PreInvocation).
+//   Stop           -> memory hook (`turn` flush) + autoSaveAtStop + Reflex `Stop` (single block guard).
 //
 // Usage: node agy-bridge.cjs --event <Event> [--config <bridge.json>]
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');
 
 const argv = process.argv.slice(2);
 const flag = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt; };
@@ -44,9 +44,8 @@ function loadConfig() {
   let memCfg = {};
   try { memCfg = JSON.parse(fs.readFileSync(memCfgPath, 'utf8')); } catch {}
   return {
-    python: cfg.python,
-    gate: resolveHome(cfg.gate),
-    saveGate: resolveHome(cfg.saveGate || path.join(os.homedir(), '.vestige', 'gate', 'save-gate.py')),
+    python: cfg.python || (process.platform === 'win32' ? 'python' : 'python3'),
+    gate: cfg.gate ? resolveHome(cfg.gate) : '',
     vestigeBin: resolveHome(cfg.vestigeBin || path.join(os.homedir(), '.vestige', 'bin', process.platform === 'win32' ? 'vestige.exe' : 'vestige')),
     dataDir: resolveHome(cfg.dataDir || path.join(os.homedir(), '.vestige', 'store')),
     memoryConfig: memCfgPath,
@@ -54,7 +53,7 @@ function loadConfig() {
     hooksDir: cfg.hooksDir ? resolveHome(cfg.hooksDir) : path.join(HERE, 'hooks'),
     gateTimeoutMs: cfg.gateTimeoutMs || 15000,
     memoryDeadlineMs: cfg.memoryDeadlineMs || 7000,
-    reflexDeadlineMs: cfg.reflexDeadlineMs || 3500,
+    reflexDeadlineMs: cfg.reflexDeadlineMs || 5000,
     capsuleTimeoutMs: cfg.capsuleTimeoutMs || 6000,
     debug: Boolean(cfg.debug),
   };
@@ -68,6 +67,17 @@ function log(cfg, record) {
     if (fs.existsSync(file) && fs.statSync(file).size > 2 * 1024 * 1024) fs.renameSync(file, file + '.1');
     fs.appendFileSync(file, JSON.stringify({ t: new Date().toISOString(), event: EVENT, ...record }) + '\n');
   } catch {}
+}
+
+function logError(cfg, scope, message) {
+  try {
+    const errDir = CONFIG_FILE ? path.dirname(CONFIG_FILE) : STATE_DIR;
+    fs.mkdirSync(errDir, { recursive: true });
+    const file = path.join(errDir, 'errors.log');
+    if (fs.existsSync(file) && fs.statSync(file).size > 256 * 1024) fs.renameSync(file, file + '.1');
+    fs.appendFileSync(file, `${new Date().toISOString()} agy-${scope}: ${message}\n`);
+  } catch {}
+  log(cfg, { errorScope: scope, error: message });
 }
 
 // ---------------------------------------------------------------- translation
@@ -107,7 +117,11 @@ function toClaudeTool(call) {
     }
     return { tool_name: 'Bash', tool_input };
   }
-  if ((typeof a.Target === 'string' && typeof a.Replacement === 'string') || /^(edit_file|replace_file_content|multi_replace_file_content)$/.test(lname)) {
+  if (
+    typeof a.Target === 'string' && typeof a.Replacement === 'string'
+    || Array.isArray(a.ReplacementChunks)
+    || /^(edit_file|replace_file_content|multi_replace_file_content)$/.test(lname)
+  ) {
     const oldStr = typeof a.Target === 'string' ? a.Target : String(a.TargetContent || '');
     const newStr = typeof a.Replacement === 'string' ? a.Replacement : String(a.ReplacementContent || '');
     return { tool_name: 'Edit', tool_input: { file_path: pathArg || '', old_string: oldStr, new_string: newStr } };
@@ -116,6 +130,9 @@ function toClaudeTool(call) {
     const content = typeof a.Content === 'string' ? a.Content : a.CodeContent;
     if (a.Append === true) return { tool_name: 'Edit', tool_input: { file_path: pathArg, old_string: '', new_string: content } };
     return { tool_name: 'Write', tool_input: { file_path: pathArg, content } };
+  }
+  if (/^write_to_file$/i.test(lname) && pathArg) {
+    return { tool_name: 'Write', tool_input: { file_path: pathArg, content: String(a.CodeContent || a.Content || '') } };
   }
   if (/^(read_file|view_file|view_file_outline|view_code_item)$/.test(lname) && pathArg) {
     const tool_input = { file_path: pathArg };
@@ -131,6 +148,15 @@ function toClaudeTool(call) {
       tool_input.byte_offset = Number(a.ByteOffset);
     }
     return { tool_name: 'Read', tool_input };
+  }
+  if (/^(search_web|web_search)$/i.test(lname)) {
+    return { tool_name: 'search_web', tool_input: { query: String(a.query || a.Query || ''), ...a } };
+  }
+  if (/^(read_url_content|fetch_url)$/i.test(lname)) {
+    return { tool_name: 'read_url_content', tool_input: a };
+  }
+  if (/^(invoke_subagent|agent|task)$/i.test(lname)) {
+    return { tool_name: 'invoke_subagent', tool_input: a };
   }
   return { tool_name: name, tool_input: a };
 }
@@ -170,7 +196,7 @@ function findGitRootForPath(absFile) {
   return null;
 }
 
-function normalizePathForSaveGate(rawPath, cwd) {
+function normalizePathForReflex(rawPath, cwd) {
   if (typeof rawPath !== 'string' || !rawPath.trim()) return '';
   const stripped = rawPath.trim().replace(/#.*$/, '').replace(/:(\d+(?:-\d+)?)$/, '');
   const slash = (p) => p.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -213,7 +239,7 @@ function isScratchOrArtifactEdit(filePath, artifactDir) {
   return false;
 }
 
-function normalizePayloadForSaveGate(payload) {
+function normalizePayloadForReflex(payload) {
   if (!payload || typeof payload !== 'object') return payload;
   const copy = { ...payload };
   const ti = (copy.tool_input && typeof copy.tool_input === 'object') ? { ...copy.tool_input } : {};
@@ -222,10 +248,10 @@ function normalizePayloadForSaveGate(payload) {
     if (isScratchOrArtifactEdit(ti.file_path, copy.artifact_dir)) {
       return null;
     }
-    ti.file_path = normalizePathForSaveGate(ti.file_path, cwd);
+    ti.file_path = normalizePathForReflex(ti.file_path, cwd);
     copy.tool_input = ti;
   } else if (/^mcp__vestige__(?:remember|curate)$/i.test(String(copy.tool_name || '')) && Array.isArray(ti.files)) {
-    ti.files = ti.files.map(f => normalizePathForSaveGate(String(f), cwd)).filter(Boolean);
+    ti.files = ti.files.map(f => normalizePathForReflex(String(f), cwd)).filter(Boolean);
     copy.tool_input = ti;
   }
   return copy;
@@ -235,48 +261,48 @@ function readStdin() {
   try { return fs.readFileSync(0, 'utf8'); } catch { return ''; }
 }
 
-// ---------------------------------------------------------------- memory + reflex + capsule + save-gate
+// ---------------------------------------------------------------- memory + reflex + capsule
 function shim(cfg, name) {
   return require(path.join(cfg.hooksDir, name));
 }
 
 async function reflexRun(cfg, payload, event) {
+  const prevSurface = process.env.VESTIGE_REFLEX_SURFACE_ERROR;
+  process.env.VESTIGE_REFLEX_SURFACE_ERROR = '1';
   try {
     const reflex = shim(cfg, 'reflex.cjs');
-    return await reflex.run({
+    const out = await reflex.run({
       client: 'claude',
       configFile: cfg.memoryConfig,
       eventFlag: event,
       input: { ...payload, hook_event_name: event },
       deadlineMs: cfg.reflexDeadlineMs,
     }) || {};
+    if (out && out._reflexError) {
+      logError(cfg, `reflex-${event}`, out._reflexError);
+      return {
+        hookSpecificOutput: {
+          hookEventName: event,
+          additionalContext: `Vestige Reflex alert (${event}): ${out._reflexError}.`,
+        },
+      };
+    }
+    return out;
   } catch (e) {
-    log(cfg, { reflexError: String(e && e.message) });
-    return {};
-  }
-}
-
-function saveGateRun(cfg, payload, event) {
-  if (!cfg.saveGate || !fs.existsSync(cfg.saveGate)) return {};
-  const normalized = normalizePayloadForSaveGate(payload);
-  if (normalized === null) return {};
-  try {
-    const saveDir = path.join(STATE_DIR, 'save-gate');
-    fs.mkdirSync(saveDir, { recursive: true });
-    const r = spawnSync(cfg.python, ['-I', cfg.saveGate, '--event', event], {
-      input: JSON.stringify(normalized),
-      encoding: 'utf8',
-      timeout: 4000,
-      maxBuffer: 512 * 1024,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8', VESTIGE_REFLEX_DIR: saveDir },
-      windowsHide: true,
-    });
-    const out = String(r.stdout || '').trim();
-    if (!out) return {};
-    return JSON.parse(out.split(/\r?\n/).pop() || '{}');
-  } catch (e) {
-    log(cfg, { saveGateError: String(e && e.message) });
-    return {};
+    const msg = String((e && e.message) || e);
+    logError(cfg, `reflex-${event}`, msg);
+    if (!['UserPromptSubmit', 'SessionStart', 'PreToolUse'].includes(event)) {
+      return {};
+    }
+    return {
+      hookSpecificOutput: {
+        hookEventName: event,
+        additionalContext: `Vestige Reflex alert (${event}): ${msg}.`,
+      },
+    };
+  } finally {
+    if (prevSurface === undefined) delete process.env.VESTIGE_REFLEX_SURFACE_ERROR;
+    else process.env.VESTIGE_REFLEX_SURFACE_ERROR = prevSurface;
   }
 }
 
@@ -310,8 +336,36 @@ function postCommitReceiptRun(cfg, payload) {
       }
     );
   } catch (e) {
-    log(cfg, { postCommitError: String(e && e.message) });
+    logError(cfg, 'post-commit', String(e && e.message));
   }
+}
+
+function spawnAsync(cmd, args, { input = '', timeoutMs = 4000, env = process.env } = {}) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let done = false;
+    const finish = (ok, out = '') => {
+      if (done) return;
+      done = true;
+      resolve({ ok, stdout: out });
+    };
+    try {
+      const child = spawn(cmd, args, { env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+      const timer = setTimeout(() => {
+        try { child.kill(); } catch {}
+        finish(false, stdout);
+      }, timeoutMs);
+      child.stdout.on('data', (chunk) => {
+        if (stdout.length < 1024 * 1024) stdout += chunk.toString('utf8');
+      });
+      child.on('error', () => { clearTimeout(timer); finish(false, ''); });
+      child.on('close', (code) => { clearTimeout(timer); finish(code === 0, stdout); });
+      if (input) child.stdin.end(input);
+      else child.stdin.end();
+    } catch {
+      finish(false, '');
+    }
+  });
 }
 
 function turnoverSessionStart(cfg, payload) {
@@ -324,6 +378,17 @@ function turnoverSessionStart(cfg, payload) {
       maxBuffer: 256 * 1024,
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       windowsHide: true,
+    });
+  } catch {}
+}
+
+async function turnoverSessionStartAsync(cfg, payload) {
+  if (!cfg.gate || !fs.existsSync(cfg.gate)) return;
+  try {
+    await spawnAsync(cfg.python, ['-I', cfg.gate, 'turnover', '--session-start'], {
+      input: JSON.stringify(payload),
+      timeoutMs: 3500,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
     });
   } catch {}
 }
@@ -378,6 +443,19 @@ function compactCapsule(raw, maxChars = 1100) {
   return joined.length > maxChars ? joined.slice(0, maxChars - 3).trimEnd() + '...' : joined;
 }
 
+function parseCapsuleOutput(stdout, cfg) {
+  try {
+    const out = String(stdout || '').trim();
+    if (!out) return '';
+    const parsed = JSON.parse(out);
+    const raw = (parsed && parsed.hookSpecificOutput && parsed.hookSpecificOutput.additionalContext) || '';
+    return compactCapsule(raw, 1100);
+  } catch (e) {
+    logError(cfg, 'capsule', String(e && e.message));
+    return '';
+  }
+}
+
 function capsuleRun(cfg, source, cwd) {
   if (!cfg.vestigeBin || !fs.existsSync(cfg.vestigeBin)) return '';
   try {
@@ -392,13 +470,27 @@ function capsuleRun(cfg, source, cwd) {
         windowsHide: true,
       }
     );
-    const out = String(r.stdout || '').trim();
-    if (!out) return '';
-    const parsed = JSON.parse(out);
-    const raw = (parsed && parsed.hookSpecificOutput && parsed.hookSpecificOutput.additionalContext) || '';
-    return compactCapsule(raw, 1100);
+    return parseCapsuleOutput(r.stdout, cfg);
   } catch (e) {
-    log(cfg, { capsuleError: String(e && e.message) });
+    logError(cfg, 'capsule', String(e && e.message));
+    return '';
+  }
+}
+
+async function capsuleRunAsync(cfg, source, cwd) {
+  if (!cfg.vestigeBin || !fs.existsSync(cfg.vestigeBin)) return '';
+  try {
+    const r = await spawnAsync(
+      cfg.vestigeBin,
+      ['--data-dir', cfg.dataDir, 'capsule', '--harness', 'claude-code', '--event', 'session-start'],
+      {
+        input: JSON.stringify({ source: source || 'startup', cwd: cwd || process.cwd() }),
+        timeoutMs: cfg.capsuleTimeoutMs,
+      }
+    );
+    return parseCapsuleOutput(r.stdout, cfg);
+  } catch (e) {
+    logError(cfg, 'capsule', String(e && e.message));
     return '';
   }
 }
@@ -449,7 +541,7 @@ async function intentionsStartContext(cfg, maxChars = 750) {
     const body = `Active Intentions & Plans:\n${lines.join('\n')}`;
     return body.length > maxChars ? body.slice(0, maxChars - 3).trimEnd() + '...' : body;
   } catch (e) {
-    log(cfg, { intentionsError: String(e && e.message) });
+    logError(cfg, 'intentions', String(e && e.message));
     return '';
   } finally {
     if (client) try { client.close(); } catch {}
@@ -591,6 +683,7 @@ function compactContext(text, seenGhost = null, maxChars = 1400) {
 }
 
 async function memoryContext(cfg, payload, hookEvent, maxChars = 1400) {
+  if (!cfg.memoryConfig || !fs.existsSync(cfg.memoryConfig)) return '';
   try {
     const memory = shim(cfg, 'memory.cjs');
     const out = await memory.run({
@@ -601,10 +694,24 @@ async function memoryContext(cfg, payload, hookEvent, maxChars = 1400) {
       deadlineMs: cfg.memoryDeadlineMs,
     });
     const raw = (out && out.hookSpecificOutput && out.hookSpecificOutput.additionalContext) || '';
+    if (!raw && ['session', 'prompt'].includes(hookEvent)) {
+      // Check if memory.cjs appended a fresh error for this event
+      const errPath = path.join(path.dirname(cfg.memoryConfig), 'errors.log');
+      if (fs.existsSync(errPath)) {
+        const st = fs.statSync(errPath);
+        if (Date.now() - st.mtimeMs < 3000) {
+          const tail = fs.readFileSync(errPath, 'utf8').trim().split(/\r?\n/).pop() || '';
+          if (tail && tail.includes(`${hookEvent}:`)) {
+            return `Vestige memory hook alert (${hookEvent}): ${tail.slice(-180)}`;
+          }
+        }
+      }
+    }
     return compactContext(raw, null, maxChars);
   } catch (e) {
-    log(cfg, { memoryError: String(e && e.message) });
-    return '';
+    const msg = String((e && e.message) || e);
+    logError(cfg, `memory-${hookEvent}`, msg);
+    return `Vestige memory hook alert (${hookEvent}): ${msg}`;
   }
 }
 
@@ -626,9 +733,21 @@ function turnState(session) {
 function queuePending(session, ctx) {
   if (!ctx || !session) return;
   const t = turnState(session);
-  t.s.pending = ((t.s.pending || '') + '\n' + ctx).slice(-4000);
+  const seen = new Set();
+  const merged = [];
+  for (const raw of `${t.s.pending || ''}\n${ctx}`.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || seen.has(line)) continue;
+    seen.add(line);
+    merged.push(line);
+  }
+  let out = merged.join('\n');
+  if (out.length > 4000) out = out.slice(-4000);
+  t.s.pending = out;
   t.save(t.s);
 }
+
+const SENSITIVE_READ_RE = /(?:^|[\\/])(?:\.env(?:\.[^\\/]*)?|\.ssh[\\/]|id_rsa|id_ed25519|\.aws[\\/]credentials|credentials\.json|secrets?\.(?:json|ya?ml|toml|txt)|auth\.json|.*\.pem$|.*\.key$|.*\.p12$|.*\.pfx$)/i;
 
 // ---------------------------------------------------------------- handlers
 async function preToolUse(cfg, input) {
@@ -637,45 +756,114 @@ async function preToolUse(cfg, input) {
     log(cfg, { tool: payload.tool_name, decision: 'deny', reason: reason.slice(0, 400) });
     return { decision: 'deny', reason };
   };
-  if (!fs.existsSync(cfg.gate)) {
-    return deny(`Operator gate missing at ${cfg.gate}. Fail-closed: a missing gate is never permission to run.`);
-  }
-  const r = spawnSync(cfg.python, ['-I', cfg.gate, 'hook', '--source', 'antigravity'], {
-    input: JSON.stringify(payload),
-    encoding: 'utf8',
-    timeout: cfg.gateTimeoutMs,
-    maxBuffer: 1024 * 1024,
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    windowsHide: true,
-  });
-  const stderr = String(r.stderr || '').trim();
-  if (r.error) return deny(`Operator gate did not answer (${r.error.code || r.error.message}). Fail-closed.`);
-  if (r.status !== 0) return deny(stderr || `Operator gate exited ${r.status}. Fail-closed.`);
 
-  const sgOut = saveGateRun(cfg, payload, 'PreToolUse');
-  const sgHso = (sgOut && sgOut.hookSpecificOutput) || {};
-  if (sgHso.permissionDecision === 'deny') {
-    return deny(sgHso.permissionDecisionReason || 'Vestige Save-Gate denied this git commit.');
-  }
-
-  if (payload.session_id && /^mcp__vestige__(?:remember|curate)$/i.test(String(payload.tool_name || ''))) {
-    const preId = await getLatestTimelineId(cfg);
-    if (preId) {
-      const t = turnState(payload.session_id);
-      t.s.preWriteId = preId;
-      t.save(t.s);
+  if (payload.tool_name === 'Read') {
+    const readPath = String((payload.tool_input && payload.tool_input.file_path) || '');
+    if (readPath && !SENSITIVE_READ_RE.test(readPath)) {
+      return { decision: 'allow' };
     }
   }
 
-  const rfxOut = await reflexRun(cfg, payload, 'PreToolUse');
+  if (cfg.gate) {
+    if (!fs.existsSync(cfg.gate)) {
+      return deny(`Operator gate missing at ${cfg.gate}. Fail-closed: a missing gate is never permission to run.`);
+    }
+    const r = spawnSync(cfg.python, ['-I', cfg.gate, 'hook', '--source', 'antigravity'], {
+      input: JSON.stringify(payload),
+      encoding: 'utf8',
+      timeout: cfg.gateTimeoutMs,
+      maxBuffer: 1024 * 1024,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      windowsHide: true,
+    });
+    const stderr = String(r.stderr || '').trim();
+    if (r.error) return deny(`Operator gate did not answer (${r.error.code || r.error.message}). Fail-closed.`);
+    if (r.status !== 0) {
+      const ruleMatch = /\b(OP-[A-Z0-9-]+)\b/.exec(stderr);
+      const ruleId = ruleMatch ? ruleMatch[1] : 'OP-STOP';
+      if (payload.session_id) {
+        const t = turnState(payload.session_id);
+        t.s.pendingOperatorStop = { rule: ruleId, tool: payload.tool_name, ts: Date.now() };
+        t.save(t.s);
+        queuePending(
+          payload.session_id,
+          `Vestige Protocol [Operator ${ruleId}]: Call precedent(query="stops") to inspect the Operator stop receipt before running another mutating command or edit.`
+        );
+      }
+      const msg = stderr || `Operator gate exited ${r.status}. Fail-closed.`;
+      return deny(`${msg}\nNext required step: call precedent(query="stops") to inspect the stop receipt before proposing a compliant alternative.`);
+    }
+  }
+
+  // Enforce precedent inspection after an Operator stop before any further mutating tool runs.
+  if (payload.session_id && /^(?:Bash|Edit|Write)$/i.test(String(payload.tool_name || ''))) {
+    const t = turnState(payload.session_id);
+    if (t.s.pendingOperatorStop) {
+      const st = t.s.pendingOperatorStop;
+      return deny(
+        `Vestige Protocol [Precedent Required]: Operator stopped a previous call (${st.rule}) this turn. Call precedent(query="stops") to inspect the receipt before running ${payload.tool_name}.`
+      );
+    }
+  }
+
+  const rfxPayload = normalizePayloadForReflex(payload);
+  if (rfxPayload === null) {
+    return { decision: 'allow' };
+  }
+  const rfxOut = await reflexRun(cfg, rfxPayload, 'PreToolUse');
   const hso = (rfxOut && rfxOut.hookSpecificOutput) || {};
   if (hso.permissionDecision === 'deny') {
     return deny(hso.permissionDecisionReason || 'Vestige Reflex denied this call.');
   }
-  const ctx = extractContext(rfxOut);
-  if (ctx) queuePending(payload.session_id, ctx);
 
-  log(cfg, { tool: payload.tool_name, decision: 'allow', note: stderr.slice(0, 200) });
+  if (payload.session_id && payload.tool_name === 'Bash' &&
+      isGitCommitCommand(payload.tool_input && payload.tool_input.command)) {
+    const tsCommit = turnState(payload.session_id);
+    if (tsCommit.s.sensitiveFileEdited && !tsCommit.s.secretScannedThisTurn) {
+      return deny(
+        `Vestige Protocol [precedent]: Sensitive file (${tsCommit.s.sensitiveFileEdited}) was modified before commit. Call precedent(query="scan_secrets") before committing.`
+      );
+    }
+  }
+
+  const ctx = extractContext(rfxOut);
+  if (ctx) {
+    const tsWarn = payload.session_id ? turnState(payload.session_id) : null;
+    const warnedFiles = tsWarn && Array.isArray(tsWarn.s.warnedFiles) ? tsWarn.s.warnedFiles : [];
+    const fencedFiles = tsWarn && Array.isArray(tsWarn.s.fencedFiles) ? tsWarn.s.fencedFiles : [];
+    let warnedChanged = false;
+    const keptLines = [];
+    for (const raw of ctx.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (/^(?:(?:Vestige\s+)?Call Coach:\s*)?\[CC-(?:001|003|004|005|006|007|008|009|012|013)\](?=\s|$|:)/i.test(line)) {
+        continue;
+      }
+      const blastMatch = /^Prefrontal Blast-Radius\s*\(`([^`]+)`\)/i.exec(line);
+      if (blastMatch && tsWarn) {
+        const norm = normalizePathForReflex(blastMatch[1], payload.cwd);
+        if (norm && warnedFiles.includes(norm)) continue;
+        if (norm) {
+          warnedFiles.push(norm);
+          if (warnedFiles.length > 64) warnedFiles.shift();
+          warnedChanged = true;
+        }
+      }
+      const fenceMatch = /^Chesterton's Fence\b[^`]*`([^`]+)`/i.exec(line);
+      if (fenceMatch && tsWarn) {
+        const norm = normalizePathForReflex(fenceMatch[1], payload.cwd);
+        if (norm && fencedFiles.includes(norm)) continue;
+      }
+      keptLines.push(line);
+    }
+    if (warnedChanged && tsWarn) {
+      tsWarn.s.warnedFiles = warnedFiles;
+      tsWarn.save(tsWarn.s);
+    }
+    if (keptLines.length > 0) queuePending(payload.session_id, keptLines.join('\n'));
+  }
+
+  log(cfg, { tool: payload.tool_name, decision: 'allow' });
   if (hso.updatedInput && input.toolCall && input.toolCall.name === 'call_mcp_tool') {
     return { decision: 'allow', overwrite: { Arguments: hso.updatedInput } };
   }
@@ -697,6 +885,35 @@ async function postToolUse(cfg, input) {
     if (mcpObj) {
       payload.tool_response = { exit_code: 0, ...mcpObj };
     }
+    if (/^mcp__vestige__session$/i.test(toolStr) && payload.session_id) {
+      const t = turnState(payload.session_id);
+      t.s.sessionBooted = true;
+      const act = String((payload.tool_input && payload.tool_input.action) || '');
+      if (/intention/i.test(act) && !/list|status|get/i.test(act)) {
+        t.s.hasActiveIntention = true;
+      }
+      t.save(t.s);
+    }
+    if (/^mcp__vestige__causal_walk$/i.test(toolStr) && payload.session_id) {
+      const t = turnState(payload.session_id);
+      const fenced = Array.isArray(t.s.fencedFiles) ? t.s.fencedFiles : [];
+      const inp = payload.tool_input || {};
+      const cand = []
+        .concat(typeof inp.file === 'string' ? [inp.file] : [])
+        .concat(Array.isArray(inp.files) ? inp.files : [])
+        .concat(Array.isArray(inp.targets) ? inp.targets : []);
+      for (const rawF of cand) {
+        if (typeof rawF !== 'string') continue;
+        const norm = normalizePathForReflex(rawF, payload.cwd);
+        if (norm && !fenced.includes(norm)) {
+          fenced.push(norm);
+          if (fenced.length > 64) fenced.shift();
+        }
+      }
+      t.s.fencedFiles = fenced;
+      t.s.lastWalkAt = Date.now();
+      t.save(t.s);
+    }
     if (/^mcp__vestige__(?:remember|curate)$/i.test(toolStr)) {
       const t = payload.session_id ? turnState(payload.session_id) : null;
       let nodeId = payload.tool_response.nodeId || payload.tool_response.echoNodeId || payload.tool_response.replayOf;
@@ -713,6 +930,34 @@ async function postToolUse(cfg, input) {
         t.s.preWriteId = nodeId || t.s.preWriteId;
         t.save(t.s);
       }
+      const contradictions = payload.tool_response.contradictions || payload.tool_response.conflicts;
+      if (Array.isArray(contradictions) && contradictions.length > 0 && payload.session_id) {
+        queuePending(
+          payload.session_id,
+          `Vestige Curate Alert: ${contradictions.length} contradicting/stale memory node(s) detected. Call curate(action="edit"|"demote"|"link") so stale beliefs do not remain active.`
+        );
+      }
+    }
+    if (/^mcp__vestige__precedent$/i.test(toolStr) && payload.session_id) {
+      const t = turnState(payload.session_id);
+      if (t.s.pendingOperatorStop) {
+        delete t.s.pendingOperatorStop;
+      }
+      if (String((payload.tool_input && payload.tool_input.query) || '') === 'scan_secrets') {
+        t.s.secretScannedThisTurn = true;
+      }
+      t.save(t.s);
+    }
+    if (/^mcp__vestige__recall$/i.test(toolStr) && payload.session_id) {
+      const nodes = Array.isArray(payload.tool_response.nodes) ? payload.tool_response.nodes : [];
+      const retired = nodes.filter(n => n && (n.retired === true || n.supersededBy || n.superseded_by || n.suppressed === true));
+      if (retired.length > 0) {
+        const ids = retired.map(n => n.id || n.nodeId).filter(Boolean).slice(0, 3).join(', ');
+        queuePending(
+          payload.session_id,
+          `Vestige Curate Alert: recall returned retired/superseded node(s) [${ids || retired.length}]. Verify current successors or call curate(...) before relying on stale beliefs.`
+        );
+      }
     }
   }
 
@@ -720,18 +965,53 @@ async function postToolUse(cfg, input) {
       !isScratchOrArtifactEdit(payload.tool_input && payload.tool_input.file_path, payload.artifact_dir) &&
       payload.session_id) {
     const t = turnState(payload.session_id);
+    const editPath = String((payload.tool_input && payload.tool_input.file_path) || '');
+    const normPath = normalizePathForReflex(editPath, payload.cwd) || editPath;
+    t.s.editedFiles = Array.isArray(t.s.editedFiles) ? t.s.editedFiles : [];
+    if (normPath && !t.s.editedFiles.includes(normPath)) {
+      t.s.editedFiles.push(normPath);
+      if (t.s.editedFiles.length > 64) t.s.editedFiles.shift();
+    }
+    if (editPath && SENSITIVE_READ_RE.test(editPath) &&
+        !/(?:^|[\\/])(?:test|tests|spec|fixtures?)(?:[\\/]|$)|\.(?:test|spec)\./i.test(editPath)) {
+      t.s.sensitiveFileEdited = normPath;
+      t.s.secretScannedThisTurn = false;
+    }
     t.s.unanchoredSourceEdits = true;
+    const needsBootNudge = !t.s.sessionBooted && !t.s.sessionNudged;
+    if (needsBootNudge) t.s.sessionNudged = true;
+    const needsIntentionNudge = !needsBootNudge &&
+      t.s.editedFiles.length >= 3 && !t.s.hasActiveIntention && !t.s.intentionNudged;
+    if (needsIntentionNudge) t.s.intentionNudged = true;
     t.save(t.s);
+    if (needsBootNudge) {
+      queuePending(
+        payload.session_id,
+        'Vestige Autopilot: call session(action="start") to hydrate pinned rules & active intentions before editing further.'
+      );
+    } else if (needsIntentionNudge) {
+      queuePending(
+        payload.session_id,
+        `Vestige Autopilot [session]: ${t.s.editedFiles.length} source files edited with no active intention — call session(action="set_intention", intention="...") so progress survives compaction.`
+      );
+    }
   }
 
   if (!failed && payload.tool_name === 'Bash') {
     postCommitReceiptRun(cfg, payload);
+    if (payload.session_id && isGitCommitCommand(payload.tool_input && payload.tool_input.command)) {
+      const t = turnState(payload.session_id);
+      if (t.s.sensitiveFileEdited || t.s.secretScannedThisTurn) {
+        t.s.sensitiveFileEdited = '';
+        t.s.secretScannedThisTurn = false;
+        t.save(t.s);
+      }
+    }
   }
-  saveGateRun(cfg, payload, 'PostToolUse');
-  const rfxPayload = (payload.tool_name === 'Edit' || payload.tool_name === 'Write') &&
-    isScratchOrArtifactEdit(payload.tool_input && payload.tool_input.file_path, payload.artifact_dir)
-    ? null
-    : payload;
+  if (!failed && payload.tool_name === 'Read') {
+    return {};
+  }
+  const rfxPayload = normalizePayloadForReflex(payload);
   const rfxOut = rfxPayload ? await reflexRun(cfg, rfxPayload, failed ? 'PostToolUseFailure' : 'PostToolUse') : {};
   const ctx = extractContext(rfxOut);
   if (ctx) queuePending(payload.session_id, ctx);
@@ -742,20 +1022,24 @@ async function postToolUse(cfg, input) {
 async function sessionStart(cfg, input) {
   const payload = toClaudePayload(input, 'SessionStart');
   payload.source = input.source || 'startup';
-  turnoverSessionStart(cfg, payload);
 
-  const [intentions, mem, rfxOut] = await Promise.all([
+  const [, capsule, intentions, mem, rfxOut] = await Promise.all([
+    turnoverSessionStartAsync(cfg, payload),
+    capsuleRunAsync(cfg, payload.source, payload.cwd),
     intentionsStartContext(cfg, 750),
     memoryContext(cfg, payload, 'session', 800),
     reflexRun(cfg, payload, 'SessionStart'),
   ]);
-  const capsule = capsuleRun(cfg, payload.source, payload.cwd);
   const rfx = compactContext(extractContext(rfxOut), null, 450);
 
   const text = compactContext([intentions, capsule, rfx, mem].filter(Boolean).join('\n\n'), null, 2400);
-  if (payload.session_id && intentions) {
+  if (payload.session_id && (intentions || text)) {
     const t = turnState(payload.session_id);
-    t.s.intentionsShown = true;
+    if (intentions) {
+      t.s.intentionsShown = true;
+      t.s.hasActiveIntention = true;
+    }
+    if (text) t.s.sessionBooted = true;
     t.save(t.s);
   }
   log(cfg, { capsuleChars: capsule.length, intentionsChars: intentions.length, memChars: mem.length, reflexChars: rfx.length });
@@ -769,10 +1053,9 @@ async function preInvocation(cfg, input) {
   t.s.seenGhost = Array.isArray(t.s.seenGhost) ? t.s.seenGhost : [];
   const prompt = payload.prompt || '';
   const promptKey = crypto.createHash('sha256').update(prompt).digest('hex').slice(0, 16);
+  const isMidTurn = t.s.promptKey === promptKey && (input.invocationNum === undefined || Number(input.invocationNum) > 1);
   const parts = [];
   if (t.s.promptKey !== promptKey) {
-    const sgOut = saveGateRun(cfg, payload, 'UserPromptSubmit');
-    const sgCtx = extractContext(sgOut);
     const [mem, rfxOut, firstIntentions] = await Promise.all([
       memoryContext(cfg, payload, 'prompt', 900),
       reflexRun(cfg, payload, 'UserPromptSubmit'),
@@ -781,24 +1064,42 @@ async function preInvocation(cfg, input) {
     if (firstIntentions) {
       parts.push(firstIntentions);
       t.s.intentionsShown = true;
+      t.s.hasActiveIntention = true;
     }
-    const rfx = compactContext([sgCtx, extractContext(rfxOut)].filter(Boolean).join('\n'), t.s.seenGhost, 550);
+    const rfx = compactContext(extractContext(rfxOut), t.s.seenGhost, 550);
     if (rfx) parts.push(rfx);
     if (mem) parts.push(mem);
     t.s.promptKey = promptKey;
     t.s.rememberedThisTurn = false;
     t.s.unanchoredSourceEdits = false;
+    t.s.batchSettledStep = -1;
   } else {
-    const rfxOut = await reflexRun(cfg, payload, 'PostToolBatch');
-    const rfx = compactContext(extractContext(rfxOut), t.s.seenGhost, 550);
-    if (rfx) parts.push(rfx);
+    const stepKey = input.initialNumSteps ?? null;
+    if (stepKey !== null && t.s.batchSettledStep === stepKey) {
+      t.s.batchSettledStep = -1;
+    } else {
+      const rfxOut = await reflexRun(cfg, payload, 'PostToolBatch');
+      const rfx = compactContext(extractContext(rfxOut), t.s.seenGhost, 550);
+      if (rfx) parts.push(rfx);
+    }
   }
   if (t.s.pending) {
-    parts.unshift(compactContext(t.s.pending.trim(), t.s.seenGhost, 550));
+    parts.unshift(compactContext(t.s.pending.trim(), t.s.seenGhost, 650));
     t.s.pending = '';
   }
+  const finalBody = compactContext(parts.filter(Boolean).join('\n\n'), null, 1800);
+  if (finalBody && isMidTurn) {
+    const bodyHash = crypto.createHash('sha256').update(finalBody).digest('hex').slice(0, 12);
+    t.s.recentInjectHashes = Array.isArray(t.s.recentInjectHashes) ? t.s.recentInjectHashes : [];
+    if (t.s.recentInjectHashes.includes(bodyHash)) {
+      t.save(t.s);
+      log(cfg, { injected: 0, deduped: bodyHash });
+      return {};
+    }
+    t.s.recentInjectHashes.push(bodyHash);
+    if (t.s.recentInjectHashes.length > 8) t.s.recentInjectHashes.shift();
+  }
   t.save(t.s);
-  const finalBody = compactContext(parts.filter(Boolean).join('\n\n'), null, 1600);
   log(cfg, { injected: finalBody.length });
   return finalBody ? { injectSteps: [{ systemMessage: { systemMessage: finalBody } }] } : {};
 }
@@ -809,6 +1110,9 @@ async function postInvocation(cfg, input) {
   const rfxOut = await reflexRun(cfg, payload, 'PostToolBatch');
   const ctx = extractContext(rfxOut);
   if (ctx) queuePending(payload.session_id, ctx);
+  const t = turnState(payload.session_id);
+  t.s.batchSettledStep = input.initialNumSteps ?? -1;
+  t.save(t.s);
   return {};
 }
 
@@ -897,17 +1201,18 @@ function extractAutoSaveCandidate({ userText = '', assistantText = '', alreadyRe
     return null;
   }
 
-  const hasSignalHeading = /(?:^|\n|\*\*|\b)(?:root cause|decision|invariant|fix|fixed|verified|finding|milestone|regression|scorecard|shipped|installed)\b/i.test(body);
+  const hasSignalHeading = /(?:^|\n|\*\*|\b)(?:root cause|decision|decided|architecture|invariant|protocol|directive|fix|fixed|verified|finding|milestone|regression|scorecard|shipped|installed|upgraded)\b/i.test(body);
+  const hasExplicitDecision = /\b(?:decision:|we decided|architecture decision|standing rule|owner directive|invariant:|always use|never use|must always|must never)\b/i.test(body);
   const hasMetrics = /(?:R@\d+\s*=|All-Facts@\d+|Evidence Recall@\d+|Turn@\d+|Sess(?:ion)?@\d+|\b\d+\s*\/\s*\d+\s*pass(?:ed|ing)?\b|\bpass\s+\d+\s*\|\s*fail\s+0\b)/i.test(body);
   const files = extractRelativeFiles(body);
 
-  if (!((sawToolActivity && hasSignalHeading) || (hasMetrics && (files.length > 0 || hasSignalHeading)))) {
+  if (!((sawToolActivity && hasSignalHeading) || hasExplicitDecision || (directiveMatch && directiveMatch[0].trim().length >= 24) || (hasMetrics && (files.length > 0 || hasSignalHeading)))) {
     return null;
   }
 
   let nodeType = 'note';
-  if (/\b(?:decision|invariant|from now on|rule:)\b/i.test(body)) nodeType = 'decision';
-  else if (/\b(?:verified|shipped|milestone|installed|scorecard|R@\d+|All-Facts@)\b/i.test(body)) nodeType = 'milestone';
+  if (/\b(?:decision|decided|architecture|invariant|from now on|rule:|standing rule|owner directive)\b/i.test(body) || directiveMatch) nodeType = 'decision';
+  else if (/\b(?:verified|shipped|milestone|installed|upgraded|scorecard|R@\d+|All-Facts@)\b/i.test(body)) nodeType = 'milestone';
   else if (/\b(?:root cause|fixed|regression)\b/i.test(body)) nodeType = 'event';
 
   const summary = body.slice(0, 1200).trim();
@@ -940,19 +1245,42 @@ async function autoSaveAtStop(cfg, input, payload) {
     t.s.seenAutoSaves = Array.isArray(t.s.seenAutoSaves) ? t.s.seenAutoSaves : [];
     if (t.s.seenAutoSaves.includes(sig)) return null;
 
-    const client = await openRpc(cfg, Math.min(2500, cfg.memoryDeadlineMs || 2500));
+    const client = await openRpc(cfg, Math.min(5000, cfg.memoryDeadlineMs || 5000));
     if (!client) return null;
     try {
-      const res = await client.tool('remember', {
+      const autoNodeType = (candidate.node_type === 'decision' || candidate.node_type === 'pattern')
+        ? 'note'
+        : candidate.node_type;
+      const autoTags = candidate.node_type === 'decision'
+        ? [...new Set([...candidate.tags, 'auto-decision'])]
+        : candidate.tags;
+      const hasLineFrames = /[A-Za-z0-9_./-]+\.[A-Za-z0-9]+:\d+/.test(candidate.content);
+      const baseArgs = {
         action: 'save',
-        node_type: candidate.node_type,
+        node_type: autoNodeType,
         content: candidate.content,
-        tags: candidate.tags,
+        tags: autoTags,
         ...(candidate.entities.length ? { entities: candidate.entities } : {}),
-        ...(candidate.files.length ? { files: candidate.files } : {}),
-        ...(payload.cwd && fs.existsSync(payload.cwd) ? { repo_path: payload.cwd } : {}),
         intent_id: `auto-stop-${sig}`,
-      });
+      };
+      let res = null;
+      if (hasLineFrames && candidate.files.length > 0 && payload.cwd && fs.existsSync(payload.cwd)) {
+        try {
+          res = await client.tool('remember', {
+            ...baseArgs,
+            files: candidate.files,
+            repo_path: payload.cwd,
+          });
+        } catch {
+          res = null;
+        }
+      }
+      if (!res || (!res.nodeId && !res.echoNodeId && !res.replayOf)) {
+        res = await client.tool('remember', {
+          ...baseArgs,
+          scope: 'personal',
+        });
+      }
       t.s.seenAutoSaves.push(sig);
       if (t.s.seenAutoSaves.length > 32) t.s.seenAutoSaves.shift();
       t.save(t.s);
@@ -962,7 +1290,7 @@ async function autoSaveAtStop(cfg, input, payload) {
       client.close();
     }
   } catch (e) {
-    log(cfg, { autoSaveError: String(e && e.message) });
+    logError(cfg, 'autoSaveAtStop', String(e && e.message));
     return null;
   }
 }
@@ -980,15 +1308,11 @@ async function stop(cfg, input) {
       tool_input: { action: 'save' },
       tool_response: { exit_code: 0, nodeId: autoId, success: true },
     };
-    saveGateRun(cfg, settlePayload, 'PostToolUse');
     await reflexRun(cfg, settlePayload, 'PostToolUse');
   }
 
   const rfxOut = await reflexRun(cfg, payload, 'Stop');
-  const sgOut = saveGateRun(cfg, payload, 'Stop');
-  const blockReason = (rfxOut && rfxOut.decision === 'block' && rfxOut.reason)
-    || (sgOut && sgOut.decision === 'block' && sgOut.reason)
-    || '';
+  const blockReason = (rfxOut && rfxOut.decision === 'block' && rfxOut.reason) || '';
 
   const t = payload.session_id ? turnState(payload.session_id) : null;
   const alreadyBlockedPrompt = t && t.s.promptKey && t.s.stopBlockedPromptKey === t.s.promptKey;
@@ -1028,11 +1352,13 @@ async function main() {
 }
 
 module.exports = {
+  SENSITIVE_READ_RE,
   toClaudeTool,
   toClaudePayload,
   isGitCommitCommand,
   extractGitRepoFromCommand,
-  normalizePathForSaveGate,
+  normalizePathForReflex,
+  normalizePathForSaveGate: normalizePathForReflex,
   isScratchOrArtifactEdit,
   extractMcpResponseFromTranscript,
   readLatestTurnFromTranscript,

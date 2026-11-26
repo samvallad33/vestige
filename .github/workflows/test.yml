@@ -166,6 +166,35 @@ jobs:
             --test rules_hook_cli
           cargo test -p vestige-upgrade
 
+  antigravity-hooks-e2e:
+    name: Antigravity 6-Tool E2E Hooks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build v7 vestige & vestige-mcp binaries
+        run: cargo build -p vestige-mcp --bins
+      - name: Run undeniable Antigravity E2E hook suite against live Rust binary
+        shell: bash
+        run: |
+          ext=""
+          if [ "${{ runner.os }}" = "Windows" ]; then ext=".exe"; fi
+          export VESTIGE_MCP_BIN="$PWD/target/debug/vestige-mcp${ext}"
+          export VESTIGE_BIN="$PWD/target/debug/vestige${ext}"
+          node --test packages/vestige-init/test/antigravity-hooks-liveness.test.js
+
   dashboard:
     name: Dashboard Build
     runs-on: ubuntu-latest

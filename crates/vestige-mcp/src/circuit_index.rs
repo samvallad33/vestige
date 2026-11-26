@@ -106,10 +106,19 @@ struct CircuitEdge {
 #[derive(Default)]
 struct StoreCircuitCache {
     fingerprint: (usize, usize, usize, usize, u64),
+    head_seq: Option<u64>,
+    last_labile_hash: u64,
+    last_delta_seq: u64,
+    delta_seq: u64,
     nodes: Vec<IndexedNode>,
     id_to_idx: HashMap<String, u32>,
     postings: HashMap<String, Vec<u32>>,
     adj: Vec<Vec<CircuitEdge>>,
+    scope_ids: HashMap<String, HashSet<String>>,
+    receipts: Vec<Value>,
+    scores: BTreeMap<String, i128>,
+    links_by_id: HashMap<String, Vec<vestige_core::retrieval::TurnLink>>,
+    entity_tags_lower: Vec<Vec<(String, String, Option<String>)>>,
     zset: ZSet<String>,
 }
 
@@ -125,8 +134,8 @@ pub fn mark_zset_delta(storage: &Storage, key: &str, weight: i64) {
     if let Ok(mut reg) = cache_registry().lock() {
         let entry = reg.entry(dir).or_default();
         entry.zset.apply_delta(key.to_string(), weight);
-        // Bump generation salt inside fingerprint to trigger exact sync on next read.
-        entry.fingerprint.4 = entry.fingerprint.4.wrapping_add(1);
+        // Bump generation salt to trigger exact sync on next read.
+        entry.delta_seq = entry.delta_seq.wrapping_add(1);
     }
 }
 
@@ -184,26 +193,62 @@ fn sync_cache<'a>(
     cache: &'a mut StoreCircuitCache,
     storage: &Storage,
     labile_ids: &HashSet<String>,
+    scope: Option<&str>,
 ) -> &'a StoreCircuitCache {
-    let all_nodes = storage.get_all_nodes(i32::MAX, 0).unwrap_or_default();
-    let all_edges = storage.get_all_connections().unwrap_or_default();
-    let receipts = storage.salience_receipts().unwrap_or_default();
-    let retired = storage.superseded_node_ids().unwrap_or_default();
-
     let mut labile_hash: u64 = labile_ids.len() as u64;
     for id in labile_ids {
         for b in id.as_bytes() {
             labile_hash = labile_hash.wrapping_mul(131).wrapping_add(*b as u64);
         }
     }
+    let live_head = crate::strata_memory::head_seq(storage);
+    if live_head.is_some()
+        && cache.head_seq == live_head
+        && cache.last_labile_hash == labile_hash
+        && cache.last_delta_seq == cache.delta_seq
+        && !cache.nodes.is_empty()
+    {
+        if let Some(sc) = scope
+            && !cache.scope_ids.contains_key(sc)
+        {
+            let ids: HashSet<String> = storage
+                .get_all_nodes_in_scope(sc, i32::MAX, 0)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|n| n.id)
+                .collect();
+            cache.scope_ids.insert(sc.to_string(), ids);
+        }
+        return cache;
+    }
+
+    let all_nodes = storage.get_all_nodes(i32::MAX, 0).unwrap_or_default();
+    let all_edges = storage.get_all_connections().unwrap_or_default();
+    let receipts = storage.salience_receipts().unwrap_or_default();
+    let retired = storage.superseded_node_ids().unwrap_or_default();
+
     let fp = (
         all_nodes.len(),
         all_edges.len(),
         receipts.len(),
         retired.len(),
-        labile_hash ^ (cache.zset.weights.len() as u64),
+        labile_hash ^ cache.delta_seq,
     );
     if cache.fingerprint == fp && !cache.nodes.is_empty() {
+        cache.head_seq = live_head;
+        cache.last_labile_hash = labile_hash;
+        cache.last_delta_seq = cache.delta_seq;
+        if let Some(sc) = scope
+            && !cache.scope_ids.contains_key(sc)
+        {
+            let ids: HashSet<String> = storage
+                .get_all_nodes_in_scope(sc, i32::MAX, 0)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|n| n.id)
+                .collect();
+            cache.scope_ids.insert(sc.to_string(), ids);
+        }
         return cache;
     }
 
@@ -211,6 +256,11 @@ fn sync_cache<'a>(
     cache.nodes.clear();
     cache.id_to_idx.clear();
     cache.postings.clear();
+    cache.scope_ids.clear();
+    cache.links_by_id.clear();
+    cache.entity_tags_lower.clear();
+    cache.zset.weights.clear();
+    cache.scores = crate::tools::memory_packet::scores_from_receipts(&receipts);
 
     // Hebbian retroactive edge/node plasticity (#854) from signed salience receipts.
     let mut hebbian_node_q: HashMap<String, i64> = HashMap::new();
@@ -273,6 +323,22 @@ fn sync_cache<'a>(
         let heb = hebbian_node_q.get(&node.id).copied().unwrap_or(0);
         cache.zset.apply_delta(node.id.clone(), 1);
         cache.id_to_idx.insert(node.id.clone(), idx);
+        let mut ent_tags = Vec::new();
+        for tag in &node.tags {
+            if ["person:", "place:", "food:", "file:", "service:", "symbol:"]
+                .iter()
+                .any(|prefix| tag.starts_with(prefix))
+            {
+                let low = tag.to_lowercase();
+                let leaf = if low.starts_with("symbol:") {
+                    low.rsplit_once(':').map(|(_, l)| l.to_string())
+                } else {
+                    None
+                };
+                ent_tags.push((tag.clone(), low, leaf));
+            }
+        }
+        cache.entity_tags_lower.push(ent_tags);
         cache.nodes.push(IndexedNode {
             id: node.id.clone(),
             idx,
@@ -290,6 +356,26 @@ fn sync_cache<'a>(
     // Build raw adjacency first so we can apply GhostLink hub-degree damping 1/sqrt(deg(u)*deg(v)).
     let mut raw_edges: Vec<(u32, u32, String, i64, bool)> = Vec::new();
     for e in &all_edges {
+        if !e.source_id.is_empty() && !e.target_id.is_empty() && e.source_id != e.target_id {
+            cache
+                .links_by_id
+                .entry(e.source_id.clone())
+                .or_default()
+                .push(vestige_core::retrieval::TurnLink {
+                    kind: e.link_type.clone(),
+                    to: e.target_id.clone(),
+                    degree: 2,
+                });
+            cache
+                .links_by_id
+                .entry(e.target_id.clone())
+                .or_default()
+                .push(vestige_core::retrieval::TurnLink {
+                    kind: e.link_type.clone(),
+                    to: e.source_id.clone(),
+                    degree: 2,
+                });
+        }
         let (Some(&u), Some(&v)) = (
             cache.id_to_idx.get(&e.source_id),
             cache.id_to_idx.get(&e.target_id),
@@ -358,7 +444,108 @@ fn sync_cache<'a>(
     }
 
     cache.fingerprint = fp;
+    cache.head_seq = live_head;
+    cache.last_labile_hash = labile_hash;
+    cache.last_delta_seq = cache.delta_seq;
+    cache.receipts = receipts;
+    if let Some(sc) = scope {
+        let ids: HashSet<String> = storage
+            .get_all_nodes_in_scope(sc, i32::MAX, 0)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|n| n.id)
+            .collect();
+        cache.scope_ids.insert(sc.to_string(), ids);
+    }
     cache
+}
+
+/// Prewarm the cached GhostCurrent circuit and store snapshot on daemon startup.
+pub fn prewarm(storage: &Storage, scope: &str) {
+    let dir = storage.data_dir().to_path_buf();
+    let empty_labile = HashSet::new();
+    let mut reg = cache_registry().lock().unwrap_or_else(|e| e.into_inner());
+    let cache = reg.entry(dir).or_default();
+    let _ = sync_cache(cache, storage, &empty_labile, Some(scope));
+}
+
+/// Cached snapshot returned cleanly for `memory_packet::packet` when Strata log is live.
+pub struct CachedPacketSnapshot {
+    pub nodes: Vec<KnowledgeNode>,
+    pub scores: BTreeMap<String, i128>,
+    pub receipts: Vec<Value>,
+    pub entities: BTreeSet<String>,
+}
+
+fn word_phrase_match(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    haystack.match_indices(needle).any(|(at, _)| {
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        haystack[..at].chars().next_back().is_none_or(|c| !word(c))
+            && haystack[at + needle.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !word(c))
+    })
+}
+
+/// Read the cached live scoped nodes, scores, receipts, and matched entity tags for
+/// `memory_packet::packet` in O(1) when `head_seq` has not advanced.
+pub fn cached_packet_snapshot(
+    storage: &Storage,
+    scope: &str,
+    labile_ids: &HashSet<String>,
+    prompt_lower: &str,
+    now: DateTime<Utc>,
+) -> CachedPacketSnapshot {
+    let dir = storage.data_dir().to_path_buf();
+    let mut reg = cache_registry().lock().unwrap_or_else(|e| e.into_inner());
+    let cache = reg.entry(dir).or_default();
+    let cache = sync_cache(cache, storage, labile_ids, Some(scope));
+    let scope_set = cache.scope_ids.get(scope);
+    let mut nodes = Vec::new();
+    let mut entities = BTreeSet::new();
+    for (idx, nd) in cache.nodes.iter().enumerate() {
+        let in_scope = scope_set.is_some_and(|set| set.contains(&nd.id));
+        if !in_scope
+            || nd.retired
+            || nd.node.valid_from.is_some_and(|t| t > now)
+            || nd.node.valid_until.is_some_and(|t| t <= now)
+        {
+            continue;
+        }
+        if !prompt_lower.is_empty()
+            && let Some(ent_tags) = cache.entity_tags_lower.get(idx)
+        {
+            for (orig, low, leaf_opt) in ent_tags {
+                if entities.contains(orig.as_str()) {
+                    continue;
+                }
+                let matched = word_phrase_match(prompt_lower, low)
+                    || low
+                        .split_once(':')
+                        .is_some_and(|(_, surf)| word_phrase_match(prompt_lower, surf))
+                    || leaf_opt.as_deref().is_some_and(|leaf| {
+                        !leaf.is_empty()
+                            && (word_phrase_match(prompt_lower, leaf)
+                                || (leaf.contains('~')
+                                    && word_phrase_match(prompt_lower, &leaf.replace('~', " "))))
+                    });
+                if matched {
+                    entities.insert(orig.clone());
+                }
+            }
+        }
+        nodes.push(nd.node.clone());
+    }
+    CachedPacketSnapshot {
+        nodes,
+        scores: cache.scores.clone(),
+        receipts: cache.receipts.clone(),
+        entities,
+    }
 }
 
 /// Query options for the unified GhostCurrent circuit.
@@ -395,7 +582,7 @@ pub fn query_circuit(storage: &Storage, req: &CircuitQuery<'_>) -> CircuitRespon
     let dir = storage.data_dir().to_path_buf();
     let mut reg = cache_registry().lock().unwrap_or_else(|e| e.into_inner());
     let cache = reg.entry(dir).or_default();
-    let cache = sync_cache(cache, storage, req.labile_ids);
+    let cache = sync_cache(cache, storage, req.labile_ids, req.scope);
     let n = cache.nodes.len();
     if n == 0 {
         return CircuitResponse {
@@ -414,12 +601,13 @@ pub fn query_circuit(storage: &Storage, req: &CircuitQuery<'_>) -> CircuitRespon
         };
     }
 
-    // Step 1: Scope & temporal admissibility mask.
+    // Step 1: Scope & temporal admissibility mask (O(1) cached scope membership lookup).
     let now = req.valid_at.unwrap_or_else(Utc::now);
+    let scope_set = req.scope.and_then(|sc| cache.scope_ids.get(sc));
     let mut allowed = vec![false; n];
     for node in &cache.nodes {
-        let in_scope = match req.scope {
-            Some(sc) => storage.node_is_in_scope(&node.id, sc).unwrap_or(true),
+        let in_scope = match scope_set {
+            Some(set) => set.contains(&node.id),
             None => true,
         };
         if !in_scope {
@@ -492,17 +680,50 @@ pub fn query_circuit(storage: &Storage, req: &CircuitQuery<'_>) -> CircuitRespon
     }
 
     // Step 3: Blend with Stara (`vestige_core::retrieval::rank`) lexical/temporal anchors
-    // over the allowed candidate neighborhood so exact multi-hop & temporal rules carry through.
-    let active_nodes: Vec<KnowledgeNode> = cache
-        .nodes
-        .iter()
-        .filter(|nd| allowed[nd.idx as usize])
-        .map(|nd| nd.node.clone())
-        .collect();
-    if !active_nodes.is_empty() && active_nodes.len() <= 2_500 {
-        let stara_hits = crate::tools::recall::rank_loaded_nodes_total_recall(
-            storage,
-            &active_nodes,
+    // over a bounded top candidate neighborhood (full set when small, top candidates +
+    // 1-hop neighbors when store > 250 nodes) so latency stays sub-10ms on 10K+ stores.
+    let stara_pool: Vec<KnowledgeNode> = if n <= 250 {
+        cache
+            .nodes
+            .iter()
+            .filter(|nd| allowed[nd.idx as usize])
+            .map(|nd| nd.node.clone())
+            .collect()
+    } else {
+        let mut ranked_cands: Vec<(usize, i64)> = candidate_set
+            .iter()
+            .filter(|&&idx| allowed[idx as usize])
+            .map(|&idx| (idx as usize, source_current[idx as usize]))
+            .collect();
+        ranked_cands.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        ranked_cands.truncate(96);
+        let mut pool_idx: BTreeSet<usize> = BTreeSet::new();
+        for &(i, _) in &ranked_cands {
+            pool_idx.insert(i);
+            for e in cache.adj[i].iter().take(4) {
+                let nbr = e.to as usize;
+                if allowed[nbr] {
+                    pool_idx.insert(nbr);
+                }
+                if pool_idx.len() >= 160 {
+                    break;
+                }
+            }
+            if pool_idx.len() >= 160 {
+                break;
+            }
+        }
+        pool_idx
+            .into_iter()
+            .map(|i| cache.nodes[i].node.clone())
+            .collect()
+    };
+    if !stara_pool.is_empty() {
+        let stara_hits = crate::tools::recall::rank_loaded_nodes_preloaded(
+            &stara_pool,
+            Some(&cache.links_by_id),
+            &cache.receipts,
+            None,
             req.query,
             req.top_k.saturating_mul(4).max(24),
         );

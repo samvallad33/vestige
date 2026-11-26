@@ -14,6 +14,22 @@ const VESTIGE_LEAVES = new Set([
   'memory', 'smart_ingest', 'ghostlink',
 ]);
 
+// Canonical parameter allowlists for the 6 advertised MCP tools so learned alias rules
+// never corrupt a valid field (e.g. never rewrite `precedent.limit` -> `action`).
+const VALID_TOOL_KEYS = {
+  session: new Set(['action', 'params', 'cwd', 'repo_tag', 'view', 'tool', 'intention', 'id', 'format', 'path', 'write', 'confirm', 'min_retention', 'max_items', 'scope', 'tags', 'memory_hook', 'source']),
+  remember: new Set(['action', 'params', 'content', 'source', 'outputProfile', 'items', 'node_type', 'nodeType', 'tags', 'repo_path', 'files', 'allow_secrets', 'scope', 'entities', 'links', 'attributes', 'provenance', 'intent_id', 'valid_from', 'valid_until', 'supersedes']),
+  recall: new Set(['handle', 'query', 'scope', 'limit', 'offset', 'detail_level', 'valid_at', 'include_suppressed', 'include_retired', 'min_retention', 'node_type', 'sort']),
+  causal_walk: new Set(['action', 'from_handle', 'start_points', 'scope', 'direction', 'max_hops', 'scan_limit', 'commit', 'repoPath', 'include_evidence', 'valid_at', 'provenance']),
+  curate: new Set(['action', 'params', 'scope', 'id', 'memoryId', 'source_id', 'target_id', 'link_type', 'content', 'reason', 'role', 'identity_a', 'identity_b', 'confirm', 'note']),
+  precedent: new Set(['query', 'receipt_id', 'since', 'cwd', 'source', 'session', 'rule', 'decision', 'limit', 'repository', 'agent', 'scope', 'commit', 'failure_id', 'out', 'params', 'remove_edge', 'repoPath', 'scan_limit', 'withheld_slots']),
+};
+
+const PRECEDENT_QUERIES = new Set([
+  'stops', 'receipt', 'replay', 'prove', 'forgotten_lesson',
+  'verify_log', 'scan_secrets', 'selftest', 'reopen_triangle',
+]);
+
 function vestigeLeaf(toolName) {
   if (typeof toolName !== 'string' || !toolName) return null;
   const low = toolName.trim();
@@ -153,14 +169,32 @@ function coachPreToolUse(toolName, toolInput, learnedRules = []) {
     }
   }
 
-  // CC-009: On precedent (get/inspect/receipt/replay/default), rename `id` or `digest` -> `receipt_id`.
-  if (leaf === 'precedent' && (!has('action') || next.action === 'get' || next.action === 'inspect' || next.query === 'receipt' || next.query === 'replay') && !has('receipt_id')) {
-    const srcKey = has('id') ? 'id' : (has('digest') ? 'digest' : null);
-    if (srcKey) {
-      next.receipt_id = next[srcKey];
-      delete next[srcKey];
+  // CC-013: On curate, normalize `action: "update"` -> `"edit"`.
+  if (leaf === 'curate' && next.action === 'update') {
+    next.action = 'edit';
+    applied.push('CC-013');
+    notes.push('[CC-013] normalized curate action update -> edit');
+  }
+
+  // CC-009: On precedent, map `action` -> `query` when valid, and rename `id` or `digest` -> `receipt_id`.
+  if (leaf === 'precedent') {
+    let precTouched = false;
+    if (!has('query') && typeof next.action === 'string' && PRECEDENT_QUERIES.has(next.action)) {
+      next.query = next.action;
+      delete next.action;
+      precTouched = true;
+    }
+    if ((!has('action') || next.action === 'get' || next.action === 'inspect' || next.query === 'receipt' || next.query === 'replay') && !has('receipt_id')) {
+      const srcKey = has('id') ? 'id' : (has('digest') ? 'digest' : null);
+      if (srcKey) {
+        next.receipt_id = next[srcKey];
+        delete next[srcKey];
+        precTouched = true;
+      }
+    }
+    if (precTouched) {
       applied.push('CC-009');
-      notes.push(`[CC-009] renamed alias ${srcKey} -> receipt_id`);
+      notes.push('[CC-009] normalized precedent query/receipt_id selector');
     }
   }
 
@@ -217,9 +251,12 @@ function coachPreToolUse(toolName, toolInput, learnedRules = []) {
     notes.push('[CC-005] defaulted causal_walk scan_limit=500 (set scan_limit explicitly to override)');
   }
 
-  // Learned alias rules from PostToolUseFailure provenance
+  // Learned alias rules from PostToolUseFailure provenance (never clobber a valid schema key)
+  const validKeys = VALID_TOOL_KEYS[leaf];
   for (const r of learnedRules) {
     if (r && r.leaf === leaf && r.badKey && r.goodKey &&
+        !(validKeys && validKeys.has(r.badKey)) &&
+        (!validKeys || validKeys.has(r.goodKey)) &&
         Object.prototype.hasOwnProperty.call(next, r.badKey) &&
         !Object.prototype.hasOwnProperty.call(next, r.goodKey)) {
       next[r.goodKey] = next[r.badKey];
@@ -315,13 +352,17 @@ function argumentsFor(client, event, input) {
       ? toolInput.file_path
       : (typeof toolInput.path === 'string'
         ? toolInput.path
-        : (typeof toolInput.TargetFile === 'string'
-          ? toolInput.TargetFile
-          : (typeof toolInput.notebook_path === 'string'
-            ? toolInput.notebook_path
-            : (Array.isArray(toolInput.edits) && toolInput.edits[0] && typeof toolInput.edits[0].file_path === 'string'
-              ? toolInput.edits[0].file_path
-              : '')))),
+        : (typeof toolInput.AbsolutePath === 'string'
+          ? toolInput.AbsolutePath
+          : (typeof toolInput.TargetFile === 'string'
+            ? toolInput.TargetFile
+            : (typeof toolInput.Path === 'string'
+              ? toolInput.Path
+              : (typeof toolInput.notebook_path === 'string'
+                ? toolInput.notebook_path
+                : (Array.isArray(toolInput.edits) && toolInput.edits[0] && typeof toolInput.edits[0].file_path === 'string'
+                  ? toolInput.edits[0].file_path
+                  : '')))))),
     cwd: pick('cwd'),
     summary: pick('compact_summary'),
     trigger: pick('trigger'),
@@ -440,7 +481,10 @@ async function run({ client, configFile, eventFlag, input, deadlineMs = 450 }) {
       if (!mergedDecision.permissionDecisionReason) mergedDecision.permissionDecisionReason = coached.note;
     }
     return hostOutput(client, event, context, mergedDecision);
-  } catch {
+  } catch (err) {
+    if (process.env.VESTIGE_REFLEX_SURFACE_ERROR === '1') {
+      return { _reflexError: String((err && err.message) || err || 'reflex unavailable') };
+    }
     return {};
   } finally {
     if (transport) transport.close();

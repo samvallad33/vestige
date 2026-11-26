@@ -9,7 +9,8 @@
 //! the store's PROPOSE -> GATE -> EFFECT path and reports its receipt.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -679,12 +680,35 @@ pub fn propose_with(memory: &StrataMemory, request: &ProposeRequest) -> Result<V
 /// hook must not fail.
 pub fn reflex_line(storage: &Storage, event: &str) -> Option<String> {
     live_memory(storage)?;
+    if !matches!(event, "UserPromptSubmit" | "SessionStart" | "Stop" | "SubagentStop") {
+        return None;
+    }
+    type ReflexLineCacheMap = HashMap<(PathBuf, String), (u64, Option<String>)>;
+    static REFLEX_LINE_CACHE: OnceLock<Mutex<ReflexLineCacheMap>> = OnceLock::new();
+    let dir = storage.data_dir().to_path_buf();
+    let head = crate::strata_memory::head_seq(storage);
+    if let Some(h) = head {
+        let cache = REFLEX_LINE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Ok(guard) = cache.lock()
+            && let Some((cached_head, cached_line)) = guard.get(&(dir.clone(), event.to_string()))
+            && *cached_head == h
+        {
+            return cached_line.clone();
+        }
+    }
     let line = match event {
         "UserPromptSubmit" | "SessionStart" => propose_reflex_line(storage),
         "Stop" | "SubagentStop" => unclosed_reflex_line(storage),
         _ => None,
-    };
-    line.filter(|text| !text.is_empty())
+    }
+    .filter(|text| !text.is_empty());
+    if let Some(h) = head {
+        let cache = REFLEX_LINE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Ok(mut guard) = cache.lock() {
+            guard.insert((dir, event.to_string()), (h, line.clone()));
+        }
+    }
+    line
 }
 
 fn propose_reflex_line(storage: &Storage) -> Option<String> {

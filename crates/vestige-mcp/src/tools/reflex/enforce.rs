@@ -134,6 +134,18 @@ pub(super) struct TurnLedger {
     /// Consecutive identical failures without an intervening file edit.
     #[serde(default)]
     pub consecutive_same_fail: u32,
+    /// Mid-conversation anti-spiral stage (0=normal, 1=must call recall/causal_walk, 2=must call search_web/invoke_subagent).
+    #[serde(default)]
+    pub spiral_stage: u8,
+    /// Canonical failure signature that triggered `spiral_stage`.
+    #[serde(default)]
+    pub spiral_sig: String,
+    /// True once `causal_walk` or `recall` ran after the current failure cycle.
+    #[serde(default)]
+    pub spiral_investigated: bool,
+    /// True once `search_web` or `invoke_subagent` ran after escalating to stage 2.
+    #[serde(default)]
+    pub spiral_escalated: bool,
     /// Transient one-shot owner HALT directive captured in `observe` for `decide`.
     #[serde(skip)]
     pub pending_steer_halt: Option<String>,
@@ -155,6 +167,10 @@ impl TurnLedger {
         self.tool_calls_this_turn = 0;
         self.last_fail_key.clear();
         self.consecutive_same_fail = 0;
+        self.spiral_stage = 0;
+        self.spiral_sig.clear();
+        self.spiral_investigated = false;
+        self.spiral_escalated = false;
         self.pending_steer_halt = None;
     }
 }
@@ -444,6 +460,18 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
                     s.ledger.last_fail_key.clear();
                     s.ledger.consecutive_same_fail = 0;
                 }
+                if is_recall_or_walk(inp)
+                    && (s.ledger.spiral_stage >= 1
+                        || !s.ledger.unpaired.is_empty()
+                        || s.ledger.consecutive_same_fail >= 1)
+                {
+                    s.ledger.spiral_investigated = true;
+                }
+                if is_web_or_subagent(inp)
+                    && (s.ledger.spiral_stage >= 1 || !s.ledger.unpaired.is_empty())
+                {
+                    s.ledger.spiral_escalated = true;
+                }
             }
             if pairing::is_shell(&inp.tool) {
                 super::lease::release_mutex_for_session(storage.data_dir(), &inp.session);
@@ -471,16 +499,39 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
         "PostToolUseFailure" => {
             note_failure(g, inp);
             let fail_key = super::lease::failure_key(&inp.tool, &inp.file, &inp.command);
-            {
+            let spiral_msg = {
                 let s = g.session(&inp.session);
                 s.ledger.tool_calls_this_turn = s.ledger.tool_calls_this_turn.saturating_add(1);
                 if s.ledger.last_fail_key == fail_key {
                     s.ledger.consecutive_same_fail =
                         s.ledger.consecutive_same_fail.saturating_add(1);
                 } else {
-                    s.ledger.last_fail_key = fail_key;
+                    s.ledger.last_fail_key = fail_key.clone();
                     s.ledger.consecutive_same_fail = 1;
                 }
+                let already_failed_once = s.ledger.consecutive_same_fail >= 2;
+                let failed_after_investigation = s.ledger.spiral_investigated && !s.ledger.spiral_escalated;
+                if failed_after_investigation {
+                    s.ledger.spiral_stage = 2;
+                    s.ledger.spiral_sig = fail_key.clone();
+                    Some(format!(
+                        "Vestige Anti-Spiral [Stage 2]: `{fail_key}` failed again even after `causal_walk`/`recall`. Stop editing or retrying locally — call `search_web` or `invoke_subagent` (Agent/WebSearch) before your next mutation."
+                    ))
+                } else if already_failed_once {
+                    if s.ledger.spiral_stage < 1 {
+                        s.ledger.spiral_stage = 1;
+                        s.ledger.spiral_sig = fail_key.clone();
+                    }
+                    Some(format!(
+                        "Vestige Anti-Spiral [Stage 1]: `{fail_key}` failed {} consecutive times. Do not retry blindly — call `causal_walk` or `recall` first.",
+                        s.ledger.consecutive_same_fail
+                    ))
+                } else {
+                    None
+                }
+            };
+            if let Some(msg) = spiral_msg {
+                lines.push(msg);
             }
             if pairing::is_shell(&inp.tool) {
                 super::lease::release_mutex_for_session(storage.data_dir(), &inp.session);
@@ -887,11 +938,27 @@ fn note_success(g: &mut Global, inp: &Input) {
     if is_prove(inp) {
         s.ledger.unpaired.retain(|u| u.agent != agent);
     }
+    if !s
+        .ledger
+        .unpaired
+        .iter()
+        .any(|u| u.agent == agent && u.turn == s.turn)
+        && pairing::is_shell(&inp.tool)
+    {
+        s.ledger.last_fail_key.clear();
+        s.ledger.consecutive_same_fail = 0;
+        s.ledger.spiral_stage = 0;
+        s.ledger.spiral_sig.clear();
+        s.ledger.spiral_investigated = false;
+        s.ledger.spiral_escalated = false;
+    }
     if is_edit_tool(&inp.tool)
         && !inp.file.is_empty()
-        && !s.ledger.edited.iter().any(|f| f == &inp.file)
     {
-        s.ledger.edited.push(inp.file.clone());
+        let norm = normalize_repo_path(&inp.file, &inp.cwd);
+        if !norm.is_empty() && !s.ledger.edited.iter().any(|f| f == &norm) {
+            s.ledger.edited.push(norm);
+        }
     }
     if pairing::is_shell(&inp.tool)
         && is_git_commit(&inp.command)
@@ -1150,6 +1217,12 @@ fn pre_tool_decision(g: &mut Global, inp: &Input, storage: &Arc<Storage>, d: &mu
             d.permission_reason = Some(reason);
             return;
         }
+    }
+    // Mid-Conversation Anti-Spiral Interrupt (Level 1: recall/causal_walk -> Level 2: search_web/invoke_subagent).
+    if let Some(deny_reason) = anti_spiral_pre_tool_check(g, inp, &current_fail_key) {
+        d.permission_decision = Some("deny".into());
+        d.permission_reason = Some(deny_reason);
+        return;
     }
     if let Err(deny_reason) = coach_check_limits(inp) {
         d.permission_decision = Some("deny".into());
@@ -1661,6 +1734,13 @@ fn debts(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Vec<String> {
             ));
         }
     }
+    let missing_files = unsaved(g, &inp.session);
+    if !missing_files.is_empty() {
+        reasons.push(format!(
+            "Turn blocked: files [{}] have no remember(...) receipt this turn.",
+            missing_files.join(", ")
+        ));
+    }
     let unpaired: Vec<Unpaired> = g
         .session(&inp.session)
         .ledger
@@ -2118,6 +2198,103 @@ fn is_prove(inp: &Input) -> bool {
         .and_then(Value::as_str)
         .unwrap_or("");
     (leaf == "causal_walk" || leaf == "prove") && action == "prove"
+}
+
+fn is_recall_or_walk(inp: &Input) -> bool {
+    matches!(tool_leaf(&inp.tool), "recall" | "causal_walk" | "prove")
+}
+
+fn is_web_or_subagent(inp: &Input) -> bool {
+    matches!(
+        tool_leaf(&inp.tool),
+        "WebSearch"
+            | "WebFetch"
+            | "search_web"
+            | "read_url_content"
+            | "fetch_url"
+            | "web_search"
+            | "Agent"
+            | "Task"
+            | "invoke_subagent"
+            | "swarm"
+            | "run_workflow"
+    )
+}
+
+fn normalize_repo_path(raw: &str, cwd: &str) -> String {
+    let trimmed = raw
+        .trim()
+        .split('#')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(|c: char| c.is_ascii_digit() || c == ':')
+        .replace('\\', "/");
+    let stripped = trimmed.strip_prefix("./").unwrap_or(&trimmed);
+    if cwd.is_empty() {
+        return stripped.to_string();
+    }
+    let cwd_norm = cwd.trim().replace('\\', "/");
+    let cwd_prefix = cwd_norm.trim_end_matches('/');
+    if stripped.len() > cwd_prefix.len()
+        && stripped.as_bytes().get(cwd_prefix.len()) == Some(&b'/')
+        && stripped[..cwd_prefix.len()].eq_ignore_ascii_case(cwd_prefix)
+    {
+        return stripped[cwd_prefix.len() + 1..]
+            .trim_start_matches("./")
+            .to_string();
+    }
+    stripped.to_string()
+}
+
+fn anti_spiral_pre_tool_check(
+    g: &Global,
+    inp: &Input,
+    current_fail_key: &str,
+) -> Option<String> {
+    let s = g.sessions.get(&inp.session)?;
+    let is_edit = is_edit_tool(&inp.tool);
+    let is_shell = pairing::is_shell(&inp.tool);
+    if !is_edit && !is_shell {
+        return None;
+    }
+    let same_failing_retry = is_shell
+        && !current_fail_key.is_empty()
+        && s.ledger.last_fail_key == current_fail_key
+        && s.ledger.consecutive_same_fail >= 1;
+    let has_open_turn_failure = s
+        .ledger
+        .unpaired
+        .iter()
+        .any(|u| u.agent == inp.agent && u.turn == s.turn);
+
+    if s.ledger.spiral_stage >= 2 && !s.ledger.spiral_escalated && (is_edit || same_failing_retry) {
+        let sig = if s.ledger.spiral_sig.is_empty() {
+            &s.ledger.last_fail_key
+        } else {
+            &s.ledger.spiral_sig
+        };
+        return Some(format!(
+            "Vestige Anti-Spiral [Stage 2]: `causal_walk`/`recall` did not resolve `{sig}`. Escalate by calling `search_web` or `invoke_subagent` (Agent/WebSearch) before editing or retrying."
+        ));
+    }
+
+    if ((s.ledger.spiral_stage == 1 || same_failing_retry)
+        || (is_edit && (has_open_turn_failure || s.ledger.consecutive_same_fail >= 1)))
+        && !s.ledger.spiral_investigated
+        && !s.ledger.spiral_escalated
+    {
+        let sig = if !s.ledger.spiral_sig.is_empty() {
+            s.ledger.spiral_sig.as_str()
+        } else if !s.ledger.last_fail_key.is_empty() {
+            s.ledger.last_fail_key.as_str()
+        } else {
+            "open failure"
+        };
+        return Some(format!(
+            "Vestige Anti-Spiral [Stage 1]: stop guessing over `{sig}`. Call `causal_walk` or `recall` first to inspect prior causes/invariants before editing or retrying."
+        ));
+    }
+    None
 }
 
 pub(super) fn is_edit_tool(tool: &str) -> bool {
@@ -3145,5 +3322,239 @@ mod tests {
         let d = decide(&mut g, &inp, &store, "");
         let j = host_json("PermissionDenied", "claude", "", &d);
         assert_eq!(j["hookSpecificOutput"]["retry"], true);
+    }
+
+    #[test]
+    fn anti_spiral_blocks_repeat_and_open_failure_edit_then_escalates_stage1_to_stage2() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let mut g = Global::load(dir.path().to_path_buf());
+        let sess = "sess-spiral";
+
+        observe(
+            &mut g,
+            &Input {
+                event: "UserPromptSubmit".into(),
+                session: sess.into(),
+                prompt: "fix failing test".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+
+        // 1) First failure occurs.
+        let fail_call = Input {
+            event: "PostToolUseFailure".into(),
+            session: sess.into(),
+            tool: "Bash".into(),
+            command: "cargo test -p vestige-mcp".into(),
+            error: "Exit code 101\ntest failed".into(),
+            ..Input::default()
+        };
+        observe(&mut g, &fail_call, &store);
+
+        // Trying the EXACT SAME failing command again immediately is denied by Stage 1.
+        let retry_same = Input {
+            event: "PreToolUse".into(),
+            session: sess.into(),
+            tool: "Bash".into(),
+            command: "cargo test -p vestige-mcp".into(),
+            ..Input::default()
+        };
+        let d_retry = decide(&mut g, &retry_same, &store, "");
+        assert_eq!(d_retry.permission_decision.as_deref(), Some("deny"));
+        assert!(
+            d_retry
+                .permission_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("Anti-Spiral [Stage 1]") && r.contains("causal_walk")),
+            "{:?}",
+            d_retry.permission_reason
+        );
+
+        // Trying to edit blindly over the open failure is ALSO denied by Stage 1.
+        let edit_attempt = Input {
+            event: "PreToolUse".into(),
+            session: sess.into(),
+            tool: "Edit".into(),
+            file: "crates/vestige-mcp/src/tools/recall.rs".into(),
+            ..Input::default()
+        };
+        let d_edit = decide(&mut g, &edit_attempt, &store, "");
+        assert_eq!(d_edit.permission_decision.as_deref(), Some("deny"));
+        assert!(
+            d_edit
+                .permission_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("Anti-Spiral [Stage 1]"))
+        );
+
+        // Calling causal_walk is NEVER denied (Call Coach may add bounded scan_limit with allow).
+        let walk_pre = Input {
+            event: "PreToolUse".into(),
+            session: sess.into(),
+            tool: "mcp__vestige__causal_walk".into(),
+            tool_input: json!({"action": "walk", "from_handle": "crates/vestige-mcp/src/tools/recall.rs"}),
+            ..Input::default()
+        };
+        assert_ne!(
+            decide(&mut g, &walk_pre, &store, "").permission_decision.as_deref(),
+            Some("deny")
+        );
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUse".into(),
+                session: sess.into(),
+                tool: "mcp__vestige__causal_walk".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+
+        // Edit is now unlocked!
+        assert!(decide(&mut g, &edit_attempt, &store, "").permission_decision.is_none());
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUse".into(),
+                session: sess.into(),
+                tool: "Edit".into(),
+                file: "crates/vestige-mcp/src/tools/recall.rs".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+
+        // Command fails AGAIN after causal_walk -> escalates to Stage 2!
+        let fail_lines = observe(&mut g, &fail_call, &store);
+        assert!(
+            fail_lines.iter().any(|l| l.contains("Anti-Spiral [Stage 2]") && l.contains("search_web")),
+            "{fail_lines:?}"
+        );
+
+        // Now even editing is BLOCKED until search_web or invoke_subagent runs!
+        let d_stage2 = decide(&mut g, &edit_attempt, &store, "");
+        assert_eq!(d_stage2.permission_decision.as_deref(), Some("deny"));
+        assert!(
+            d_stage2
+                .permission_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("Anti-Spiral [Stage 2]") && r.contains("invoke_subagent")),
+            "{:?}",
+            d_stage2.permission_reason
+        );
+
+        // Escalate with search_web -> unlocks Stage 2.
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUse".into(),
+                session: sess.into(),
+                tool: "search_web".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+        assert!(decide(&mut g, &edit_attempt, &store, "").permission_decision.is_none());
+
+        // Clear all spiral state when passing command resolves the unpaired failure.
+        let ok_call = Input {
+            event: "PostToolUse".into(),
+            session: sess.into(),
+            tool: "Bash".into(),
+            command: "cargo test -p vestige-mcp".into(),
+            ..Input::default()
+        };
+        observe(&mut g, &ok_call, &store);
+        let s = g.session(sess);
+        assert_eq!(s.ledger.spiral_stage, 0);
+        assert!(!s.ledger.spiral_investigated);
+        assert!(!s.ledger.spiral_escalated);
+    }
+
+    #[test]
+    fn windows_path_edit_blocks_commit_and_stop_until_remember_settles() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let mut g = Global::load(dir.path().to_path_buf());
+        let sess = "sess-win-save";
+
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUse".into(),
+                session: sess.into(),
+                tool: "Edit".into(),
+                cwd: r"C:\Users\Sam\repo".into(),
+                file: r"C:\Users\Sam\repo\crates\vestige-core\src\lib.rs".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+
+        let commit_pre = Input {
+            event: "PreToolUse".into(),
+            session: sess.into(),
+            tool: "Bash".into(),
+            command: "git commit -m test".into(),
+            ..Input::default()
+        };
+        let d_commit = decide(&mut g, &commit_pre, &store, "");
+        assert_eq!(d_commit.permission_decision.as_deref(), Some("deny"));
+        assert!(
+            d_commit
+                .permission_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("crates/vestige-core/src/lib.rs")),
+            "{:?}",
+            d_commit.permission_reason
+        );
+
+        let d_stop1 = decide(
+            &mut g,
+            &Input {
+                event: "Stop".into(),
+                session: sess.into(),
+                ..Input::default()
+            },
+            &store,
+            "",
+        );
+        assert!(
+            d_stop1
+                .block_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("crates/vestige-core/src/lib.rs")),
+            "{:?}",
+            d_stop1.block_reason
+        );
+
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUse".into(),
+                session: sess.into(),
+                tool: "mcp__vestige__remember".into(),
+                tool_input: json!({"action": "save", "files": ["crates/vestige-core/src/lib.rs"]}),
+                tool_response: json!({"nodeId": "mem-000000000000cafe"}),
+                ..Input::default()
+            },
+            &store,
+        );
+
+        assert!(decide(&mut g, &commit_pre, &store, "").permission_decision.is_none());
+        let d_stop2 = decide(
+            &mut g,
+            &Input {
+                event: "Stop".into(),
+                session: sess.into(),
+                stop_hook_active: true,
+                ..Input::default()
+            },
+            &store,
+            "",
+        );
+        assert!(d_stop2.block_reason.is_none(), "{:?}", d_stop2.block_reason);
     }
 }

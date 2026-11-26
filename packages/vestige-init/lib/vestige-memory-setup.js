@@ -131,7 +131,11 @@ function catalog(home, platform, env = process.env) {
   if (platform === 'darwin') entries.push(['xcode','Xcode', 'Library/Developer/Xcode', path.join(home,'Library','Developer','Xcode','CodingAssistant','ClaudeAgentConfig','.claude'), ['projects','*','mcpServers']]);
   return entries.map(([id, name, marker, file, keys, hookFile, dialect]) => ({ id, name, file, keys, hookFile, dialect,
     detected: fs.existsSync(file) || Boolean(marker && fs.existsSync(path.join(home, marker))) || Boolean(executable(id, home, platform, env)),
-    coverage: dialect === 'cursor' ? 'session context, prompt capture/recall, post-tool context, turn save, precompact, end; prompt injection awaits a tool result' : dialect ? 'session, prompt, turn, precompact, end (client trust/restart required)' : 'MCP tools; lifecycle hooks unavailable in this adapter' }));
+    coverage: id === 'antigravity'
+      ? 'SessionStart, PreInvocation, PreToolUse, PostToolUse, PostInvocation, Stop + Reflex + fail-closed bridge'
+      : dialect === 'cursor' ? 'session context, prompt capture/recall, post-tool context, turn save, precompact, end; prompt injection awaits a tool result'
+      : dialect ? 'session, prompt, turn, precompact, end (client trust/restart required)'
+      : 'MCP tools; lifecycle hooks unavailable in this adapter' }));
 }
 const EVENTS = {
   claude: { SessionStart: 'session', UserPromptSubmit: 'prompt', Stop: 'turn', PreCompact: 'compact', SessionEnd: 'end' },
@@ -342,6 +346,64 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
     }
   }
   const rows = [...changes.values()].filter(r => r.after !== r.before && (r.patches.length || r.block || !detected.some(c => c.file === r.file || c.hookFile === r.file)));
+  // Universal Antigravity plugin bridge wiring: installs 6 lifecycle hooks
+  // (SessionStart, PreInvocation, PreToolUse, PostToolUse, PostInvocation, Stop)
+  // routed through agy-bridge.cjs -> Operator + native Rust Reflex + memory_packet.
+  const agyDetected = detected.find(c => c.id === 'antigravity');
+  if (agyDetected) {
+    const agyRoot = path.join(home, '.gemini', 'config', 'plugins', 'vestige');
+    const agyBridge = path.join(agyRoot, 'bridge');
+    const vestigeBin = path.join(path.dirname(found), platform === 'win32' ? 'vestige.exe' : 'vestige');
+    const agyDataDir = (env && env.VESTIGE_DATA_DIR) || path.join(home, '.vestige', 'store');
+    const agyTriggers = path.join(home, '.vestige', 'antigravity', 'triggers.json');
+    const pyBin = platform === 'win32' ? (executable('python', home, platform, env) || 'python') : (executable('python3', home, platform, env) || 'python3');
+    const gatePath = guard
+      ? path.join(home, '.operator', 'gate', 'operator-gate.py')
+      : [
+          path.join(home, '.operator', 'gate', 'operator-gate.py'),
+          path.join(home, '.vestige', 'gate', 'operator-gate.py'),
+        ].find(p => fs.existsSync(p)) || '';
+    const setRaw = (filePath, contents, description) => {
+      const row = change(filePath, description);
+      row.after = contents;
+    };
+    const agyHooksSrc = path.join(__dirname, '..', 'hooks', 'agy-hooks.json');
+    const agyBridgeSrc = path.join(__dirname, '..', 'hooks', 'agy-bridge.cjs');
+    if (fs.existsSync(agyHooksSrc) && fs.existsSync(agyBridgeSrc)) {
+      const agyPluginJson = path.join(agyRoot, 'plugin.json');
+      if (!fs.existsSync(agyPluginJson)) {
+        setRaw(agyPluginJson, json({ name: 'vestige', author: 'Vestige', homepage: 'https://github.com/samvallad33/vestige' }), 'register Antigravity plugin manifest');
+      }
+      setRaw(path.join(agyRoot, 'hooks.json'), fs.readFileSync(agyHooksSrc, 'utf8'), 'install Antigravity 6-event lifecycle hooks');
+      setRaw(path.join(agyBridge, 'agy-bridge.cjs'), fs.readFileSync(agyBridgeSrc, 'utf8'), 'install Antigravity Reflex/Operator bridge');
+      for (const [rel, src] of [
+        ['hooks/memory.cjs', '../hooks/memory.cjs'],
+        ['hooks/reflex.cjs', '../hooks/reflex.cjs'],
+        ['lib/memory-triggers.cjs', './memory-triggers.cjs'],
+      ]) {
+        setRaw(path.join(agyBridge, rel), fs.readFileSync(path.resolve(__dirname, src), 'utf8'), `install Antigravity runtime ${rel}`);
+      }
+      if (!fs.existsSync(agyTriggers)) setRaw(agyTriggers, json(defaults), 'install Antigravity recall triggers');
+      const agyMemCfg = path.join(agyBridge, 'memory-config.json');
+      setRaw(agyMemCfg, json({ version: VERSION, binary: found, binaryArgs: ['--data-dir', agyDataDir], triggers: agyTriggers, deadlineMs: 10000 }), 'configure Antigravity memory RPC');
+      setRaw(path.join(agyBridge, 'bridge.json'), json({
+        python: pyBin,
+        gate: gatePath,
+        vestigeBin: fs.existsSync(vestigeBin) ? vestigeBin : (platform === 'win32' ? 'vestige.exe' : 'vestige'),
+        dataDir: agyDataDir,
+        memoryConfig: agyMemCfg,
+        hooksDir: path.join(agyBridge, 'hooks'),
+        gateTimeoutMs: 15000,
+        memoryDeadlineMs: 10000,
+        reflexDeadlineMs: 6000,
+        capsuleTimeoutMs: 6000,
+        debug: false,
+      }), 'configure Antigravity bridge runtime');
+      // Refresh rows list cleanly after Antigravity additions
+      const nextRows = [...changes.values()].filter(r => r.after !== r.before && (r.patches.length || r.block || !detected.some(c => c.file === r.file || c.hookFile === r.file)));
+      return { home, base, manifestFile, previous, binary: found, detected, handAdd, changes: nextRows, guard, guardInstall };
+    }
+  }
   return { home, base, manifestFile, previous, binary: found, detected, handAdd, changes: rows, guard, guardInstall };
 }
 function atomic(file, contents) {
@@ -467,6 +529,12 @@ async function inspect(home = os.homedir(), timeout = 2000) {
     }
   }
   for (const relative of ['hooks/memory.cjs','lib/memory-triggers.cjs','config.json','triggers.json']) add(`memory runtime: ${relative}`, fs.existsSync(path.join(home,'.vestige','memory',relative)), 'Rerun init to restore missing runtime files');
+  if (fs.existsSync(path.join(home, '.gemini', 'config')) || (manifest?.clients || []).some(c => c.id === 'antigravity')) {
+    const agyRoot = path.join(home, '.gemini', 'config', 'plugins', 'vestige');
+    for (const rel of ['hooks.json', 'bridge/agy-bridge.cjs', 'bridge/bridge.json', 'bridge/memory-config.json', 'bridge/hooks/memory.cjs', 'bridge/hooks/reflex.cjs']) {
+      add(`Antigravity plugin: ${rel}`, fs.existsSync(path.join(agyRoot, rel)), 'Rerun npx @vestige/init to install Antigravity hooks');
+    }
+  }
   if (manifest?.guard) for (const relative of ['guard.cjs','config.json']) add(`protected guard runtime: ${relative}`,fs.existsSync(path.join(home,'.operator','state','vestige-memory',relative)),'Rerun init --guard in your terminal');
   let packet = null; let transport;
   try { if (!bin) throw new Error('binary missing'); transport = rpc(bin, [], timeout); await transport.ready(); packet = await transport.tool('session', { action: 'start', memory_hook: { limit: 3 } }); }

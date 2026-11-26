@@ -389,16 +389,29 @@ fn is_implicit_advice_frame(q_text: &str) -> bool {
     if has_modal_or_advice_mood {
         return true;
     }
-    // 2. General present-tense evaluative question (`?`) with 1st-person subject that is not a
-    //    profile-recall lookup (e.g., "Would this be an issue for my schedule?", "Do I need...").
+    // 2. General present-tense auxiliary/modal yes-no evaluative question (`?`) with 1st-person
+    //    subject that is not a past/temporal or profile-recall lookup (e.g., "Would this be an
+    //    issue for my schedule?", "Do I need to worry about...?"). Never match WH-fact questions.
     let toks = raw_tokens(&ql);
     let has_1sg = toks
         .iter()
         .any(|w| matches!(w.as_str(), "i" | "i'm" | "i've" | "i'd" | "my" | "me" | "we" | "our"));
+    let starts_aux_yesno = toks.first().is_some_and(|w| {
+        matches!(
+            w.as_str(),
+            "do" | "does" | "would" | "will" | "should" | "can" | "could" | "may" | "might" | "is" | "are" | "am"
+        )
+    });
+    let has_past_temp_tok = toks.iter().any(|w| {
+        matches!(
+            w.as_str(),
+            "ago" | "yesterday" | "last" | "first" | "before" | "after" | "previously" | "earlier"
+        )
+    });
     if ql.ends_with('?')
         && has_1sg
-        && !ql.starts_with("when ")
-        && !ql.starts_with("how much ")
+        && starts_aux_yesno
+        && !has_past_temp_tok
         && !is_personal_profile_recall_query(q_text)
     {
         return true;
@@ -432,6 +445,7 @@ fn is_personal_profile_recall_query(q_text: &str) -> bool {
         || ql.contains("have i mentioned")
         || ql.contains("did i mention")
         || ql.contains("told you about");
+    let toks = raw_tokens(&ql);
     if [
         "when did",
         "how many",
@@ -440,19 +454,20 @@ fn is_personal_profile_recall_query(q_text: &str) -> bool {
         "before we ",
         "before the ",
         "after ",
-        "first ",
-        "last ",
         "recently changed",
         "updated",
         "now instead",
     ]
     .iter()
     .any(|p| ql.contains(p))
+        || toks
+            .iter()
+            .any(|w| matches!(w.as_str(), "first" | "last" | "ago" | "yesterday"))
         || (ql.contains("earlier") && !explicit_told_you)
+        || (ql.starts_with("which ") && ql.contains(" or "))
     {
         return false;
     }
-    let toks = raw_tokens(&ql);
     let has_1sg = toks
         .iter()
         .any(|w| matches!(w.as_str(), "i" | "my" | "me" | "mine" | "we" | "our"));
@@ -1264,10 +1279,24 @@ fn apply_sparse_personal_disclosure_regime(ctx: &mut RankCtx<'_>) -> bool {
     ]
     .iter()
     .any(|p| ql_sp.contains(p));
+    let is_wh_fact_sp = ql_sp.starts_with("who ")
+        || ql_sp.starts_with("which ")
+        || ql_sp.starts_with("where ")
+        || ql_sp.starts_with("when ")
+        || ql_sp.starts_with("what was ")
+        || ql_sp.starts_with("what were ")
+        || ql_sp.starts_with("what is the ")
+        || raw_tokens(&ql_sp)
+            .iter()
+            .any(|w| matches!(w.as_str(), "first" | "last" | "ago" | "yesterday"));
     let advice_q = is_implicit_advice_frame(&ctx.q.text)
         || (is_sparse_haystack
             && ql_sp.ends_with('?')
             && !has_past_recall_sp
+            && !is_wh_fact_sp
+            && !ctx.eff_it.temporal
+            && !ctx.eff_it.current_state
+            && !ctx.eff_it.multi_hop
             && !ctx.eff_it.sniper_when
             && !ctx.eff_it.sniper_how_many
             && !is_personal_profile_recall_query(&ctx.q.text));

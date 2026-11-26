@@ -326,6 +326,20 @@ pub(crate) fn rank_loaded_nodes_total_recall(
     query: &str,
     top_k: usize,
 ) -> Vec<(String, f32)> {
+    let receipts = storage.salience_receipts().unwrap_or_default();
+    rank_loaded_nodes_preloaded(raw_nodes, None, &receipts, Some(storage), query, top_k)
+}
+
+/// Shared Total-Recall ranker accepting pre-cached graph links and salience receipts to avoid
+/// per-query disk scans across hot `CircuitIndex` / `memory_packet` hook paths.
+pub(crate) fn rank_loaded_nodes_preloaded(
+    raw_nodes: &[KnowledgeNode],
+    preloaded_links: Option<&std::collections::HashMap<String, Vec<vestige_core::retrieval::TurnLink>>>,
+    receipts: &[Value],
+    storage_fallback: Option<&Storage>,
+    query: &str,
+    top_k: usize,
+) -> Vec<(String, f32)> {
     if raw_nodes.is_empty() || query.trim().is_empty() {
         return Vec::new();
     }
@@ -344,7 +358,15 @@ pub(crate) fn rank_loaded_nodes_total_recall(
         std::collections::HashMap::new();
     let mut tag_members: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
     for node in &nodes {
-        if let Ok(conns) = storage.get_connections_for_memory(&node.id) {
+        if let Some(pre) = preloaded_links {
+            if let Some(conns) = pre.get(&node.id)
+                && !conns.is_empty()
+            {
+                links_of.insert(node.id.clone(), conns.clone());
+            }
+        } else if let Some(storage) = storage_fallback
+            && let Ok(conns) = storage.get_connections_for_memory(&node.id)
+        {
             for edge in conns {
                 let other = if edge.source_id == node.id {
                     edge.target_id
@@ -371,14 +393,13 @@ pub(crate) fn rank_loaded_nodes_total_recall(
             }
         }
     }
-    if let Ok(receipts) = storage.salience_receipts() {
-        let undone: std::collections::HashSet<String> = receipts
+    if !receipts.is_empty() {
+        let undone: std::collections::HashSet<&str> = receipts
             .iter()
             .filter_map(|row| {
                 row.get("undo_of")
                     .and_then(|v| v.as_str())
                     .filter(|id| !id.is_empty())
-                    .map(str::to_string)
             })
             .collect();
         for row in receipts {
@@ -629,12 +650,42 @@ fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Va
         .map(str::trim)
         .unwrap_or("");
     if !handle.is_empty() {
-        let resolution = filter_resolution_scope(
+        let mut resolved_handle = handle.to_string();
+        let mut resolution = filter_resolution_scope(
             storage.as_ref(),
-            storage.resolve_handle(handle),
+            storage.resolve_handle(&resolved_handle),
             explicit_scope,
         );
-        return Some(Ok(handle_resolution_payload(storage, handle, resolution, opts)));
+        if resolution.ids.is_empty()
+            && resolution.candidates.is_empty()
+            && !handle.contains(':')
+            && !handle.chars().any(char::is_whitespace)
+            && (handle.contains('/') || handle.contains('\\') || handle.contains('.'))
+        {
+            let norm = handle
+                .replace('\\', "/")
+                .trim_start_matches("./")
+                .split('#')
+                .next()
+                .unwrap_or(handle)
+                .to_string();
+            let file_tag = format!("file:{norm}");
+            let fallback = filter_resolution_scope(
+                storage.as_ref(),
+                storage.resolve_handle(&file_tag),
+                explicit_scope,
+            );
+            if !fallback.ids.is_empty() || !fallback.candidates.is_empty() {
+                resolved_handle = file_tag;
+                resolution = fallback;
+            }
+        }
+        return Some(Ok(handle_resolution_payload(
+            storage,
+            &resolved_handle,
+            resolution,
+            opts,
+        )));
     }
     // `handle` present but empty/non-string: free text with no handle — the
     // handle_required payload, with candidates mined from the free text.
@@ -1503,5 +1554,39 @@ mod strata_query {
         let valid_nodes = at_2000["nodes"].as_array().unwrap();
         assert_eq!(valid_nodes.len(), 1, "{at_2000}");
         assert_eq!(valid_nodes[0]["id"], first_id, "valid_at must filter to historical window: {at_2000}");
+    }
+
+    #[tokio::test]
+    async fn recall_bare_file_path_falls_back_to_file_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let anchored_id;
+        {
+            let mut raw = strata_store::StrataStore::open(dir.path()).unwrap();
+            anchored_id = raw
+                .ingest_in_scope(
+                    strata_store::IngestInput {
+                        content: "Reflex anti-spiral guard lives in enforce.rs.".into(),
+                        source: None,
+                        source_updated_at_ms: None,
+                        node_type: "decision".into(),
+                        tags: vec!["file:crates/vestige-mcp/src/tools/reflex/enforce.rs".into()],
+                        created_at_ms: Some(1_000),
+                        valid_from_ms: Some(1_000),
+                        valid_until_ms: None,
+                    },
+                    "user",
+                )
+                .unwrap();
+        }
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let res = recall(
+            &storage,
+            serde_json::json!({ "handle": "crates\\vestige-mcp\\src\\tools\\reflex\\enforce.rs" }),
+        )
+        .await
+        .unwrap();
+        let nodes = res["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1, "{res}");
+        assert_eq!(nodes[0]["id"], anchored_id, "{res}");
     }
 }

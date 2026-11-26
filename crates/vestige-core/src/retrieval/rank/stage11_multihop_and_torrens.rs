@@ -703,6 +703,86 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         crate::retrieval::graph::ghostcurrent_mdl_q16::apply_ghostcurrent_stage11_injection(
             &mut gc_s11,
         );
+
+        // Kernel 6 (MGMem omega^2 + SAG2 Per-Term Interleaved Round-2 Bridge Discovery):
+        if (deficit_b || eff_it.multi_hop || split_mh_hash) && !final_turn_indices.is_empty() {
+            let already: DetHashSet<usize> = final_turn_indices.iter().take(6).copied().collect();
+            let bridges =
+                crate::retrieval::graph::mgmem_sag2_sentgraph_q16::mgmem_sag2_interleaved_bridge_q16(
+                    ix,
+                    &final_turn_indices[..final_turn_indices.len().min(6)],
+                    &already,
+                    &t_scene,
+                    4,
+                );
+            for (idx, (bti, bsc_q16)) in bridges.into_iter().take(2).enumerate() {
+                let top_lim = 5.min(final_turn_indices.len());
+                let b_sess = ix.turns[bti].session;
+                let sess_top_cnt = final_turn_indices[..top_lim]
+                    .iter()
+                    .filter(|&&t| ix.turns[t].session == b_sess)
+                    .count();
+                if final_turn_indices.len() >= 2
+                    && !final_turn_indices[..top_lim].contains(&bti)
+                    && sess_top_cnt < ctx.max_per_session_top5
+                {
+                    if let Some(pos) = final_turn_indices.iter().position(|&x| x == bti) {
+                        final_turn_indices.remove(pos);
+                    }
+                    let slot = (2 + idx).min(final_turn_indices.len());
+                    final_turn_indices.insert(slot, bti);
+                    let lift = ((bsc_q16 as f32) / 65_536.0).clamp(0.15, 0.85);
+                    bridge_boost[b_sess] += lift * 0.45;
+                    t_scene[bti] = t_scene[bti].max(smax * 0.55 + lift * 0.35);
+                }
+            }
+            if final_turn_indices.len() > k.max(5) {
+                final_turn_indices.truncate(k.max(5));
+            }
+        }
+
+        // Kernel 2 (CEP Max-Plus + ISO-RAG Cheeger) & Kernel 5 (Asymmetric SYNAPSE Top-7 WTA):
+        if (deficit_a || deficit_b || eff_it.multi_hop) && final_turn_indices.len() >= 3 {
+            let pool: Vec<(usize, u64)> = final_turn_indices
+                .iter()
+                .take(20)
+                .map(|&ti| {
+                    let q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
+                        t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
+                    );
+                    (ti, q16.max(1))
+                })
+                .collect();
+            let cep = crate::retrieval::graph::cep_isorag_cheeger_q16::cep_isorag_rerank_q16(
+                ix,
+                &pool,
+                2,
+            );
+            let syn = if deficit_a || ctx.pref_on {
+                crate::retrieval::graph::mwe_synapse_cable_q16::asymmetric_synapse_wta_q16(
+                    ix,
+                    &q.text,
+                    &cep,
+                )
+            } else {
+                cep
+            };
+            // Keep Slot 0 anchored; refine Slots 1..k by Cheeger/SYNAPSE potential
+            let head0 = final_turn_indices[0];
+            let mut next_turns = vec![head0];
+            for (ti, _) in syn {
+                if ti != head0 && !next_turns.contains(&ti) {
+                    next_turns.push(ti);
+                }
+            }
+            for &ti in &final_turn_indices {
+                if !next_turns.contains(&ti) {
+                    next_turns.push(ti);
+                }
+            }
+            next_turns.truncate(final_turn_indices.len());
+            final_turn_indices = next_turns;
+        }
     }
 
     ctx.bridge_boost = bridge_boost;

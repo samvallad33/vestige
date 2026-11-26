@@ -43,6 +43,8 @@
   "files": [
     "bin",
     "lib",
+    "hooks/agy-bridge.cjs",
+    "hooks/agy-hooks.json",
     "hooks/operator-stop-memory.py",
     "hooks/stop-memory.cjs",
     "hooks/memory.cjs",

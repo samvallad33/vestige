@@ -316,6 +316,21 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             t_own[ti] *= 0.25;
             t_raw[ti] *= 0.25;
             t_turn_raw[ti] *= 0.25;
+            continue;
+        }
+        // Kernel 4: Anti-Meta Q_ii Recap & Assistant Echo Damper (strictly downward [0.55, 1.00]).
+        if !ctx.eff_it.is_event_sequence
+            && !pref_on
+            && !ix.turns[ti].has_tool_call
+            && t_own[ti] > 0.0
+        {
+            let q_ii = crate::retrieval::fusion::antimeta_scaldpp_q16::antimeta_echo_quality_q16(ix, ti);
+            if q_ii < 65_536 {
+                let q_mult = ((q_ii as f32) / 65_536.0).clamp(0.55, 1.0);
+                t_own[ti] *= q_mult;
+                t_raw[ti] *= q_mult;
+                t_turn_raw[ti] *= q_mult;
+            }
         }
     }
 

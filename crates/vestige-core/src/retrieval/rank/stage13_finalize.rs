@@ -20,8 +20,18 @@ pub(in crate::retrieval) fn run(ctx: RankCtx<'_>) -> RankResult {
     let t_mask = ctx.t_mask;
     let t_exact_mask = ctx.t_exact_mask;
     let standing_rules = ctx.standing_rules;
-    let final_session_indices = ctx.final_session_indices;
-    let final_turn_indices = ctx.final_turn_indices;
+    let mut final_session_indices = Vec::with_capacity(ctx.final_session_indices.len());
+    for si in ctx.final_session_indices {
+        if si < ix.session_ids.len() && !final_session_indices.contains(&si) {
+            final_session_indices.push(si);
+        }
+    }
+    let mut final_turn_indices = Vec::with_capacity(ctx.final_turn_indices.len());
+    for ti in ctx.final_turn_indices {
+        if ti < ix.turns.len() && !final_turn_indices.contains(&ti) {
+            final_turn_indices.push(ti);
+        }
+    }
     let q_group_cnt = ctx.q_group_cnt;
     let q_group_mask = ctx.q_group_mask;
     let grounded_group_mask = ctx.grounded_group_mask;
@@ -184,5 +194,48 @@ pub(in crate::retrieval) fn run(ctx: RankCtx<'_>) -> RankResult {
         sessions,
         turns,
         standing_rules,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::retrieval::{Params, Query, RankRequest, Session, Turn, rank};
+
+    #[test]
+    fn rank_deduplicates_when_top_k_exceeds_corpus_size() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "s0".into(),
+                date: "2026-01-01".into(),
+                timestamp: 1,
+                turns: vec![
+                    Turn {
+                        id: "t1".into(),
+                        role: "user".into(),
+                        content: "I drink oat milk lattes every morning.".into(),
+                        links: Vec::new(),
+                        stability: 0.0,
+                    },
+                    Turn {
+                        id: "t2".into(),
+                        role: "user".into(),
+                        content: "Actually I switched to black espresso.".into(),
+                        links: Vec::new(),
+                        stability: 0.0,
+                    },
+                ],
+            }],
+            queries: vec![Query {
+                text: "What coffee do I drink now?".into(),
+                date: String::new(),
+            }],
+            top_k: 12,
+            params: Params::default(),
+        };
+        let res = rank(&req);
+        let turn_ids: Vec<&str> = res.results[0].turns.iter().map(|t| t.id.as_str()).collect();
+        let sess_ids: Vec<&str> = res.results[0].sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(turn_ids.len(), 2, "must not duplicate turns when top_k > nt: {turn_ids:?}");
+        assert_eq!(sess_ids.len(), 1, "must not duplicate sessions when top_k > ns: {sess_ids:?}");
     }
 }

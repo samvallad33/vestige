@@ -277,15 +277,21 @@ pub fn bridges(nodes: &[KnowledgeNode], seed_indexes: &[usize], limit: usize) ->
 /// Person tags literally named by `prompt` (the tag, or the text after `person:`).
 pub fn named_people(nodes: &[KnowledgeNode], prompt: &str) -> BTreeSet<String> {
     let mut people = BTreeSet::new();
+    let prompt_lower = prompt.to_lowercase();
+    if prompt_lower.is_empty() {
+        return people;
+    }
     for node in nodes {
         for tag in &node.tags {
             let Some(name) = tag.strip_prefix("person:") else {
                 continue;
             };
-            if name.is_empty() {
+            if name.is_empty() || people.contains(tag.as_str()) {
                 continue;
             }
-            if phrase_in(prompt, tag) || phrase_in(prompt, name) {
+            if phrase_in_lower(&prompt_lower, &tag.to_lowercase())
+                || phrase_in_lower(&prompt_lower, &name.to_lowercase())
+            {
                 people.insert(tag.clone());
             }
         }
@@ -293,16 +299,14 @@ pub fn named_people(nodes: &[KnowledgeNode], prompt: &str) -> BTreeSet<String> {
     people
 }
 
-fn phrase_in(text: &str, surface: &str) -> bool {
-    let text = text.to_lowercase();
-    let surface = surface.to_lowercase();
-    if surface.is_empty() {
+fn phrase_in_lower(text_lower: &str, surface_lower: &str) -> bool {
+    if surface_lower.is_empty() {
         return false;
     }
-    text.match_indices(&surface).any(|(at, _)| {
+    text_lower.match_indices(surface_lower).any(|(at, _)| {
         let word = |c: char| c.is_alphanumeric() || c == '_';
-        text[..at].chars().next_back().is_none_or(|c| !word(c))
-            && text[at + surface.len()..]
+        text_lower[..at].chars().next_back().is_none_or(|c| !word(c))
+            && text_lower[at + surface_lower.len()..]
                 .chars()
                 .next()
                 .is_none_or(|c| !word(c))

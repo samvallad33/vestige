@@ -781,6 +781,25 @@ async fn serve() {
         );
     }
 
+    // Non-blocking boot prewarm: hydrate lexicons, GhostCurrent CircuitIndex, and GhostLink
+    // reflex caches in the background so Turn-1 hooks answer in milliseconds without stalling stdio.
+    if std::env::var("VESTIGE_PREWARM").as_deref() != Ok("0") {
+        let warm_storage = Arc::clone(&storage);
+        tokio::task::spawn_blocking(move || {
+            let _ = vestige_core::wordnet::senses("init");
+            let _ = vestige_core::roget::conceptual_neighbors("init", 1);
+            let _ = vestige_core::conceptnet::two_hop_neighbors("init", 1);
+            let _ = vestige_core::wikidata::upward_containers("init", 1);
+            vestige_mcp::circuit_index::prewarm(&*warm_storage, vestige_core::DEFAULT_MEMORY_SCOPE);
+            let _ = vestige_mcp::strata_memory::ghostlink::reflex_line(
+                &*warm_storage,
+                "UserPromptSubmit",
+            );
+            let _ = vestige_mcp::strata_memory::ghostlink::reflex_line(&*warm_storage, "Stop");
+            info!("Background prewarm complete (lexicons, CircuitIndex, GhostLink reflex)");
+        });
+    }
+
     // Start optional HTTP MCP transport for clients that need Streamable HTTP.
     if config.http_enabled {
         let http_storage = Arc::clone(&storage);
