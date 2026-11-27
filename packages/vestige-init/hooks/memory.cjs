@@ -19,6 +19,9 @@ const atomic = (file, value) => {
 };
 function resolveSpawn(binary, args = []) {
   if (typeof binary === 'string' && /\.(?:c|m)?js$/i.test(binary)) return [process.execPath, [binary, ...args]];
+  if (process.platform === 'win32' && typeof binary === 'string' && /\.(?:cmd|bat)$/i.test(binary)) {
+    return [process.env.COMSPEC || 'cmd.exe', ['/d', '/c', binary, ...args]];
+  }
   if (process.platform === 'win32' && typeof binary === 'string' && !/\.(?:exe|cmd|bat|com)$/i.test(binary)) {
     try {
       const fd = fs.openSync(binary, 'r');

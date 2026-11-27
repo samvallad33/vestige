@@ -740,7 +740,7 @@ fn capture_and_surface_directives(
         .collect();
 
     if !matched.is_empty() {
-        if is_standing_directive_prompt(&inp.prompt) {
+        if !inp.no_enforce && is_standing_directive_prompt(&inp.prompt) {
             let trimmed = inp.prompt.trim();
             let content = trim_chars(trimmed, 1200);
             let mut tags = vec![

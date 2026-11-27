@@ -4679,7 +4679,7 @@ mod tests {
             .fire(json!({
                 "event": "UserPromptSubmit",
                 "session": "s-dir",
-                "prompt": "from now on never edit benchmarks/real_engine"
+                "prompt": "from now on never edit benchmarks/real_engine?"
             }))
             .await;
         let text = context(&first);
@@ -4694,7 +4694,7 @@ mod tests {
             .fire(json!({
                 "event": "UserPromptSubmit",
                 "session": "s-dir",
-                "prompt": "from now on never edit benchmarks/real_engine, restated"
+                "prompt": "from now on never edit benchmarks/real_engine, restated?"
             }))
             .await;
         assert!(
@@ -4737,7 +4737,7 @@ mod tests {
         fx.fire(json!({
             "event": "UserPromptSubmit",
             "session": "s-ok",
-            "prompt": "remember this: ship from main"
+            "prompt": "remember this: ship from main?"
         }))
         .await;
         let blocked = fx.fire(json!({"event": "Stop", "session": "s-ok"})).await;
@@ -5123,7 +5123,7 @@ mod tests {
         fx.fire(json!({
             "event": "UserPromptSubmit",
             "session": "s-sub",
-            "prompt": "from now on never force-push"
+            "prompt": "from now on never force-push?"
         }))
         .await;
         let out = fx
