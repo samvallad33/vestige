@@ -111,6 +111,8 @@ pub mod advanced;
 /// Codebase memory - Vestige's killer differentiator for AI code understanding
 pub mod codebase;
 pub mod projection;
+/// Pluggable public provider boundaries (`SeedGuardProvider`, `RerankProvider`).
+pub mod providers;
 /// Seven-field provenance receipts and `prove_causal_chain`.
 pub mod provenance;
 
@@ -166,6 +168,15 @@ pub use memory::{
 
 // Local secret-detection primitives used by every memory write boundary.
 pub use security::{SecretConfidence, SecretFinding, SecretKind, SecretPolicy, scan_secrets};
+
+// Pluggable public guard & rerank extension traits (open-core deterministic defaults).
+pub use providers::{
+    CONFIDENCE_Q16_ONE, DeterministicRuleGuardProvider, GuardAuthority, GuardDecision,
+    GuardEvalRequest, GuardEvalVerdict, IdentityRerankProvider, RerankCandidate, RerankProvider,
+    RerankRequest, RerankResponse, RerankScore, SeedGuardProvider, active_rerank_provider,
+    active_seed_guard_provider, enforce_slot0_lock, install_rerank_provider,
+    install_seed_guard_provider,
+};
 
 // FSRS-6 algorithm
 pub use fsrs::{

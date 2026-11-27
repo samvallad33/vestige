@@ -205,7 +205,7 @@ class VestigeArm:
         self.scope = f"mc_{instance_id.replace('-', '')[:24]}"
 
     def add(self, units: List[str]) -> None:
-        # smart_ingest batch mode caps at 20 items per call.
+        # v7 canonical `remember` batch mode caps at 20 items per call.
         for start in range(0, len(units), 20):
             chunk = units[start:start + 20]
             items = [
@@ -214,8 +214,13 @@ class VestigeArm:
             ]
             try:
                 self.client.call_tool(
-                    "smart_ingest",
-                    {"items": items, "scope": self.scope, "batchMergePolicy": "force_create"},
+                    "remember",
+                    {
+                        "action": "save",
+                        "items": items,
+                        "scope": self.scope,
+                        "batchMergePolicy": "force_create",
+                    },
                     timeout=600.0,
                 )
             except VestigeMCPError:

@@ -166,6 +166,52 @@ enum HookCommands {
         #[arg(long, default_value = "1h")]
         stop_window: String,
     },
+    /// Native Rust universal hook dispatcher for all 24 runtimes (zero Python)
+    Dispatch {
+        /// Runtime dialect (e.g., claude, antigravity, cursor, codex, copilot, windsurf, cline)
+        runtime: String,
+        /// Lifecycle event name (e.g., PreToolUse, UserPromptSubmit, SessionStart, Stop)
+        event: String,
+        /// Skip writing an O(1) gate receipt
+        #[arg(long)]
+        no_receipt: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum GateCommands {
+    /// Pre-tool stdin hook compatible with the Operator protocol (ALLOW -> exit 0, STOP -> exit 2)
+    Hook {
+        /// Host runtime source identifier (e.g., claude, antigravity, cursor, codex)
+        #[arg(long, default_value = "claude")]
+        source: String,
+        /// Skip appending an O(1) BLAKE3 receipt to ~/.operator/receipts.jsonl
+        #[arg(long)]
+        no_receipt: bool,
+    },
+    /// Evaluate one tool call directly and print the structured JSON verdict
+    Check {
+        /// Tool name (e.g., Bash, run_command, Write, Edit)
+        #[arg(long)]
+        tool: String,
+        /// Shell command string, if applicable
+        #[arg(long)]
+        command: Option<String>,
+        /// Target file path, if applicable
+        #[arg(long)]
+        file: Option<String>,
+        /// Working directory
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Runtime dialect
+        #[arg(long, default_value = "cli")]
+        runtime: String,
+        /// Caller authority tier (owner, operator, workspace, agent, subagent, untrusted_external)
+        #[arg(long, default_value = "agent")]
+        authority: String,
+    },
+    /// Show native Rust gate engine status and O(1) tail receipt head
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -620,6 +666,12 @@ enum Commands {
     Hook {
         #[command(subcommand)]
         command: HookCommands,
+    },
+
+    /// Native Rust pre-tool reference monitor (<1ms, O(1) BLAKE3 receipts, SeedGuardProvider boundary)
+    Gate {
+        #[command(subcommand)]
+        command: GateCommands,
     },
 
     /// Compose: list NEVER-COMPOSED memory pairs as leads, not findings
@@ -1554,6 +1606,23 @@ fn main() -> anyhow::Result<()> {
                 run_hook_post_commit(repo, gate_output)
             }
             HookCommands::PreCommit { repo, stop_window } => run_hook_pre_commit(repo, stop_window),
+            HookCommands::Dispatch {
+                runtime,
+                event,
+                no_receipt,
+            } => run_hook_dispatch(runtime, event, !no_receipt),
+        },
+        Commands::Gate { command } => match command {
+            GateCommands::Hook { source, no_receipt } => run_gate_hook(source, !no_receipt),
+            GateCommands::Check {
+                tool,
+                command,
+                file,
+                cwd,
+                runtime,
+                authority,
+            } => run_gate_check(tool, command, file, cwd, runtime, authority),
+            GateCommands::Status => run_gate_status(),
         },
         Commands::Init {
             git_hooks,
@@ -7855,6 +7924,78 @@ async fn open_cli_attach_point(
             None
         }
     }
+}
+
+fn run_gate_hook(source: String, write_receipt: bool) -> anyhow::Result<()> {
+    use std::io::Read;
+    let mut raw = String::new();
+    let _ = std::io::stdin().read_to_string(&mut raw);
+    let req = vestige_mcp::native_gate::request_from_hook_stdin(&source, &raw);
+    let verdict = vestige_mcp::native_gate::evaluate_gate_request(req.clone());
+    if write_receipt {
+        let _ = vestige_mcp::native_gate::append_receipt_o1(
+            &vestige_mcp::native_gate::default_receipts_path(),
+            &req,
+            &verdict,
+        );
+    }
+    if verdict.decision == vestige_core::GuardDecision::Deny {
+        let rule = verdict.rule_id.as_deref().unwrap_or("GATE");
+        eprintln!("OPERATOR: STOPPED ({rule})\nWhy: {}", verdict.reason);
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
+fn run_gate_check(
+    tool: String,
+    command: Option<String>,
+    file: Option<String>,
+    cwd: Option<String>,
+    runtime: String,
+    authority: String,
+) -> anyhow::Result<()> {
+    let req = vestige_core::GuardEvalRequest {
+        event: "PreToolUse".into(),
+        runtime,
+        tool_name: tool,
+        command,
+        file_path: file,
+        payload_json: String::new(),
+        cwd,
+        authority: vestige_mcp::native_gate::parse_authority(&authority),
+        session_id: String::new(),
+        deterministic_rule_hit: None,
+    };
+    let verdict = vestige_mcp::native_gate::evaluate_gate_request(req);
+    println!("{}", serde_json::to_string_pretty(&verdict)?);
+    if verdict.decision == vestige_core::GuardDecision::Deny {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
+fn run_gate_status() -> anyhow::Result<()> {
+    let report = vestige_mcp::native_gate::gate_status(None);
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn run_hook_dispatch(runtime: String, event: String, write_receipt: bool) -> anyhow::Result<()> {
+    use std::io::Read;
+    let mut raw = String::new();
+    let _ = std::io::stdin().read_to_string(&mut raw);
+    let res = vestige_mcp::native_hook::dispatch_native_hook(&runtime, &event, &raw, write_receipt);
+    if let Some(err) = res.stderr_message {
+        eprintln!("{err}");
+    }
+    if !res.stdout_json.as_object().is_some_and(|m| m.is_empty()) {
+        println!("{}", serde_json::to_string(&res.stdout_json)?);
+    }
+    if res.exit_code != 0 {
+        std::process::exit(res.exit_code);
+    }
+    Ok(())
 }
 
 /// Truncate a string for display (UTF-8 safe)
