@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use vestige_core::{KnowledgeNode, Storage};
+use vestige_core::{KnowledgeNode, RerankProvider, Storage};
 
 use super::lexical::{self, HOOK_CHAR_BUDGET};
 
@@ -549,21 +549,70 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             let rank_res = retrieval.query(
                 &vestige_core::retrieval::Query {
                     text: prompt.to_string(),
-                    date: today,
+                    date: today.clone(),
                 },
                 tr_pool,
             );
-            circuit_diag = json!({
-                "engine": vestige_core::retrieval::ENGINE,
-                "turns_indexed": retrieval.turns_indexed(),
-                "premise_coverage": rank_res.premise_coverage,
-                "standing_rules_count": rank_res.standing_rules.len(),
-            });
             let pos_by_id: HashMap<&str, usize> = nodes
                 .iter()
                 .enumerate()
                 .map(|(i, n)| (n.id.as_str(), i))
                 .collect();
+            let reranker = vestige_core::active_rerank_provider();
+            let mut rerank_latency_us = 0u64;
+            let mut rerank_used_reasoning = false;
+            let ranked_turns: Vec<(String, f64)> = if reranker.provider_id()
+                == vestige_core::IdentityRerankProvider.provider_id()
+                || rank_res.turns.len() <= 1
+            {
+                rank_res
+                    .turns
+                    .iter()
+                    .map(|t| (t.id.clone(), f64::from(t.score)))
+                    .collect()
+            } else {
+                let candidates: Vec<vestige_core::RerankCandidate> = rank_res
+                    .turns
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(rank, item)| {
+                        let &idx = pos_by_id.get(item.id.as_str())?;
+                        let node = &nodes[idx];
+                        Some(vestige_core::RerankCandidate {
+                            id: item.id.clone(),
+                            text: node.content.clone(),
+                            session_id: None,
+                            timestamp: Some(node.created_at.to_rfc3339()),
+                            base_score: f64::from(item.score),
+                            base_rank: rank,
+                        })
+                    })
+                    .collect();
+                let req = vestige_core::RerankRequest {
+                    query: prompt.to_string(),
+                    query_date: Some(today),
+                    candidates,
+                    top_k: tr_pool,
+                    lock_slot0: true,
+                };
+                let mut resp = reranker.rerank(&req);
+                vestige_core::enforce_slot0_lock(&req, &mut resp);
+                rerank_latency_us = resp.latency_us;
+                rerank_used_reasoning = resp.used_reasoning;
+                resp.ranked
+                    .into_iter()
+                    .map(|r| (r.id, r.calibrated_score))
+                    .collect()
+            };
+            circuit_diag = json!({
+                "engine": vestige_core::retrieval::ENGINE,
+                "turns_indexed": retrieval.turns_indexed(),
+                "premise_coverage": rank_res.premise_coverage,
+                "standing_rules_count": rank_res.standing_rules.len(),
+                "rerank_provider": reranker.provider_id(),
+                "rerank_latency_us": rerank_latency_us,
+                "rerank_used_reasoning": rerank_used_reasoning,
+            });
             let standing_rule_indexes: HashSet<usize> = rank_res
                 .standing_rules
                 .iter()
@@ -571,14 +620,19 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                 .collect();
             let mut hits: Vec<lexical::LexicalHit> = Vec::new();
             let mut seen_idx: HashSet<usize> = HashSet::new();
-            for item in rank_res.standing_rules.iter().chain(rank_res.turns.iter()) {
-                let Some(&index) = pos_by_id.get(item.id.as_str()) else {
+            for (id, score) in rank_res
+                .standing_rules
+                .iter()
+                .map(|item| (item.id.as_str(), f64::from(item.score)))
+                .chain(ranked_turns.iter().map(|(id, score)| (id.as_str(), *score)))
+            {
+                let Some(&index) = pos_by_id.get(id) else {
                     continue;
                 };
                 if !seen_idx.insert(index) {
                     continue;
                 }
-                let score_micro = ((item.score as f64) * 1_000_000.0).round() as i64;
+                let score_micro = (score * 1_000_000.0).round() as i64;
                 if score_micro > 0 || standing_rule_indexes.contains(&index) {
                     hits.push(lexical::LexicalHit {
                         index,

@@ -1150,3 +1150,470 @@ pub fn kernel_telemetry(storage: &Storage) -> Value {
         "vectorClock": k.vector_clock.entries,
     })
 }
+
+pub use autopilot::spawn as spawn_autopilot;
+
+/// Consolidated event-subscriber & prospective-memory poller (merged from `autopilot.rs`).
+pub mod autopilot {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use chrono::{DateTime, Utc};
+    use tokio::sync::{Mutex, broadcast};
+    use tracing::{debug, info, warn};
+    use vestige_core::neuroscience::prospective_memory::Context as ProspectiveContext;
+    use vestige_core::{
+        AccessContext, AccessPattern, AccessTrigger, AttentionSession, LinkType, MemorySnapshot,
+        MemoryTraceEvent, Storage,
+    };
+
+    use crate::cognitive::CognitiveEngine;
+    use crate::dashboard::events::VestigeEvent;
+
+    const AUTO_PROMOTE_THRESHOLD: f64 = 0.85;
+    const DUPLICATES_THRESHOLD: usize = 700;
+    const DUPLICATES_SWEEP_COOLDOWN_SECS: u64 = 6 * 3600;
+    const PROSPECTIVE_POLL_SECS: u64 = 60;
+    const SUPERVISOR_RESTART_BACKOFF_SECS: u64 = 5;
+
+    struct ConsolidationSweepState {
+        last_fired: Option<Instant>,
+        in_flight: Option<tokio::task::JoinHandle<()>>,
+    }
+
+    impl ConsolidationSweepState {
+        fn new() -> Self {
+            Self {
+                last_fired: None,
+                in_flight: None,
+            }
+        }
+
+        fn is_running(&mut self) -> bool {
+            match &self.in_flight {
+                Some(h) if !h.is_finished() => true,
+                Some(_) => {
+                    self.in_flight = None;
+                    false
+                }
+                None => false,
+            }
+        }
+    }
+
+    /// Launch the supervised cognitive event-subscriber + prospective-memory poller.
+    pub fn spawn(
+        cognitive: Arc<Mutex<CognitiveEngine>>,
+        storage: Arc<Storage>,
+        event_tx: broadcast::Sender<VestigeEvent>,
+    ) {
+        match std::env::var("VESTIGE_AUTOPILOT_ENABLED").as_deref() {
+            Ok("0") | Ok("false") | Ok("no") | Ok("off") => {
+                info!("Autopilot disabled via VESTIGE_AUTOPILOT_ENABLED — cognitive modules remain passive");
+                return;
+            }
+            _ => {}
+        }
+
+        {
+            let cognitive = cognitive.clone();
+            let storage = storage.clone();
+            let event_tx = event_tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    let rx = event_tx.subscribe();
+                    let cog = cognitive.clone();
+                    let sto = storage.clone();
+                    let etx = event_tx.clone();
+                    let handle = tokio::spawn(async move {
+                        run_event_subscriber(rx, cog, sto, etx).await;
+                    });
+                    match handle.await {
+                        Ok(()) => {
+                            info!("Autopilot event subscriber exited cleanly");
+                            break;
+                        }
+                        Err(e) if e.is_panic() => {
+                            warn!(
+                                error = ?e,
+                                backoff_secs = SUPERVISOR_RESTART_BACKOFF_SECS,
+                                "Autopilot event subscriber panicked — supervisor restarting"
+                            );
+                            tokio::time::sleep(Duration::from_secs(
+                                SUPERVISOR_RESTART_BACKOFF_SECS,
+                            ))
+                            .await;
+                        }
+                        Err(e) => {
+                            warn!(error = ?e, "Autopilot event subscriber join error — exiting");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+
+        {
+            let cognitive = cognitive.clone();
+            let storage = storage.clone();
+            let event_tx = event_tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    let cog = cognitive.clone();
+                    let sto = storage.clone();
+                    let etx = event_tx.clone();
+                    let handle = tokio::spawn(async move {
+                        run_prospective_poller(cog, sto, etx).await;
+                    });
+                    match handle.await {
+                        Ok(()) => {
+                            info!("Autopilot prospective poller exited cleanly");
+                            break;
+                        }
+                        Err(e) if e.is_panic() => {
+                            warn!(
+                                error = ?e,
+                                backoff_secs = SUPERVISOR_RESTART_BACKOFF_SECS,
+                                "Autopilot prospective poller panicked — supervisor restarting"
+                            );
+                            tokio::time::sleep(Duration::from_secs(
+                                SUPERVISOR_RESTART_BACKOFF_SECS,
+                            ))
+                            .await;
+                        }
+                        Err(e) => {
+                            warn!(error = ?e, "Autopilot prospective poller join error — exiting");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+
+        info!("Cognitive kernel autopilot spawned (event-subscriber + prospective poller, supervised)");
+    }
+
+    async fn run_event_subscriber(
+        mut rx: broadcast::Receiver<VestigeEvent>,
+        cognitive: Arc<Mutex<CognitiveEngine>>,
+        storage: Arc<Storage>,
+        event_tx: broadcast::Sender<VestigeEvent>,
+    ) {
+        let mut sweep_state = ConsolidationSweepState::new();
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    handle_event(event, &cognitive, &storage, &event_tx, &mut sweep_state).await;
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("Autopilot lagged {n} events — increase channel capacity if this persists");
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    info!("Autopilot event bus closed — subscriber exiting");
+                    break;
+                }
+            }
+        }
+    }
+
+    async fn handle_event(
+        event: VestigeEvent,
+        cognitive: &Arc<Mutex<CognitiveEngine>>,
+        storage: &Arc<Storage>,
+        event_tx: &broadcast::Sender<VestigeEvent>,
+        sweep_state: &mut ConsolidationSweepState,
+    ) {
+        match event {
+            VestigeEvent::MemoryCreated { id, node_type, .. } => {
+                let edges = storage.get_connections_for_memory(&id).unwrap_or_default();
+                let mut cog = cognitive.lock().await;
+                cog.activity_tracker.record_activity();
+                if !cog.synaptic_tagging.has_active_tag(&id) {
+                    let _ = cog.synaptic_tagging.tag_memory_with_context(&id, &node_type);
+                }
+                for edge in &edges {
+                    cog.activation_network.add_edge(
+                        edge.source_id.clone(),
+                        edge.target_id.clone(),
+                        link_type_of(&edge.link_type),
+                        edge.strength,
+                    );
+                }
+                debug!(memory_id = %id, node_type = %node_type, n_edges = edges.len(), "Autopilot: MemoryCreated recorded");
+            }
+            VestigeEvent::SearchPerformed {
+                query, result_ids, ..
+            } => {
+                let n_results = result_ids.len();
+                let top: Vec<String> = result_ids.into_iter().take(24).collect();
+                let retrieved: Vec<(String, MemorySnapshot)> = top
+                    .iter()
+                    .filter_map(|id| {
+                        retrieval_snapshot(storage.as_ref(), id)
+                            .map(|snapshot| (id.clone(), snapshot))
+                    })
+                    .collect();
+                let co_retrieved: Vec<String> = retrieved.iter().map(|(id, _)| id.clone()).collect();
+                let mut cog = cognitive.lock().await;
+                cog.activity_tracker.record_activity();
+                for (id, snapshot) in retrieved {
+                    let context = AccessContext {
+                        trigger: AccessTrigger::Search,
+                        query: Some(query.clone()),
+                        co_retrieved: co_retrieved
+                            .iter()
+                            .filter(|other| *other != &id)
+                            .cloned()
+                            .collect(),
+                        session_id: Some("autopilot".to_string()),
+                    };
+                    cog.reconsolidation
+                        .mark_labile_with_context(&id, snapshot, context);
+                }
+                let mut pattern = AccessPattern::new();
+                pattern.add_query(query.clone());
+                for id in &top {
+                    pattern.add_access(id.clone(), 0.0);
+                }
+                let mut session = AttentionSession::new("autopilot-search");
+                session.query_count = 1;
+                session.unique_memories_accessed = top.len() as u32;
+                session.duration_minutes = 1.0;
+                if !query.is_empty() {
+                    session.query_topics.push(query.clone());
+                }
+                let attention = cog.attention_signal.compute(&pattern);
+                cog.attention_signal.record_session_activity(session);
+                debug!(query = %query, n_results, marked = co_retrieved.len(), attention, "Autopilot: SearchPerformed recorded");
+            }
+            VestigeEvent::MemoryPromoted { id, timestamp, .. } => {
+                let mut cog = cognitive.lock().await;
+                let spread = cog.activation_network.activate(&id, 0.3);
+                let activated_ids: Vec<String> = spread.into_iter().map(|hit| hit.memory_id).collect();
+                let n_activated = activated_ids.len();
+                drop(cog);
+                if n_activated > 0 {
+                    let _ = event_tx.send(VestigeEvent::ActivationSpread {
+                        source_id: id.clone(),
+                        activated_ids,
+                        timestamp,
+                    });
+                }
+                debug!(memory_id = %id, n_activated, "Autopilot: MemoryPromoted triggered activation spread");
+            }
+            VestigeEvent::MemorySuppressed {
+                id,
+                estimated_cascade,
+                timestamp,
+                ..
+            } => {
+                let _ = event_tx.send(VestigeEvent::Rac1CascadeSwept {
+                    seeds: 1,
+                    neighbors_affected: estimated_cascade,
+                    timestamp,
+                });
+                debug!(memory_id = %id, cascade_size = estimated_cascade, "Autopilot: MemorySuppressed emitted Rac1CascadeSwept");
+            }
+            VestigeEvent::ImportanceScored {
+                memory_id,
+                composite_score,
+                ..
+            } => {
+                if let Some(mid) = memory_id
+                    && composite_score > AUTO_PROMOTE_THRESHOLD
+                {
+                    match storage.promote_memory(&mid) {
+                        Ok(node) => {
+                            info!(memory_id = %mid, composite_score, new_retention = node.retention_strength, "Autopilot: auto-promoted high-composite memory");
+                            let _ = event_tx.send(VestigeEvent::MemoryPromoted {
+                                id: node.id,
+                                new_retention: node.retention_strength,
+                                timestamp: chrono::Utc::now(),
+                            });
+                        }
+                        Err(e) => warn!(memory_id = %mid, error = %e, "Autopilot: auto-promote failed"),
+                    }
+                }
+            }
+            VestigeEvent::Heartbeat { memory_count, .. } => {
+                if memory_count <= DUPLICATES_THRESHOLD || sweep_state.is_running() {
+                    return;
+                }
+                let now = Instant::now();
+                let cooldown_elapsed = sweep_state
+                    .last_fired
+                    .map(|t| now.duration_since(t).as_secs() >= DUPLICATES_SWEEP_COOLDOWN_SECS)
+                    .unwrap_or(true);
+                if !cooldown_elapsed {
+                    return;
+                }
+                sweep_state.last_fired = Some(now);
+                let storage = storage.clone();
+                let handle = tokio::spawn(async move {
+                    let drifted = super::sweep_anchor_watch(storage.as_ref(), None);
+                    if !drifted.is_empty() {
+                        info!(drifted_count = drifted.len(), "Autopilot: Anchor Watch detected drifted code memories");
+                    }
+                    let _ = super::induce_standing_laws(storage.as_ref(), "user", true);
+                    if crate::tools::backfill::autofire_enabled() {
+                        match storage.run_consolidation() {
+                            Ok(result) => debug!(nodes_processed = result.nodes_processed, decay_applied = result.decay_applied, "Autopilot: Heartbeat ran Strata consolidation"),
+                            Err(error) => debug!(%error, "Autopilot: Strata consolidation failed"),
+                        }
+                    }
+                });
+                sweep_state.in_flight = Some(handle);
+            }
+            VestigeEvent::MemoryUpdated { .. }
+            | VestigeEvent::MemoryDeleted { .. }
+            | VestigeEvent::MemoryDemoted { .. }
+            | VestigeEvent::MemoryUnsuppressed { .. }
+            | VestigeEvent::Rac1CascadeSwept { .. }
+            | VestigeEvent::DeepReferenceCompleted { .. }
+            | VestigeEvent::BackfillFired { .. }
+            | VestigeEvent::HookVerdictRecorded { .. }
+            | VestigeEvent::DreamStarted { .. }
+            | VestigeEvent::DreamProgress { .. }
+            | VestigeEvent::DreamCompleted { .. }
+            | VestigeEvent::ConsolidationStarted { .. }
+            | VestigeEvent::ConsolidationCompleted { .. }
+            | VestigeEvent::RetentionDecayed { .. }
+            | VestigeEvent::ConnectionDiscovered { .. }
+            | VestigeEvent::ActivationSpread { .. }
+            | VestigeEvent::TraceEvent { .. }
+            | VestigeEvent::MemoryPrOpened { .. }
+            | VestigeEvent::MemoryPrDecided { .. }
+            | VestigeEvent::MemoryShown { .. } => {}
+        }
+    }
+
+    async fn run_prospective_poller(
+        cognitive: Arc<Mutex<CognitiveEngine>>,
+        storage: Arc<Storage>,
+        event_tx: broadcast::Sender<VestigeEvent>,
+    ) {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        let mut ticker = tokio::time::interval(Duration::from_secs(PROSPECTIVE_POLL_SECS));
+        ticker.tick().await;
+        let mut announced: HashSet<String> = HashSet::new();
+        let mut seq = 0i64;
+
+        loop {
+            ticker.tick().await;
+            let now = Utc::now();
+            let context = ProspectiveContext {
+                timestamp: now,
+                ..Default::default()
+            };
+            let triggered = {
+                let cog = cognitive.lock().await;
+                cog.prospective_memory.check_triggers(&context)
+            };
+            let mut surfaced: Vec<String> = Vec::new();
+            match triggered {
+                Ok(intentions) if !intentions.is_empty() => {
+                    info!(n_triggered = intentions.len(), "Autopilot: prospective memory triggered intentions");
+                    surfaced.extend(intentions.into_iter().map(|i| i.id));
+                }
+                Ok(_) => {}
+                Err(e) => warn!(error = %e, "Autopilot: prospective check_triggers failed"),
+            }
+            if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+                match storage.get_active_intentions() {
+                    Ok(intentions) => {
+                        let mut due = Vec::new();
+                        let mut due_push: Vec<(String, String)> = Vec::new();
+                        for intention in intentions {
+                            if intention.snoozed_until.is_some_and(|until| until > now) {
+                                continue;
+                            }
+                            let deadline_due = intention.deadline.is_some_and(|d| d <= now);
+                            let trigger_due =
+                                crate::tools::intention_unified::stored_prospective_trigger(&intention)
+                                    .ok()
+                                    .flatten()
+                                    .is_some_and(|t| t.is_triggered(&context, &[]));
+                            if !deadline_due && !trigger_due {
+                                continue;
+                            }
+                            let key = match intention.deadline {
+                                Some(d) => format!("{}@{}", intention.id, d.timestamp()),
+                                None => intention.id.clone(),
+                            };
+                            if announced.insert(key) {
+                                let summary: String = intention.content.chars().take(160).collect();
+                                due_push.push((intention.id.clone(), summary));
+                                due.push(intention.id);
+                            }
+                        }
+                        if !due.is_empty() {
+                            super::push_due_intentions(storage.as_ref(), &due_push);
+                            info!(n_triggered = due.len(), ids = ?due, "Autopilot: Strata intentions due");
+                            surfaced.extend(due);
+                        }
+                    }
+                    Err(error) => debug!(%error, "Autopilot: get_active_intentions failed"),
+                }
+            }
+            if !surfaced.is_empty() {
+                seq += 1;
+                emit_due_intentions(&event_tx, &surfaced, now, seq);
+            }
+        }
+    }
+
+    fn emit_due_intentions(
+        event_tx: &broadcast::Sender<VestigeEvent>,
+        ids: &[String],
+        now: DateTime<Utc>,
+        seq: i64,
+    ) {
+        let run_id = "autopilot-prospective".to_string();
+        let event = MemoryTraceEvent::MemoryRetrieve {
+            run_id: run_id.clone(),
+            ids: ids.to_vec(),
+            activation: std::collections::BTreeMap::new(),
+            at: now.timestamp_millis(),
+        };
+        let _ = event_tx.send(VestigeEvent::TraceEvent {
+            run_id,
+            seq,
+            event,
+            timestamp: now,
+        });
+    }
+
+    fn link_type_of(raw: &str) -> LinkType {
+        match raw {
+            "temporal" => LinkType::Temporal,
+            "causal" => LinkType::Causal,
+            "spatial" => LinkType::Spatial,
+            _ => LinkType::Semantic,
+        }
+    }
+
+    fn retrieval_snapshot(storage: &Storage, id: &str) -> Option<MemorySnapshot> {
+        let node = storage.get_node(id).ok().flatten()?;
+        let connection_ids = storage
+            .get_connections_for_memory(id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|edge| {
+                if edge.source_id == id {
+                    edge.target_id
+                } else {
+                    edge.source_id
+                }
+            })
+            .collect();
+        Some(MemorySnapshot::capture(
+            node.content,
+            node.tags,
+            node.retention_strength,
+            node.storage_strength,
+            node.retrieval_strength,
+            connection_ids,
+        ))
+    }
+}

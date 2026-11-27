@@ -6,7 +6,6 @@ license = "AGPL-3.0-only"
 description = "Subagent Passports, offline-attenuable capabilities, actor/speaker provenance, anchor watch, brain-print determinism, and July MCP stateless/Tasks runtime"
 publish = false
 
-[workspace]
 
 [dependencies]
 blake3 = "1"

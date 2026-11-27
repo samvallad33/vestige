@@ -12,7 +12,6 @@ publish = false
 # vestige workspace implicitly. The root workspace reaches it only through an
 # explicit path dependency (vestige-mcp) and the differential test crate. Drop
 # this table when the crates/strata integration lands.
-[workspace]
 
 [dependencies]
 borsh = { version = "1", features = ["derive"] }

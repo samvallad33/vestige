@@ -5,14 +5,6 @@ members = [
     "crates/vestige-mcp",
     "crates/vestige-proof",
     "crates/vestige-upgrade",
-    "crates/strata-mesh",
-]
-exclude = [
-    "fastembed-rs",
-    # Strata Causal Proof Engine crates: standalone with empty [workspace]
-    # tables by design (parallel-agent construction). Excluded so root members
-    # can path-depend without cargo seeing multiple workspace roots;
-    # re-parent deliberately at integration time.
     "crates/strata",
     "crates/strata-causal-math",
     "crates/strata-crypto",
@@ -20,13 +12,16 @@ exclude = [
     "crates/strata-gate",
     "crates/strata-import",
     "crates/strata-kernel",
+    "crates/strata-mesh",
     "crates/strata-migrate",
     "crates/strata-passport",
     "crates/strata-runtime",
     "crates/strata-simd",
     "crates/strata-store",
     "crates/strata-verify",
-
+]
+exclude = [
+    "fastembed-rs",
 ]
 
 [workspace.package]

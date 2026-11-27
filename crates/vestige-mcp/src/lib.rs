@@ -12,7 +12,7 @@
 pub mod actor_surface;
 pub mod attach;
 pub mod auto_connect;
-pub mod autopilot;
+pub use cognitive_kernel::autopilot;
 pub mod capsule;
 pub mod circuit_index;
 pub mod cognitive;

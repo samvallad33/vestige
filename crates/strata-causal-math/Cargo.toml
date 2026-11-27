@@ -6,7 +6,6 @@ license = "AGPL-3.0-only"
 description = "Tranche 6 (27 issues): Waves 15–19 Premise Abstention Proofs, Submodular/BvN Routing, Dominators, Semirings, HodgeRank, FCA/MDL, Bayes-Ball, SWIG, Rota Moebius, Z4 Path Integrals, DORT, Deficiency-Zero, Torrens-Pacioli & Khipu Cords"
 publish = false
 
-[workspace]
 
 [dependencies]
 blake3 = "1"

@@ -6,7 +6,6 @@ license = "AGPL-3.0-only"
 description = "Tranche 4 (49 issues): Waves 14, 20–24 Analytics, Distributed Strata Runtime, H2SK Sheaf/HRR/LTC Kernel, FM-Index, E-Graphs, Datalog & Formal Model Checking"
 publish = false
 
-[workspace]
 
 [dependencies]
 blake3 = "1"

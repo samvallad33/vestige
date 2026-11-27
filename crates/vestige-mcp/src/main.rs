@@ -743,9 +743,9 @@ async fn serve() {
     // terminate at the dashboard and the cognitive engine is a passive
     // library that only responds to MCP tool queries.
     //
-    // See `crates/vestige-mcp/src/autopilot.rs` for the routing table and
+    // See `crates/vestige-mcp/src/cognitive_kernel.rs` (`mod autopilot`) for the routing table and
     // `docs/VESTIGE_STATE_AND_PLAN.md` §15 for the architectural rationale.
-    vestige_mcp::autopilot::spawn(
+    vestige_mcp::cognitive_kernel::spawn_autopilot(
         Arc::clone(&cognitive),
         Arc::clone(&storage),
         event_tx.clone(),

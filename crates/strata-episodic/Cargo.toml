@@ -6,7 +6,6 @@ license = "AGPL-3.0-only"
 description = "Waves 8–12 (#620–#670): 50 deterministic source-preserving episodic, reaction, temporal, legal, and stratigraphic memory operators"
 publish = false
 
-[workspace]
 
 [dependencies]
 blake3 = "1"

@@ -10,7 +10,6 @@ publish = false
 # the root vestige workspace while the strata crates are being integrated by
 # parallel agents (same pattern as crates/strata, crates/strata-kernel, and
 # crates/strata-gate). Drop this table when the integration lands.
-[workspace]
 
 [features]
 # SQLite source reader. Default for this crate's own test and bin builds.

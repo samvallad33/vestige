@@ -8,7 +8,6 @@ publish = false
 
 # Standalone crate by design: it must NOT join the vestige root workspace.
 # Integration re-parents it deliberately, never implicitly.
-[workspace]
 
 [dependencies]
 # borsh >= 1.8 no longer enables `derive` by default.

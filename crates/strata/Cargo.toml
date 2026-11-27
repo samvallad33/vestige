@@ -9,7 +9,6 @@ publish = false
 # Intentionally standalone: the empty [workspace] table keeps this crate out of
 # the repository root workspace so it builds and tests on its own. Integration
 # wiring removes this table (and adds the crate to the root members) later.
-[workspace]
 
 [dependencies]
 # borsh >= 1.6 ships derive macros behind an opt-in feature.

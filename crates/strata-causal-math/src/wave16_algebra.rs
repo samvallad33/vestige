@@ -145,13 +145,12 @@ pub fn tropical_max_plus_two_hop(n: usize, weighted_edges: &[(usize, usize, u64)
     }
     let mut sq = vec![vec![0u64; n]; n];
     for i in 0..n {
-        for k in 0..n {
+        for (k, adj_k) in adj.iter().enumerate().take(n) {
             let wik = adj[i][k];
             if wik == 0 {
                 continue;
             }
-            for j in 0..n {
-                let wkj = adj[k][j];
+            for (j, &wkj) in adj_k.iter().enumerate().take(n) {
                 if wkj == 0 {
                     continue;
                 }
