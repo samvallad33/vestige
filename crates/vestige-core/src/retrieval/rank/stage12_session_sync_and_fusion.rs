@@ -4609,6 +4609,8 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         || ql_sr.starts_with("what three ")
         || ql_sr.starts_with("what are the two ")
         || ql_sr.starts_with("what are the three ")
+        || ql_sr.starts_with("i'm looking ")
+        || ql_sr.starts_with("i\u{2019}m looking ")
         || ql_sr.contains("between ")
         || ql_sr.contains(" across ");
     let allow_how_much_rule =

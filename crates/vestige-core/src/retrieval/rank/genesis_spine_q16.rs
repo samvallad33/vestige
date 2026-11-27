@@ -204,6 +204,59 @@ pub(in crate::retrieval) fn analyze_turn_mutation_polarity_q16(
 ///   and shares exact query-group coverage (preventing off-topic early noise).
 /// - Stratifies remaining slots across distinct chronological eras `[early, mid..., late]` so
 ///   multi-session progression and summarization achieve maximum era coverage.
+/// Compute Karkali Asymmetric Prefix-IDF novelty (`IDF_{<t}(w) = log2((t + 2) / (df_{<t}(w) + 1))`)
+/// in `Q16.16` for each session's opening substantive user turn across chronological session order.
+/// Turns that introduce brand-new concepts/entities for the first time in the conversation score
+/// highest, while later recaps/rehashes of already-introduced topics decay naturally.
+fn compute_asymmetric_prefix_idf_q16(ix: &Index) -> Vec<u64> {
+    use crate::retrieval::fusion::kemeny_mrf::log2_u64_q16;
+    use std::collections::BTreeMap;
+
+    let ns = ix.session_turns.len();
+    let mut prefix_nov = vec![0u64; ns];
+    let mut order_idx: Vec<usize> = (0..ns).collect();
+    order_idx.sort_by_key(|&si| (ix.session_ts.get(si).copied().unwrap_or(0), si));
+
+    let mut seen_df: BTreeMap<u32, u64> = BTreeMap::new();
+    for (step, &si) in order_idx.iter().enumerate() {
+        let t_num = (step as u64) + 2;
+        let open_ti = ix.session_turns[si]
+            .iter()
+            .copied()
+            .find(|&ti| {
+                let tr = &ix.turns[ti];
+                tr.field == 0 && !tr.is_backchannel && !tr.is_standing_policy
+            });
+        if let Some(ti) = open_ti {
+            let tr = &ix.turns[ti];
+            let mut sum_idf: u64 = 0;
+            let mut term_cnt: u64 = 0;
+            for &cid in &tr.content {
+                let prev_df = seen_df.get(&cid).copied().unwrap_or(0);
+                // Asymmetric Prefix-IDF: brand-new term (`prev_df == 0`) gets full `log2(t + 2)` birth credit.
+                let ratio_q16 = ((t_num << 16) / (prev_df + 1)).max(65_536);
+                let idf_q16 = log2_u64_q16((ratio_q16 >> 16).max(1)).max(16_384);
+                let ent_bonus = if tr.entities.contains(&cid) && prev_df == 0 {
+                    idf_q16 >> 1
+                } else {
+                    0
+                };
+                sum_idf = sum_idf.saturating_add(idf_q16).saturating_add(ent_bonus);
+                term_cnt += 1;
+            }
+            if term_cnt > 0 {
+                // Mean novelty weighted by log-length so concise concrete milestone openers peak cleanly.
+                prefix_nov[si] = sum_idf / term_cnt.min(18);
+            }
+            // Update running prefix document frequency strictly AFTER scoring session `si` (asymmetric!).
+            for &cid in &tr.content {
+                *seen_df.entry(cid).or_insert(0) += 1;
+            }
+        }
+    }
+    prefix_nov
+}
+
 pub(in crate::retrieval) fn compute_chronological_genesis_spine_q16(
     ix: &Index,
     cand_sessions: &[usize],
@@ -215,7 +268,11 @@ pub(in crate::retrieval) fn compute_chronological_genesis_spine_q16(
     if cand_sessions.len() < 2 || k == 0 {
         return cand_sessions.to_vec();
     }
-    let pool_cap = cand_sessions.len().min(k.max(10));
+    let pool_cap = if prefer_genesis_slot0 {
+        cand_sessions.len().min(k.max(24))
+    } else {
+        cand_sessions.len().min(k.max(10))
+    };
     let pool = &cand_sessions[..pool_cap];
 
     let max_sc = pool
@@ -229,6 +286,7 @@ pub(in crate::retrieval) fn compute_chronological_genesis_spine_q16(
     let any_exact = pool
         .iter()
         .any(|&si| s_exact_mask.get(si).copied().unwrap_or(0) != 0);
+    let min_sc_ratio = if prefer_genesis_slot0 { 0.36 } else { 0.42 };
     let mut qualified: Vec<usize> = pool
         .iter()
         .copied()
@@ -242,7 +300,7 @@ pub(in crate::retrieval) fn compute_chronological_genesis_spine_q16(
                         && !ix.turns[ti].is_standing_policy
                 })
             });
-            sc >= 0.42 * max_sc && (!any_exact || ex != 0) && has_user_init
+            sc >= min_sc_ratio * max_sc && (!any_exact || ex != 0) && has_user_init
         })
         .collect();
 
@@ -257,15 +315,42 @@ pub(in crate::retrieval) fn compute_chronological_genesis_spine_q16(
     let mut spine: Vec<usize> = Vec::with_capacity(target_n);
 
     if prefer_genesis_slot0 {
+        let prefix_nov = compute_asymmetric_prefix_idf_q16(ix);
+        let max_nov = qualified
+            .iter()
+            .map(|&si| prefix_nov.get(si).copied().unwrap_or(0))
+            .max()
+            .unwrap_or(1)
+            .max(1);
         let qn = qualified.len();
         let strata = target_n.min(5).min(qn);
         if strata == 1 {
             spine.push(qualified[0]);
         } else {
+            // CoNLL 2018 Chronological Stratum Cover + Karkali Asymmetric Prefix-IDF Birth Selection:
+            // Partition `qualified` into `strata` disjoint chronological bins and pick each bin's
+            // strongest First-Story birth session (`0.65 * norm_rel + 0.35 * norm_prefix_nov`,
+            // breaking ties toward earlier chronological birth).
             for idx in 0..strata {
-                let pick_pos = (idx * (qn - 1)) / (strata - 1);
-                let si = qualified[pick_pos];
-                if !spine.contains(&si) {
+                let lo = (idx * qn) / strata;
+                let hi = (((idx + 1) * qn) / strata).max(lo + 1).min(qn);
+                let best_si = qualified[lo..hi]
+                    .iter()
+                    .copied()
+                    .filter(|si| !spine.contains(si))
+                    .max_by(|&a, &b| {
+                        let rel_a = ((s_score.get(a).copied().unwrap_or(0.0) / max_sc) * 65_536.0) as u64;
+                        let rel_b = ((s_score.get(b).copied().unwrap_or(0.0) / max_sc) * 65_536.0) as u64;
+                        let nov_a = (((prefix_nov.get(a).copied().unwrap_or(0) as u128) << 16)
+                            / (max_nov as u128)) as u64;
+                        let nov_b = (((prefix_nov.get(b).copied().unwrap_or(0) as u128) << 16)
+                            / (max_nov as u128)) as u64;
+                        // 0.65 * rel + 0.35 * prefix_nov (42_598 + 22_938 = 65_536)
+                        let sc_a = ((rel_a as u128 * 42_598 + nov_a as u128 * 22_938) >> 16) as u64;
+                        let sc_b = ((rel_b as u128 * 42_598 + nov_b as u128 * 22_938) >> 16) as u64;
+                        sc_a.cmp(&sc_b).then_with(|| b.cmp(&a))
+                    });
+                if let Some(si) = best_si {
                     spine.push(si);
                 }
             }

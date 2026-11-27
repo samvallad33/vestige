@@ -929,7 +929,10 @@ pub(in crate::retrieval) fn apply_event_ordering_stack(ctx: &mut RankCtx<'_>) {
             if !user_turns.is_empty() {
                 let open_u = user_turns[0];
                 let open_sc = ctx.t_scene.get(open_u).copied().unwrap_or(0.0);
-                let chosen = if max_u_sc <= 0.0 || open_sc >= 0.30 * max_u_sc {
+                // First-Story Opener Priority: on chronological event-ordering queries, a session's
+                // opening substantive user turn (`open_u`) introduces the milestone event, whereas
+                // mid-session `pos >= 2` turns are follow-up clarifications or sample excerpts.
+                let chosen = if max_u_sc <= 0.0 || open_sc >= 0.15 * max_u_sc {
                     open_u
                 } else {
                     user_turns
