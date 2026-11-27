@@ -4771,48 +4771,6 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             }
         }
     }
-    // Kernel 3 (THOT + DBSN Log-Domain Sparse Sinkhorn):
-    // Sharpen Slots 1..16 via balanced transport minus target-hubness hbar(t_j), keeping Slot 0
-    // and specialized Stage 7-12 arbiters (tool receipts, preferences, Torrens, events) intact.
-    if ctx.final_turn_indices.len() >= 3
-        && !ctx.torrens_locked_head
-        && !ctx.eff_it.is_event_sequence
-        && !ctx.pref_on
-        && !ctx.ix.has_tool_calls
-    {
-        let pool_len = ctx.final_turn_indices.len().min(16);
-        let pool: Vec<(usize, u64)> = ctx.final_turn_indices[..pool_len]
-            .iter()
-            .enumerate()
-            .map(|(rank, &ti)| {
-                let rank_anchor = ((pool_len - rank) as u64) * 16_384;
-                let sc_q16 = crate::retrieval::fusion::kemeny_mrf::ieee754_bits_to_q16(
-                    ctx.t_scene.get(ti).copied().unwrap_or(0.0).to_bits(),
-                );
-                (ti, rank_anchor.saturating_add(sc_q16 >> 2).max(1))
-            })
-            .collect();
-        let rescored = crate::retrieval::lexical::thot_dbsn_sinkhorn_q16::thot_dbsn_rescore_q16(
-            ctx.ix,
-            &ctx.plan,
-            &pool,
-        );
-        let inc0 = ctx.final_turn_indices[0];
-        let mut updated: Vec<usize> = Vec::with_capacity(ctx.final_turn_indices.len());
-        updated.push(inc0);
-        for (ti, _) in rescored {
-            if !updated.contains(&ti) {
-                updated.push(ti);
-            }
-        }
-        for &ti in &ctx.final_turn_indices {
-            if !updated.contains(&ti) {
-                updated.push(ti);
-            }
-        }
-        updated.truncate(ctx.final_turn_indices.len());
-        ctx.final_turn_indices = updated;
-    }
     if ctx.final_session_indices.len() > ctx.k {
         ctx.final_session_indices.truncate(ctx.k);
     }

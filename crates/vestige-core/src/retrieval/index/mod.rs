@@ -447,7 +447,6 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 }
             }
         }
-        let mut prev_nucleus_feats: Vec<Feat> = Vec::new();
 
         for (ti, t) in s.turns.iter().enumerate() {
             let (raw_prose_body, blip_opt) = split_blip_caption(&t.content);
@@ -499,34 +498,6 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                     let eid = vocab.intern(&format!("\u{1}ent:{w}"));
                     entities.insert(eid);
                     s_ents.insert(eid);
-                }
-            }
-            // Kernel 5 & 6 ingest tags: MWE compounds + CABLE abstract ancestor tags (0.65x) +
-            // SentGraph preceding Nucleus subject inheritance (0.35x).
-            let (mwe_cable_feats, _) =
-                crate::retrieval::graph::mwe_synapse_cable_q16::emit_mwe_and_cable_feats(
-                    &mut vocab,
-                    &raw,
-                    field == 0 && !raw.is_empty(),
-                );
-            feats.extend(mwe_cable_feats);
-            if field == 0 && !prose_body.trim_end().ends_with('?') {
-                let needs_nucleus = !prev_nucleus_feats.is_empty()
-                    && raw.iter().take(10).any(|w| ANAPHORS.contains(&w.as_str()));
-                if needs_nucleus {
-                    for nf in &prev_nucleus_feats {
-                        if !content.contains(&nf.id) {
-                            feats.push(*nf);
-                        }
-                    }
-                }
-                let cur_nuc =
-                    crate::retrieval::graph::mgmem_sag2_sentgraph_q16::extract_nucleus_subject_ids(
-                        prose_body,
-                        &mut vocab,
-                    );
-                if !cur_nuc.is_empty() {
-                    prev_nucleus_feats = cur_nuc;
                 }
             }
             // Stream 2: Auxiliary BLIP caption field (w=0.75, b_blip=0, counts_len:false, inheritable:false)
