@@ -1023,13 +1023,14 @@ async function sessionStart(cfg, input) {
   const payload = toClaudePayload(input, 'SessionStart');
   payload.source = input.source || 'startup';
 
-  const [, capsule, intentions, mem, rfxOut] = await Promise.all([
-    turnoverSessionStartAsync(cfg, payload),
-    capsuleRunAsync(cfg, payload.source, payload.cwd),
-    intentionsStartContext(cfg, 750),
-    memoryContext(cfg, payload, 'session', 800),
-    reflexRun(cfg, payload, 'SessionStart'),
-  ]);
+  // Serialize vestige-mcp RPCs so short-lived processes never attach to a peer
+  // that exits mid-request ("stopped before answering" race on fast Linux hosts).
+  const turnoverPromise = turnoverSessionStartAsync(cfg, payload);
+  const capsulePromise = capsuleRunAsync(cfg, payload.source, payload.cwd);
+  const intentions = await intentionsStartContext(cfg, 750);
+  const rfxOut = await reflexRun(cfg, payload, 'SessionStart');
+  const mem = await memoryContext(cfg, payload, 'session', 800);
+  const [, capsule] = await Promise.all([turnoverPromise, capsulePromise]);
   const rfx = compactContext(extractContext(rfxOut), null, 450);
 
   const text = compactContext([intentions, capsule, rfx, mem].filter(Boolean).join('\n\n'), null, 2400);

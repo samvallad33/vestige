@@ -220,7 +220,9 @@ function commented(file) {
   try { JSON.parse(withoutComments(raw)); return true; } catch { return false; }
 }
 function plan({ home = os.homedir(), bin, platform = os.platform(), env = process.env, guard = false, clients, node = process.execPath, enforce = true } = {}) {
-  const found = bin ? (fs.existsSync(bin) ? path.resolve(bin) : null) : binary(home, platform, env);
+  const found = env.VESTIGE_MCP_PATH
+    ? binary(home, platform, env)
+    : (bin ? (fs.existsSync(bin) ? path.resolve(bin) : null) : binary(home, platform, env));
   const handAdd = [];
   const detected = catalog(home, platform, env).filter(c => c.detected && (!clients || clients.includes(c.id))).filter(c => {
     const kept = [c.id === 'codex' ? null : c.file, ['opencode', 'cline'].includes(c.id) ? null : c.hookFile].filter(Boolean).find(commented);
