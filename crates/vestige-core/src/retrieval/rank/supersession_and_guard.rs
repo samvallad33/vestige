@@ -430,6 +430,19 @@ fn has_update_or_supersession_marker(text: &str) -> bool {
         "much easier to just maintain",
         "ever since",
         "since then",
+        "to reflect the new",
+        "reflect the updated",
+        "trying to update",
+        "recently improved to",
+        "has improved to",
+        "up from ",
+        "down from ",
+        "revised to",
+        "adjusted to",
+        "now set to",
+        "changed from ",
+        "switched from ",
+        "updated from ",
     ]
     .iter()
     .any(|p| low.contains(p))
@@ -597,7 +610,7 @@ fn rescue_zero_exact_entity_head(
         && !ctx.eff_it.multi_hop
         && !ctx.eff_it.sniper_how_many
         && !ctx.eff_it.is_event_sequence
-        && t0_exact_cnt <= 1;
+        && t0_exact_cnt <= 2;
     if (t0_any_topical != 0 || t0_has_star_any || t0_has_bridge) && !allow_missing_star_rescue {
         return;
     }
@@ -797,6 +810,7 @@ fn apply_forward_supersession_chain(
     let tr0_low_opener = tr0.body_for_headers.trim_start().to_ascii_lowercase();
     let t0_is_framing_opener = tr0.is_question
         || tr0.is_pure_info_question
+        || tr0.field == 1
         || tr0_low_opener.contains("pull up the draft")
         || tr0_low_opener.contains("brainstorm some")
         || tr0_low_opener.contains("wanted to make sure")
@@ -1003,6 +1017,7 @@ fn snap_assistant_echo_to_user_origin(ctx: &mut RankCtx<'_>, topical_mask: u64) 
     let top_tail = ctx.final_turn_indices.len().min(15);
     let orig_len = ctx.final_turn_indices.len();
     let mut swapped_pairs: Vec<(usize, usize)> = Vec::new();
+    let mut in_top5_echo_promotes: Vec<(usize, usize)> = Vec::new();
 
     for slot in 0..top_n {
         let ti = ctx.final_turn_indices[slot];
@@ -1029,7 +1044,11 @@ fn snap_assistant_echo_to_user_origin(ctx: &mut RankCtx<'_>, topical_mask: u64) 
         {
             continue;
         }
-        if ctx.final_turn_indices[..top_n].contains(&prev) {
+        let prev_in_top5_pos = ctx.final_turn_indices[..top_n].iter().position(|&x| x == prev);
+        if let Some(ppos) = prev_in_top5_pos
+            && ppos < slot
+        {
+            // User origin is already ranked strictly ahead of its assistant echo.
             continue;
         }
         // Require substantive user origin (`>= 10` content tokens + 1st-person declarative clause
@@ -1054,10 +1073,19 @@ fn snap_assistant_echo_to_user_origin(ctx: &mut RankCtx<'_>, topical_mask: u64) 
         }
         let p_cov = (ctx.t_exact_mask[prev] & topical_mask).count_ones();
         let t_cov = (ctx.t_exact_mask[ti] & topical_mask).count_ones();
+        let t_q_mask = ctx.t_mask[ti] & topical_mask;
+        let p_q_mask = ctx.t_mask[prev] & topical_mask;
+        let shared_q = (t_q_mask & p_q_mask).count_ones();
+        let t_q_cnt = t_q_mask.count_ones();
         let p_timex = ptr.has_temporal || !ptr.resolved_timex.is_empty();
         let p_own = ctx.t_own[prev];
         let t_own = ctx.t_own[ti];
         let prev_in_top15 = ctx.final_turn_indices[top_n..top_tail].contains(&prev);
+        // Echo containment (Bridge/MGMem): assistant turn `ti` echoes query-relevant terms from `prev`.
+        let echo_contained = !ptr.is_pure_info_question
+            && t_q_cnt > 0
+            && shared_q * 2 >= t_q_cnt
+            && p_own >= 0.35 * t_own;
         // Snap when `prev` is already ranked in Top-15 on a user-attributed temporal/counting/
         // update/multi-session query (eliminating 400-word assistant echo dominance in Slots 0..4),
         // or when `prev` genuinely carries the queried lexical/temporal signal directly.
@@ -1066,8 +1094,23 @@ fn snap_assistant_echo_to_user_origin(ctx: &mut RankCtx<'_>, topical_mask: u64) 
                 && (p_own >= 0.45 * t_own
                     || (p_cov > 0 && p_cov >= t_cov)
                     || (is_temp_q && p_timex && p_own >= 0.25 * t_own)));
-        if strong_origin {
+        if let Some(ppos) = prev_in_top5_pos {
+            if ppos > slot && (strong_origin || echo_contained) {
+                in_top5_echo_promotes.push((slot, prev));
+            }
+        } else if strong_origin {
             swapped_pairs.push((slot, prev));
+        }
+    }
+
+    // Zero-eviction in-place Top-5 promotion: move `prev` ahead of its assistant echo `ti`
+    // while keeping both turns inside Top-5 (strictly preserves Any@5 and All@5).
+    for (slot, prev) in in_top5_echo_promotes {
+        if let Some(cur_pos) = ctx.final_turn_indices[..top_n].iter().position(|&x| x == prev)
+            && cur_pos > slot
+        {
+            ctx.final_turn_indices.remove(cur_pos);
+            ctx.final_turn_indices.insert(slot, prev);
         }
     }
 
@@ -1419,5 +1462,37 @@ mod tests {
             "expected substantive user turn 28 or 52 at Slot 0 instead of assistant echo: {:?}",
             res.results[0].turns.iter().map(|t| &t.id).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn echo_containment_promotes_top5_user_origin_ahead_of_slot0_assistant_echo() {
+        let req = RankRequest {
+            sessions: vec![Session {
+                id: "s0".into(),
+                date: "2024-09-01".into(),
+                timestamp: 1,
+                turns: vec![
+                    mk_turn(
+                        "126",
+                        "user",
+                        "I've agreed with Alexis on a $500 monthly joint budget for groceries starting Sept 1, which is up from $400.",
+                    ),
+                    mk_turn(
+                        "127",
+                        "assistant",
+                        "Great to hear that you and Alexis have agreed on increasing the monthly grocery budget to $500 per month starting September 1st! That monthly grocery budget agreement with Alexis will give you plenty of flexibility for groceries.",
+                    ),
+                ],
+            }],
+            queries: vec![Query {
+                text: "What is the monthly grocery budget Alexis and I have agreed on?".into(),
+                date: String::new(),
+            }],
+            top_k: 5,
+            params: Params::default(),
+        };
+        let res = rank(&req);
+        assert_eq!(res.results[0].turns[0].id, "126");
+        assert!(res.results[0].turns.iter().any(|t| t.id == "127"));
     }
 }
