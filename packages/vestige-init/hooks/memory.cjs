@@ -120,7 +120,7 @@ function tryDirectAttach(binary, args = [], timeoutMs = 80, env = process.env) {
       if (!result) sock.destroy();
       resolve(result);
     };
-    const hsTimer = setTimeout(() => finish(null), Math.max(15, Math.min(80, timeoutMs)));
+    const hsTimer = setTimeout(() => finish(null), Math.max(15, Math.min(500, timeoutMs)));
     const onFail = () => finish(null);
     const onConnect = () => sock.write(`vestige-attach/1 ${token}\n`);
     const onData = chunk => {

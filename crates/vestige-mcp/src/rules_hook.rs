@@ -52,9 +52,10 @@ const MAX_RULES_FILE_BYTES: u64 = 16 * 1024;
 /// Longest memory content shown on one line, in characters.
 const MAX_LINE_CHARS: usize = 600;
 
-/// Defaults for the rendered context.
-pub const DEFAULT_MAX_ITEMS: usize = 8;
-pub const DEFAULT_MAX_BYTES: usize = 4096;
+/// Defaults for the rendered context, bounded by the host `additionalContext` cap (10,000 chars)
+/// and overridable via `VESTIGE_RULES_MAX_ITEMS` / `VESTIGE_RULES_MAX_BYTES`.
+pub const DEFAULT_MAX_ITEMS: usize = 64;
+pub const DEFAULT_MAX_BYTES: usize = 9_600;
 
 /// What a `SessionStart` hook receives on stdin. Unknown fields are ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -323,9 +324,19 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
+        let max_items = std::env::var("VESTIGE_RULES_MAX_ITEMS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(DEFAULT_MAX_ITEMS);
+        let max_bytes = std::env::var("VESTIGE_RULES_MAX_BYTES")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&n| n >= 512)
+            .unwrap_or(DEFAULT_MAX_BYTES);
         Self {
-            max_items: DEFAULT_MAX_ITEMS,
-            max_bytes: DEFAULT_MAX_BYTES,
+            max_items,
+            max_bytes,
         }
     }
 }
@@ -360,13 +371,28 @@ pub fn render_context(
         return None;
     }
     let mut rules: Vec<(RuleNode, Vec<String>)> = by_id.into_values().collect();
-    rules.sort_by(|(a, _), (b, _)| {
+    let priority = |node: &RuleNode, matched: &[String]| -> u8 {
+        if matched
+            .iter()
+            .any(|t| t == "owner-directive" || t.starts_with("forbid:"))
+        {
+            2
+        } else if node.node_type == "correction" {
+            1
+        } else {
+            0
+        }
+    };
+    rules.sort_by(|(a, a_tags), (b, b_tags)| {
         let when = |node: &RuleNode| {
             node.created_at
                 .as_deref()
                 .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
         };
-        when(b).cmp(&when(a)).then_with(|| b.id.cmp(&a.id))
+        priority(b, b_tags)
+            .cmp(&priority(a, a_tags))
+            .then_with(|| when(b).cmp(&when(a)))
+            .then_with(|| b.id.cmp(&a.id))
     });
 
     let tags: Vec<&str> = resolved.iter().map(|(tag, _)| tag.as_str()).collect();
@@ -772,7 +798,7 @@ mod tests {
 
     #[test]
     fn context_is_capped_by_entries_and_bytes() {
-        let nodes: Vec<RuleNode> = (0..20)
+        let nodes: Vec<RuleNode> = (0..32)
             .map(|i| {
                 node(
                     &format!("mem-{i:016x}"),
@@ -783,14 +809,18 @@ mod tests {
             })
             .collect();
         let resolved = vec![("pinned".to_string(), nodes)];
-        let text = render_context(&resolved, "startup", Limits::default()).unwrap();
-        assert!(text.len() <= DEFAULT_MAX_BYTES, "{}", text.len());
+        let capped = Limits {
+            max_items: 8,
+            max_bytes: 4096,
+        };
+        let text = render_context(&resolved, "startup", capped).unwrap();
+        assert!(text.len() <= capped.max_bytes, "{}", text.len());
         let shown = text
             .lines()
             .filter(|line| line.starts_with("- mem-"))
             .count();
-        assert_eq!(shown, DEFAULT_MAX_ITEMS);
-        assert!(text.contains("12 more under these tags left out"), "{text}");
+        assert_eq!(shown, capped.max_items);
+        assert!(text.contains("24 more under these tags left out"), "{text}");
 
         let tight = Limits {
             max_items: 8,
@@ -800,7 +830,7 @@ mod tests {
         assert!(text.len() <= 1200, "{}", text.len());
         assert!(
             text.lines()
-                .any(|line| line.starts_with("- mem-0000000000000013"))
+                .any(|line| line.starts_with("- mem-000000000000001f"))
         );
 
         let huge = vec![(
@@ -810,6 +840,34 @@ mod tests {
         let text = render_context(&huge, "startup", tight).unwrap();
         assert!(text.len() <= 1200, "{}", text.len());
         assert!(text.contains("- mem-1"));
+    }
+
+    #[test]
+    fn owner_directives_sort_ahead_of_generic_pinned_rules() {
+        let resolved = vec![
+            (
+                "pinned".to_string(),
+                vec![node(
+                    "mem-0000000000000099",
+                    "decision",
+                    "Generic note",
+                    Some("2026-11-26T10:00:00+00:00"),
+                )],
+            ),
+            (
+                "owner-directive".to_string(),
+                vec![node(
+                    "mem-0000000000000010",
+                    "decision",
+                    "Standing rule",
+                    Some("2026-11-20T10:00:00+00:00"),
+                )],
+            ),
+        ];
+        let text = render_context(&resolved, "startup", Limits::default()).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[1].contains("mem-0000000000000010"), "{text}");
+        assert!(lines[2].contains("mem-0000000000000099"), "{text}");
     }
 
     #[test]

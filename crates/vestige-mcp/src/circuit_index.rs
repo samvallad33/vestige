@@ -105,6 +105,7 @@ struct CircuitEdge {
 
 #[derive(Default)]
 struct StoreCircuitCache {
+    fast_fp: (usize, u64, u64, u64, u64),
     fingerprint: (usize, usize, usize, usize, u64),
     head_seq: Option<u64>,
     last_labile_hash: u64,
@@ -120,11 +121,35 @@ struct StoreCircuitCache {
     links_by_id: HashMap<String, Vec<vestige_core::retrieval::TurnLink>>,
     entity_tags_lower: Vec<Vec<(String, String, Option<String>)>>,
     zset: ZSet<String>,
+    generation: u64,
 }
 
 fn cache_registry() -> &'static Mutex<HashMap<PathBuf, StoreCircuitCache>> {
     static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, StoreCircuitCache>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Fast O(1) structural fingerprint of `storage` without cloning all nodes/edges/receipts.
+pub(crate) fn fast_store_stamp(storage: &Storage) -> (usize, u64, u64) {
+    let node_count = crate::strata_memory::read_store(storage, |s| s.nodes().len()).unwrap_or(0);
+    let path = storage.db_path();
+    let (mut files, mut bytes) = (0u64, 0u64);
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.is_file() {
+            files = 1;
+            bytes = meta.len();
+        } else if let Ok(rd) = std::fs::read_dir(path) {
+            for entry in rd.flatten() {
+                if let Ok(m) = entry.metadata()
+                    && m.is_file()
+                {
+                    files = files.saturating_add(1);
+                    bytes = bytes.saturating_add(m.len());
+                }
+            }
+        }
+    }
+    (node_count, files, bytes)
 }
 
 /// Notify the incremental `ZSet` cache that a node or edge changed so the next
@@ -136,6 +161,9 @@ pub fn mark_zset_delta(storage: &Storage, key: &str, weight: i64) {
         entry.zset.apply_delta(key.to_string(), weight);
         // Bump generation salt to trigger exact sync on next read.
         entry.delta_seq = entry.delta_seq.wrapping_add(1);
+        entry.generation = entry.generation.wrapping_add(1);
+        entry.fingerprint.4 = entry.fingerprint.4.wrapping_add(1);
+        entry.fast_fp.4 = entry.generation;
     }
 }
 
@@ -202,10 +230,19 @@ fn sync_cache<'a>(
         }
     }
     let live_head = crate::strata_memory::head_seq(storage);
-    if live_head.is_some()
+    let (fast_nodes, fast_files, fast_bytes) = fast_store_stamp(storage);
+    let fast_fp = (
+        fast_nodes,
+        fast_files,
+        fast_bytes,
+        labile_hash ^ (cache.zset.weights.len() as u64),
+        cache.generation,
+    );
+    if ((live_head.is_some()
         && cache.head_seq == live_head
         && cache.last_labile_hash == labile_hash
-        && cache.last_delta_seq == cache.delta_seq
+        && cache.last_delta_seq == cache.delta_seq)
+        || (fast_nodes > 0 && cache.fast_fp == fast_fp))
         && !cache.nodes.is_empty()
     {
         if let Some(sc) = scope
@@ -238,6 +275,7 @@ fn sync_cache<'a>(
         cache.head_seq = live_head;
         cache.last_labile_hash = labile_hash;
         cache.last_delta_seq = cache.delta_seq;
+        cache.fast_fp = fast_fp;
         if let Some(sc) = scope
             && !cache.scope_ids.contains_key(sc)
         {
@@ -251,6 +289,7 @@ fn sync_cache<'a>(
         }
         return cache;
     }
+    cache.fast_fp = fast_fp;
 
     // Recompute incremental ZSet view state and build sorted postings + conductance graph.
     cache.nodes.clear();

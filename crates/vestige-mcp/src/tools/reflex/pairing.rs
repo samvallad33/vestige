@@ -51,7 +51,18 @@ pub(super) struct Failure {
 pub(super) fn is_shell(tool: &str) -> bool {
     matches!(
         tool,
-        "Bash" | "PowerShell" | "shell" | "exec_command" | "run_shell_command"
+        "Bash"
+            | "bash"
+            | "PowerShell"
+            | "powershell"
+            | "shell"
+            | "Shell"
+            | "exec_command"
+            | "run_shell_command"
+            | "run_command"
+            | "execute_command"
+            | "run_terminal_cmd"
+            | "terminal"
     )
 }
 

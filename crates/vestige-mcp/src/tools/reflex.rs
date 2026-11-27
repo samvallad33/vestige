@@ -118,10 +118,11 @@ const RESOLUTION_MAX_TRIES: u32 = 50;
 /// does not take added context on that event, so reflex only records.
 fn event_budget(event: &str) -> usize {
     match event {
-        "UserPromptSubmit" | "SessionStart" => 2000,
+        "UserPromptSubmit" | "SessionStart" => 3000,
         "SubagentStart" => 1500,
+        "PostToolUseFailure" => 1400,
         "Stop" | "SubagentStop" => 600,
-        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PostToolBatch" => 600,
+        "PreToolUse" | "PostToolUse" | "PostToolBatch" => 600,
         _ => 0,
     }
 }

@@ -7,9 +7,141 @@
 use chrono::{Datelike, Days, NaiveDate, Weekday};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 use vestige_core::{KnowledgeNode, Storage};
 
 use super::lexical::{self, HOOK_CHAR_BUDGET};
+
+#[derive(Clone)]
+struct PacketSnapshot {
+    nodes: Arc<Vec<KnowledgeNode>>,
+    retired: Arc<HashSet<String>>,
+    scores: Arc<BTreeMap<String, i128>>,
+    receipts: Arc<Vec<Value>>,
+    retrieval: Arc<vestige_core::retrieval::RetrievalEngine>,
+}
+
+struct CachedPacketSnapshot {
+    stamp: (usize, u64, u64),
+    snapshot: PacketSnapshot,
+}
+
+fn packet_cache() -> &'static Mutex<HashMap<(PathBuf, String), CachedPacketSnapshot>> {
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), CachedPacketSnapshot>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn build_retrieval_engine(
+    storage: &Storage,
+    nodes: &[KnowledgeNode],
+    retired: &HashSet<String>,
+) -> vestige_core::retrieval::RetrievalEngine {
+    let mut links_by_source: HashMap<String, Vec<vestige_core::retrieval::TurnLink>> =
+        HashMap::new();
+    for edge in storage.get_all_connections().unwrap_or_default() {
+        links_by_source
+            .entry(edge.source_id.clone())
+            .or_default()
+            .push(vestige_core::retrieval::TurnLink {
+                kind: edge.link_type,
+                to: edge.target_id,
+                degree: 0,
+            });
+    }
+    let mut by_day: BTreeMap<String, (i64, Vec<vestige_core::retrieval::Turn>)> = BTreeMap::new();
+    for node in nodes {
+        if retired.contains(&node.id) {
+            continue;
+        }
+        let day = node.created_at.format("%Y/%m/%d").to_string();
+        let ts = node.created_at.timestamp();
+        let role = if matches!(node.node_type.as_str(), "decision" | "correction")
+            || node
+                .tags
+                .iter()
+                .any(|t| t == "pinned" || t == "owner-directive" || t.starts_with("forbid:"))
+        {
+            "user".to_string()
+        } else {
+            "assistant".to_string()
+        };
+        let content = if node.tags.is_empty() {
+            node.content.clone()
+        } else {
+            format!("{} [{}]", node.content, node.tags.join(" "))
+        };
+        let entry = by_day.entry(day).or_insert_with(|| (ts, Vec::new()));
+        if ts > entry.0 {
+            entry.0 = ts;
+        }
+        entry.1.push(vestige_core::retrieval::Turn {
+            id: node.id.clone(),
+            role,
+            content,
+            links: links_by_source.remove(&node.id).unwrap_or_default(),
+            stability: node.stability as f32,
+        });
+    }
+    let sessions: Vec<vestige_core::retrieval::Session> = by_day
+        .into_iter()
+        .map(|(day, (timestamp, turns))| vestige_core::retrieval::Session {
+            id: format!("day:{day}"),
+            date: day,
+            timestamp,
+            turns,
+        })
+        .collect();
+    vestige_core::retrieval::RetrievalEngine::new(&sessions, vestige_core::retrieval::Params::default())
+}
+
+fn load_cached_snapshot(storage: &Storage, scope: &str) -> Result<PacketSnapshot, String> {
+    let stamp = crate::circuit_index::fast_store_stamp(storage);
+    let key = (storage.db_path().to_path_buf(), scope.to_string());
+    if stamp.0 > 0
+        && let Ok(guard) = packet_cache().lock()
+        && let Some(hit) = guard.get(&key)
+        && hit.stamp == stamp
+    {
+        return Ok(hit.snapshot.clone());
+    }
+    let nodes = Arc::new(
+        storage
+            .get_all_nodes_in_scope(scope, i32::MAX, 0)
+            .map_err(|e| e.to_string())?,
+    );
+    let retired = Arc::new(storage.superseded_node_ids().map_err(|e| e.to_string())?);
+    let receipts = Arc::new(storage.salience_receipts().map_err(|e| e.to_string())?);
+    let score_map = scores_from_receipts(receipts.as_ref());
+    let retrieval = Arc::new(build_retrieval_engine(
+        storage,
+        nodes.as_ref(),
+        retired.as_ref(),
+    ));
+    let snapshot = PacketSnapshot {
+        nodes,
+        retired,
+        scores: Arc::new(score_map),
+        receipts,
+        retrieval,
+    };
+    if stamp.0 > 0
+        && let Ok(mut guard) = packet_cache().lock()
+    {
+        if guard.len() >= 16 {
+            guard.clear();
+        }
+        guard.insert(
+            key,
+            CachedPacketSnapshot {
+                stamp,
+                snapshot: snapshot.clone(),
+            },
+        );
+    }
+    Ok(snapshot)
+}
 
 pub(crate) fn scores_from_receipts(receipts: &[Value]) -> BTreeMap<String, i128> {
     let mut scores = BTreeMap::new();
@@ -371,49 +503,41 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
     if prompt.len() > 64 * 1024 {
         return Err("hook prompt exceeds 64 KiB".into());
     }
-    let labile = crate::cognitive_kernel::labile_memory_ids(storage);
-    let requested = args["limit"].as_u64().unwrap_or(8).clamp(1, 24) as usize;
-    let prompt_lower = prompt.to_lowercase();
+    let snapshot = load_cached_snapshot(storage, scope)?;
+    let (all_nodes, retired, scores_arc, all_receipts, retrieval) = (
+        snapshot.nodes,
+        snapshot.retired,
+        snapshot.scores,
+        snapshot.receipts,
+        snapshot.retrieval,
+    );
     let now = chrono::Utc::now();
-    let (nodes, scores, all_receipts, entities) = if crate::strata_memory::head_seq(storage).is_some() {
-        let snap = crate::circuit_index::cached_packet_snapshot(
-            storage,
-            scope,
-            &labile,
-            &prompt_lower,
-            now,
-        );
-        (snap.nodes, snap.scores, snap.receipts, snap.entities)
-    } else {
-        let mut nodes = storage
-            .get_all_nodes_in_scope(scope, i32::MAX, 0)
-            .map_err(|e| e.to_string())?;
-        let retired = storage.superseded_node_ids().map_err(|e| e.to_string())?;
-        nodes.retain(|n| {
+    let nodes: Vec<KnowledgeNode> = all_nodes
+        .iter()
+        .filter(|n| {
             !retired.contains(&n.id)
                 && n.valid_from.is_none_or(|t| t <= now)
                 && n.valid_until.is_none_or(|t| t > now)
-        });
-        let all_receipts = storage.salience_receipts().unwrap_or_default();
-        let scores = scores_from_receipts(&all_receipts);
-        let mut entities = BTreeSet::new();
-        for node in &nodes {
-            for tag in &node.tags {
-                if ["person:", "place:", "food:", "file:", "service:", "symbol:"]
-                    .iter()
-                    .any(|prefix| tag.starts_with(prefix))
-                    && !entities.contains(tag.as_str())
-                    && entity_matches_prompt_lower(&prompt_lower, tag)
-                {
-                    entities.insert(tag.clone());
-                }
-            }
-        }
-        (nodes, scores, all_receipts, entities)
-    };
+        })
+        .cloned()
+        .collect();
     let count = nodes.len();
+    let scores = scores_arc.as_ref();
     let tie = |node: &KnowledgeNode| scores.get(&node.id).copied().unwrap_or_default();
+    let requested = args["limit"].as_u64().unwrap_or(8).clamp(1, 24) as usize;
+    let prompt_lower = prompt.to_lowercase();
     let named = lexical::named_people(&nodes, prompt);
+    let entities: BTreeSet<String> = nodes
+        .iter()
+        .flat_map(|n| n.tags.iter())
+        .filter(|tag| {
+            ["person:", "place:", "food:", "file:", "service:", "symbol:"]
+                .iter()
+                .any(|prefix| tag.starts_with(prefix))
+        })
+        .filter(|tag| entity_matches_prompt_lower(&prompt_lower, tag))
+        .cloned()
+        .collect();
     let mut circuit_diag = Value::Null;
     let (selected, selection, ranking): (Vec<&KnowledgeNode>, &str, &str) =
         if prompt.trim().is_empty() {
@@ -421,32 +545,47 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             (Vec::new(), "none_empty_prompt", "none")
         } else {
             let tr_pool = requested.saturating_mul(6).max(32);
-            let circuit = crate::circuit_index::query_circuit(
-                storage,
-                &crate::circuit_index::CircuitQuery {
-                    query: prompt,
-                    scope: Some(scope),
-                    include_superseded: false,
-                    valid_at: None,
-                    top_k: tr_pool,
-                    labile_ids: &labile,
+            let today = now.format("%Y/%m/%d").to_string();
+            let rank_res = retrieval.query(
+                &vestige_core::retrieval::Query {
+                    text: prompt.to_string(),
+                    date: today,
                 },
+                tr_pool,
             );
-            circuit_diag = crate::circuit_index::epistemic_json(&circuit);
+            circuit_diag = json!({
+                "engine": vestige_core::retrieval::ENGINE,
+                "turns_indexed": retrieval.turns_indexed(),
+                "premise_coverage": rank_res.premise_coverage,
+                "standing_rules_count": rank_res.standing_rules.len(),
+            });
             let pos_by_id: HashMap<&str, usize> = nodes
                 .iter()
                 .enumerate()
                 .map(|(i, n)| (n.id.as_str(), i))
                 .collect();
-            let mut hits: Vec<lexical::LexicalHit> = circuit
-                .hits
-                .into_iter()
-                .filter_map(|h| {
-                    let index = *pos_by_id.get(h.id.as_str())?;
-                    let score_micro = ((h.score as f64) * 1_000_000.0).round() as i64;
-                    (score_micro > 0).then_some(lexical::LexicalHit { index, score_micro })
-                })
+            let standing_rule_indexes: HashSet<usize> = rank_res
+                .standing_rules
+                .iter()
+                .filter_map(|item| pos_by_id.get(item.id.as_str()).copied())
                 .collect();
+            let mut hits: Vec<lexical::LexicalHit> = Vec::new();
+            let mut seen_idx: HashSet<usize> = HashSet::new();
+            for item in rank_res.standing_rules.iter().chain(rank_res.turns.iter()) {
+                let Some(&index) = pos_by_id.get(item.id.as_str()) else {
+                    continue;
+                };
+                if !seen_idx.insert(index) {
+                    continue;
+                }
+                let score_micro = ((item.score as f64) * 1_000_000.0).round() as i64;
+                if score_micro > 0 || standing_rule_indexes.contains(&index) {
+                    hits.push(lexical::LexicalHit {
+                        index,
+                        score_micro: score_micro.max(1),
+                    });
+                }
+            }
             hits.sort_by(|a, b| {
                 b.score_micro
                     .cmp(&a.score_micro)
@@ -490,7 +629,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             // Retroactive Salience Backfill comes first only when on-target:
             // a memory a backfill receipt raised outranks lexical score when
             // it also joins the prompt by an entity or date/avoid index tag,
-            // or its own BM25 score is at least half the top hit.
+            // or its own score is at least half the top hit.
             let top_score = hits.iter().map(|hit| hit.score_micro).max().unwrap_or(0);
             let on_target = |index: &usize| {
                 let node = &nodes[*index];
@@ -524,16 +663,18 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             joined.sort_by(|a, b| {
                 guarded(b)
                     .cmp(&guarded(a))
-                    .then_with(|| compare(&nodes[*a], &nodes[*b], &scores))
+                    .then_with(|| compare(&nodes[*a], &nodes[*b], scores))
             });
             reserved.extend(joined.into_iter().take(MAX_RESERVED));
+            // Reserve the retrieval engine's own stratified `standing_rules` channel.
+            reserved.extend(standing_rule_indexes.iter().copied());
             indexes.sort_by(|a, b| {
                 raised(b)
                     .cmp(&raised(a))
                     .then_with(|| reserved.contains(b).cmp(&reserved.contains(a)))
                     .then_with(|| lowered(a).cmp(&lowered(b)))
                     .then_with(|| score_of(&nodes[*b].id).cmp(&score_of(&nodes[*a].id)))
-                    .then_with(|| compare(&nodes[*a], &nodes[*b], &scores))
+                    .then_with(|| compare(&nodes[*a], &nodes[*b], scores))
             });
             let packed_hits: Vec<lexical::LexicalHit> = indexes
                 .into_iter()
@@ -548,13 +689,9 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
             } else if hits.is_empty() {
                 "top_salience"
             } else {
-                "exact_token_bm25"
+                "stara_total_recall_v2"
             };
-            (
-                packed,
-                selection,
-                "ghostcurrent_circuit_then_salience_then_recency",
-            )
+            (packed, selection, vestige_core::retrieval::ENGINE)
         };
     let ids: BTreeSet<&str> = selected.iter().map(|n| n.id.as_str()).collect();
     let seed_indexes: Vec<usize> = selected
@@ -575,7 +712,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
         })
         .collect();
     let receipts: Vec<Value> = all_receipts
-        .into_iter()
+        .iter()
         .rev()
         .filter(|r| r["memory_id"].as_str().is_some_and(|id| ids.contains(id)))
         .take(8)
@@ -585,7 +722,7 @@ pub(crate) fn packet(storage: &Storage, scope: &str, args: &Value) -> Result<Val
                 "memory_id": receipt["memory_id"],
                 "trigger_id": receipt["trigger_id"],
                 "reason": receipt["reason"],
-                "direction": raise_direction(&receipt),
+                "direction": raise_direction(receipt),
                 "old_score": receipt["old_score"],
                 "new_score": receipt["new_score"],
                 "old_stability_q": receipt["old_stability_q"],

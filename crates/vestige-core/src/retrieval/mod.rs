@@ -1,5 +1,8 @@
 //! Stara Total-Recall Engine: zero-LLM, zero-vector, deterministic lexical retrieval.
 //!
+//! See `crates/vestige-core/src/retrieval/AGENTS.md` for module layout,
+//! file-placement rules, invariants, and required verification gates.
+//!
 //! Every score is reproducible arithmetic over the text the caller supplied:
 //! BM25F with role-segmented fields, IDF power law, distinct-term coverage,
 //! ordered span proximity, deterministic suffix stemming, a fixed hypernym
@@ -824,6 +827,29 @@ fn write_one_replay_dump(ix: &Index, snap: &ReplaySnap, file: &mut std::io::BufW
     let _ = writeln!(file, "{rec}");
 }
 
+
+/// Reusable indexed instance of the full Stara Total-Recall/2 retrieval engine
+/// so live lifecycle hooks build the index once per store revision and rank
+/// every prompt in sub-milliseconds.
+pub struct RetrievalEngine {
+    ix: Index,
+    params: Params,
+}
+
+impl RetrievalEngine {
+    pub fn new(sessions: &[Session], params: Params) -> Self {
+        let ix = build_index(sessions, &params);
+        Self { ix, params }
+    }
+
+    pub fn query(&self, q: &Query, top_k: usize) -> RankResult {
+        rank_one(&self.ix, q, &self.params, top_k)
+    }
+
+    pub fn turns_indexed(&self) -> usize {
+        self.ix.turns.len()
+    }
+}
 
 pub fn rank(req: &RankRequest) -> RankResponse {
 

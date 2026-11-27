@@ -1056,11 +1056,10 @@ async function preInvocation(cfg, input) {
   const isMidTurn = t.s.promptKey === promptKey && (input.invocationNum === undefined || Number(input.invocationNum) > 1);
   const parts = [];
   if (t.s.promptKey !== promptKey) {
-    const [mem, rfxOut, firstIntentions] = await Promise.all([
-      memoryContext(cfg, payload, 'prompt', 900),
-      reflexRun(cfg, payload, 'UserPromptSubmit'),
-      !t.s.intentionsShown ? intentionsStartContext(cfg, 550) : Promise.resolve(''),
-    ]);
+    // Serialize reflex ahead of memory context so they never contend on the Strata store lock.
+    const rfxOut = await reflexRun(cfg, payload, 'UserPromptSubmit');
+    const mem = await memoryContext(cfg, payload, 'prompt', 900);
+    const firstIntentions = !t.s.intentionsShown ? await intentionsStartContext(cfg, 550) : '';
     if (firstIntentions) {
       parts.push(firstIntentions);
       t.s.intentionsShown = true;

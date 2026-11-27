@@ -451,7 +451,10 @@ fn duplicate_echo_original(node: &vestige_core::KnowledgeNode) -> Option<String>
     (!id.is_empty() && id != node.id).then(|| id.to_string())
 }
 
-fn recorded_backward_walk(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+pub(crate) fn recorded_backward_walk(
+    storage: &Arc<Storage>,
+    args: Option<Value>,
+) -> Result<Value, String> {
     let mut args: Args = match args {
         Some(value) => serde_json::from_value(value).map_err(|err| err.to_string())?,
         None => Args::default(),

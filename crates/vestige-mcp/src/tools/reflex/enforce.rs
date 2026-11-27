@@ -382,7 +382,7 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
             if !inp.prompt.is_empty() {
                 g.session(&inp.session).ledger.last_prompt = inp.prompt.clone();
             }
-            note_directives(g, inp);
+            lines.extend(capture_and_surface_directives(g, inp, storage));
             lines.extend(directive_lines(g, inp));
             lines.extend(handle_lines(g, inp, storage));
             lines.extend(unverified_lines(g, inp, storage));
@@ -530,6 +530,7 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
                     None
                 }
             };
+            lines.extend(failure_causal_walk_lines(g, inp, storage));
             if let Some(msg) = spiral_msg {
                 lines.push(msg);
             }
@@ -713,6 +714,82 @@ fn note_directives(g: &mut Global, inp: &Input) {
             s.ledger.pending_agent = inp.agent.clone();
         }
     }
+}
+
+fn is_standing_directive_prompt(prompt: &str) -> bool {
+    let trimmed = prompt.trim();
+    trimmed.chars().count() >= 16 && !trimmed.ends_with('?')
+}
+
+/// Autonomic pre-turn directive capture: persists standing directives into Strata
+/// BEFORE token #1 (never passive, never waiting for Stop). Retrieval & standing
+/// rule surfacing are handled directly by the full `vestige_core::retrieval` engine
+/// inside `memory_packet`.
+fn capture_and_surface_directives(
+    g: &mut Global,
+    inp: &Input,
+    storage: &Arc<Storage>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if inp.prompt.is_empty() {
+        return lines;
+    }
+    let matched: Vec<String> = directive_phrases()
+        .into_iter()
+        .filter(|phrase| contains_phrase(&inp.prompt, phrase))
+        .collect();
+
+    if !matched.is_empty() {
+        if is_standing_directive_prompt(&inp.prompt) {
+            let trimmed = inp.prompt.trim();
+            let content = trim_chars(trimmed, 1200);
+            let mut tags = vec![
+                "pinned".to_string(),
+                "owner-directive".to_string(),
+                "auto-reflex-directive".to_string(),
+            ];
+            for path in file_handles(trimmed).into_iter().take(4) {
+                let tag = format!("file:{}", path.replace('\\', "/"));
+                if !tags.contains(&tag) {
+                    tags.push(tag);
+                }
+            }
+            match storage.ingest_in_scope(
+                vestige_core::IngestInput {
+                    content,
+                    node_type: "decision".into(),
+                    tags,
+                    ..Default::default()
+                },
+                "user",
+            ) {
+                Ok(node) => {
+                    crate::circuit_index::mark_zset_delta(storage.as_ref(), &node.id, 1);
+                    let turn = g.session(&inp.session).turn;
+                    g.session(&inp.session).context(&inp.agent).hold(
+                        &node.id,
+                        turn,
+                        "reflex:auto-directive",
+                        None,
+                    );
+                    let preview_phrases: Vec<&str> =
+                        matched.iter().take(3).map(String::as_str).collect();
+                    lines.push(format!(
+                        "Vestige ledger: auto-saved owner directive (\"{}\") as {} [pinned, owner-directive] before response.",
+                        preview_phrases.join("\", \""),
+                        node.id
+                    ));
+                }
+                Err(_) => {
+                    // Fail closed: if store write was refused (e.g. secret policy), keep Stop block active.
+                    note_directives(g, inp);
+                }
+            }
+        } else {
+            note_directives(g, inp);
+        }
+    }
+    lines
 }
 
 fn directive_lines(g: &mut Global, inp: &Input) -> Vec<String> {
@@ -1113,6 +1190,160 @@ fn note_failure(g: &mut Global, inp: &Input) {
             .collect()
     };
     g.session(&inp.session).ledger.unpaired.extend(fresh);
+}
+
+fn extract_failure_paths(text: &str) -> Vec<String> {
+    let mut out = file_handles(text);
+    for raw in text.split(|c: char| {
+        c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '<' | '>' | ',')
+    }) {
+        let trimmed = raw.trim_matches(|c: char| matches!(c, ':' | ';' | '.'));
+        if trimmed.is_empty() || trimmed.len() > 260 || !trimmed.contains(['/', '\\']) {
+            continue;
+        }
+        // Strip trailing :line or :line:col from stack frames and compiler diagnostics.
+        let norm = trimmed.replace('\\', "/");
+        let base = if let Some((path_part, rest)) = norm.split_once(':') {
+            // Preserve Windows drive prefix like C:/...
+            if path_part.len() == 1 && path_part.bytes().all(|b| b.is_ascii_alphabetic()) {
+                if let Some((win_path, win_rest)) = rest.split_once(':')
+                    && win_rest.chars().next().is_some_and(|c| c.is_ascii_digit())
+                {
+                    format!("{path_part}:{win_path}")
+                } else {
+                    norm.clone()
+                }
+            } else if rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                path_part.to_string()
+            } else {
+                norm.clone()
+            }
+        } else {
+            norm.clone()
+        };
+        let has_ext = base
+            .rsplit_once('.')
+            .is_some_and(|(_, ext)| !ext.is_empty() && ext.len() <= 8 && ext.bytes().all(|b| b.is_ascii_alphanumeric()));
+        if has_ext && !out.contains(&base) {
+            out.push(base);
+            if out.len() >= 12 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Invoke the real Strata `causal_walk` engine directly on `PostToolUseFailure`
+/// so the agent receives ranked recorded causes BEFORE its next turn.
+fn failure_causal_walk_lines(
+    g: &mut Global,
+    inp: &Input,
+    storage: &Arc<Storage>,
+) -> Vec<String> {
+    let mut anchors: Vec<String> = Vec::new();
+    let mut push_anchor = |raw: &str| {
+        let norm = raw.trim().replace('\\', "/");
+        if !norm.is_empty() && !anchors.contains(&norm) && anchors.len() < 10 {
+            anchors.push(norm);
+        }
+    };
+    if !inp.file.is_empty() {
+        push_anchor(&inp.file);
+    }
+    for path in extract_failure_paths(&inp.error) {
+        push_anchor(&path);
+    }
+    for path in extract_failure_paths(&inp.command) {
+        push_anchor(&path);
+    }
+    let edited_recent: Vec<String> = g.session(&inp.session).ledger.edited.clone();
+    for path in edited_recent.iter().rev().take(4) {
+        push_anchor(path);
+    }
+
+    let cwd_norm = inp
+        .cwd
+        .trim()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string();
+    let mut start_points: Vec<Value> = Vec::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    for mid in memory_handles(&inp.error) {
+        for id in storage.resolve_handle(&mid).ids.into_iter().take(2) {
+            if seen_ids.insert(id.clone()) && start_points.len() < 12 {
+                start_points.push(json!({"kind": "logged_write", "node_id": id}));
+            }
+        }
+    }
+    for path in &anchors {
+        for id in storage.resolve_handle(&format!("file:{path}")).ids.into_iter().take(4) {
+            if seen_ids.insert(id.clone()) && start_points.len() < 12 {
+                start_points.push(json!({"kind": "logged_write", "node_id": id}));
+            }
+        }
+        if !cwd_norm.is_empty()
+            && let Some(rel) = path
+                .strip_prefix(&cwd_norm)
+                .map(|s| s.trim_start_matches('/'))
+                .filter(|s| !s.is_empty() && *s != path.as_str())
+        {
+            for id in storage.resolve_handle(&format!("file:{rel}")).ids.into_iter().take(4) {
+                if seen_ids.insert(id.clone()) && start_points.len() < 12 {
+                    start_points.push(json!({"kind": "logged_write", "node_id": id}));
+                }
+            }
+        }
+        if start_points.len() < 12 {
+            start_points.push(json!({"kind": "failing_test", "name": path}));
+        }
+    }
+
+    let mut lines = Vec::new();
+    if !start_points.is_empty()
+        && let Ok(walk) = crate::tools::causal_walk::recorded_backward_walk(
+            storage,
+            Some(json!({
+                "start_points": start_points,
+                "scan_limit": 25
+            })),
+        )
+        && let Some(causes) = walk.get("causes").and_then(Value::as_array)
+    {
+        let held = held_ids(g, &inp.session, &inp.agent);
+        let turn = g.session(&inp.session).turn;
+        for cause in causes {
+            let Some(id) = cause.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            if held.contains(id) {
+                continue;
+            }
+            let snippet = cause
+                .get("content_preview")
+                .or_else(|| cause.get("content"))
+                .and_then(Value::as_str)
+                .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+                .unwrap_or_default();
+            let node_type = cause
+                .get("node_type")
+                .or_else(|| cause.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or("record");
+            g.session(&inp.session)
+                .context(&inp.agent)
+                .hold(id, turn, "reflex:auto-causal-walk", None);
+            lines.push(format!(
+                "Vestige auto-causal_walk: {id} [{node_type}] {} — call causal_walk(from_handle='{id}') to expand.",
+                trim_chars(&snippet, 180)
+            ));
+            if lines.len() >= 3 {
+                break;
+            }
+        }
+    }
+    lines
 }
 
 fn note_stop_failure(g: &mut Global, inp: &Input) {
@@ -2246,6 +2477,21 @@ fn normalize_repo_path(raw: &str, cwd: &str) -> String {
     stripped.to_string()
 }
 
+fn is_raw_fishing_tool(tool: &str) -> bool {
+    matches!(
+        tool_leaf(tool),
+        "Read"
+            | "read_file"
+            | "Grep"
+            | "grep_search"
+            | "Glob"
+            | "find_by_name"
+            | "list_dir"
+            | "view_file"
+            | "view_file_outline"
+    )
+}
+
 fn anti_spiral_pre_tool_check(
     g: &Global,
     inp: &Input,
@@ -2254,7 +2500,8 @@ fn anti_spiral_pre_tool_check(
     let s = g.sessions.get(&inp.session)?;
     let is_edit = is_edit_tool(&inp.tool);
     let is_shell = pairing::is_shell(&inp.tool);
-    if !is_edit && !is_shell {
+    let is_fishing = is_raw_fishing_tool(&inp.tool);
+    if !is_edit && !is_shell && !is_fishing {
         return None;
     }
     let same_failing_retry = is_shell
@@ -2267,19 +2514,23 @@ fn anti_spiral_pre_tool_check(
         .iter()
         .any(|u| u.agent == inp.agent && u.turn == s.turn);
 
-    if s.ledger.spiral_stage >= 2 && !s.ledger.spiral_escalated && (is_edit || same_failing_retry) {
+    if s.ledger.spiral_stage >= 2
+        && !s.ledger.spiral_escalated
+        && (is_edit || is_shell || is_fishing)
+    {
         let sig = if s.ledger.spiral_sig.is_empty() {
             &s.ledger.last_fail_key
         } else {
             &s.ledger.spiral_sig
         };
         return Some(format!(
-            "Vestige Anti-Spiral [Stage 2]: `causal_walk`/`recall` did not resolve `{sig}`. Escalate by calling `search_web` or `invoke_subagent` (Agent/WebSearch) before editing or retrying."
+            "Vestige Anti-Spiral [Stage 2]: `causal_walk`/`recall` did not resolve `{sig}`. Escalate by calling `search_web` or `invoke_subagent` (Agent/WebSearch) before editing, running shell commands, or reading more files."
         ));
     }
 
-    if ((s.ledger.spiral_stage == 1 || same_failing_retry)
-        || (is_edit && (has_open_turn_failure || s.ledger.consecutive_same_fail >= 1)))
+    if ((s.ledger.spiral_stage == 1 && (is_edit || is_shell || is_fishing))
+        || (same_failing_retry)
+        || ((is_edit || is_shell) && (has_open_turn_failure || s.ledger.consecutive_same_fail >= 1)))
         && !s.ledger.spiral_investigated
         && !s.ledger.spiral_escalated
     {
@@ -2291,7 +2542,7 @@ fn anti_spiral_pre_tool_check(
             "open failure"
         };
         return Some(format!(
-            "Vestige Anti-Spiral [Stage 1]: stop guessing over `{sig}`. Call `causal_walk` or `recall` first to inspect prior causes/invariants before editing or retrying."
+            "Vestige Anti-Spiral [Stage 1]: stop guessing over `{sig}`. Call `causal_walk` or `recall` first to inspect prior causes/invariants before running shell commands, editing, or fishing through files."
         ));
     }
     None
@@ -3556,5 +3807,188 @@ mod tests {
             "",
         );
         assert!(d_stop2.block_reason.is_none(), "{:?}", d_stop2.block_reason);
+    }
+
+    #[test]
+    fn user_prompt_submit_auto_saves_owner_directive_before_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let mut g = Global::load(dir.path().to_path_buf());
+        let inp = Input {
+            event: "UserPromptSubmit".into(),
+            session: "s-auto-dir".into(),
+            prompt: "Rule: never bypass causal_walk when a build or test fails.".into(),
+            ..Input::default()
+        };
+        let lines = observe(&mut g, &inp, &store);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("auto-saved owner directive") && l.contains("mem-")),
+            "expected pre-turn auto-save line, got: {lines:?}"
+        );
+        assert!(
+            g.session("s-auto-dir").ledger.pending.is_empty(),
+            "auto-saved directive should not remain pending until Stop"
+        );
+        let saved_ids = store.resolve_handle("auto-reflex-directive").ids;
+        assert_eq!(saved_ids.len(), 1, "directive must be persisted in Strata");
+        let saved = store.get_node(&saved_ids[0]).unwrap().unwrap();
+        assert!(saved.tags.iter().any(|t| t == "pinned"));
+        assert!(saved.tags.iter().any(|t| t == "owner-directive"));
+    }
+
+    #[test]
+    fn post_tool_use_failure_runs_auto_causal_walk_over_recorded_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let root_cause = store
+            .ingest_in_scope(
+                vestige_core::IngestInput {
+                    content: "Root cause: serialize reflex ahead of memory hook to prevent lock timeout.".into(),
+                    node_type: "correction".into(),
+                    tags: vec!["hooks".into(), "owner-directive".into()],
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap()
+            .id;
+        let anchor = store
+            .ingest_in_scope(
+                vestige_core::IngestInput {
+                    content: "Edited crates/vestige-mcp/src/tools/reflex/enforce.rs".into(),
+                    node_type: "event".into(),
+                    tags: vec!["file:crates/vestige-mcp/src/tools/reflex/enforce.rs".into()],
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap()
+            .id;
+        crate::strata_memory::save_links(
+            store.as_ref(),
+            &anchor,
+            &[(crate::strata_memory::DeclaredLink::DerivedFrom, root_cause.clone())],
+        )
+        .unwrap();
+
+        let mut g = Global::load(dir.path().to_path_buf());
+        let inp = Input {
+            event: "PostToolUseFailure".into(),
+            session: "s-fail-walk".into(),
+            tool: "Bash".into(),
+            command: "cargo test -p vestige-mcp".into(),
+            error: "error[E0425] in crates/vestige-mcp/src/tools/reflex/enforce.rs:410".into(),
+            ..Input::default()
+        };
+        let lines = observe(&mut g, &inp, &store);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("Vestige auto-causal_walk") && l.contains(&root_cause)),
+            "expected auto causal_walk to surface {root_cause}, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn anti_spiral_hard_denies_different_shell_and_raw_file_fishing_until_causal_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let mut g = Global::load(dir.path().to_path_buf());
+        let sess = "s-hard-anti-spiral";
+
+        // 1. Single shell failure opens turn failure debt.
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUseFailure".into(),
+                session: sess.into(),
+                tool: "run_command".into(),
+                command: "cargo test -p vestige-core".into(),
+                error: "exit 101".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+
+        // 2. Trying a DIFFERENT shell command is immediately hard-denied before causal_walk.
+        let d_other_shell = decide(
+            &mut g,
+            &Input {
+                event: "PreToolUse".into(),
+                session: sess.into(),
+                tool: "run_command".into(),
+                command: "python scratch/guess.py".into(),
+                ..Input::default()
+            },
+            &store,
+            "",
+        );
+        assert_eq!(d_other_shell.permission_decision.as_deref(), Some("deny"));
+        assert!(
+            d_other_shell
+                .permission_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("Anti-Spiral [Stage 1]") && r.contains("causal_walk"))
+        );
+
+        // 3. Second failure trips spiral_stage = 1 -> even raw read_file / grep_search is hard-denied!
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUseFailure".into(),
+                session: sess.into(),
+                tool: "run_command".into(),
+                command: "cargo test -p vestige-core".into(),
+                error: "exit 101".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+        let d_read = decide(
+            &mut g,
+            &Input {
+                event: "PreToolUse".into(),
+                session: sess.into(),
+                tool: "read_file".into(),
+                file: "crates/vestige-core/src/lib.rs".into(),
+                ..Input::default()
+            },
+            &store,
+            "",
+        );
+        assert_eq!(d_read.permission_decision.as_deref(), Some("deny"));
+        assert!(
+            d_read
+                .permission_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("Anti-Spiral [Stage 1]") && r.contains("causal_walk"))
+        );
+
+        // 4. Calling causal_walk unlocks both read_file and shell.
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUse".into(),
+                session: sess.into(),
+                tool: "mcp__vestige__causal_walk".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+        let d_read_after = decide(
+            &mut g,
+            &Input {
+                event: "PreToolUse".into(),
+                session: sess.into(),
+                tool: "read_file".into(),
+                file: "crates/vestige-core/src/lib.rs".into(),
+                ..Input::default()
+            },
+            &store,
+            "",
+        );
+        assert!(d_read_after.permission_decision.is_none());
     }
 }
