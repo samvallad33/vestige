@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime goose --event SessionStart",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime goose --event UserPromptSubmit",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime goose --event PreToolUse",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime goose --event PostToolUse",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime goose --event Stop",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

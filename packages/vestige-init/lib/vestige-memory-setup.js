@@ -114,6 +114,8 @@ function quote(text, platform) {
 function catalog(home, platform, env = process.env) {
   const roaming = env.APPDATA || path.join(home, 'AppData', 'Roaming');
   const support = platform === 'darwin' ? path.join(home, 'Library', 'Application Support') : platform === 'win32' ? roaming : path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'));
+  const xdgConfig = env.XDG_CONFIG_HOME || path.join(home, '.config');
+  const copilotHome = env.COPILOT_HOME || path.join(home, '.copilot');
   const entries = [
     ['claude', 'Claude Code', '.claude', path.join(home, '.claude.json'), ['mcpServers'], path.join(home, '.claude', 'settings.json'), 'claude'],
     ['codex', 'Codex', '.codex', path.join(home, '.codex', 'config.toml'), null, path.join(home, '.codex', 'hooks.json'), 'codex'],
@@ -121,12 +123,24 @@ function catalog(home, platform, env = process.env) {
     ['cursor', 'Cursor', '.cursor', path.join(home, '.cursor', 'mcp.json'), ['mcpServers'], path.join(home, '.cursor', 'hooks.json'), 'cursor'],
     ['claude-desktop', 'Claude Desktop', null, path.join(support, 'Claude', 'claude_desktop_config.json'), ['mcpServers']],
     ['code', 'VS Code', null, path.join(support, 'Code', 'User', 'mcp.json'), ['servers']],
-    ['opencode', 'OpenCode', '.config/opencode', path.join(home, '.config', 'opencode', 'opencode.json'), ['mcp']],
-    ['windsurf', 'Windsurf', '.codeium/windsurf', path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), ['mcpServers']],
+    ['copilot', 'GitHub Copilot CLI', '.copilot', path.join(copilotHome, 'mcp-config.json'), ['mcpServers'], path.join(copilotHome, 'hooks', 'vestige.json'), 'copilot'],
+    ['opencode', 'OpenCode', '.config/opencode', path.join(xdgConfig, 'opencode', 'opencode.json'), ['mcp'], path.join(xdgConfig, 'opencode', 'plugins', 'vestige', 'index.js'), 'opencode'],
+    ['windsurf', 'Windsurf', '.codeium/windsurf', path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), ['mcpServers'], path.join(home, '.codeium', 'windsurf', 'hooks.json'), 'windsurf'],
     ['junie', 'JetBrains Junie', '.junie', path.join(home, '.junie', 'mcp', 'mcp.json'), ['mcpServers']],
-    ['zed', 'Zed', '.config/zed', path.join(home, '.config', 'zed', 'settings.json'), ['context_servers']],
-    ['kiro', 'Kiro', '.kiro', path.join(home, '.kiro', 'settings', 'mcp.json'), ['mcpServers']],
+    ['zed', 'Zed', '.config/zed', path.join(xdgConfig, 'zed', 'settings.json'), ['context_servers'], path.join(xdgConfig, 'zed', 'hooks.json'), 'zed'],
+    ['kiro', 'Kiro', '.kiro', path.join(home, '.kiro', 'settings', 'mcp.json'), ['mcpServers'], path.join(home, '.kiro', 'hooks', 'vestige.json'), 'kiro'],
     ['antigravity', 'Antigravity', '.gemini/config', fs.existsSync(path.join(home,'.gemini','antigravity','mcp_config.json')) ? path.join(home,'.gemini','antigravity','mcp_config.json') : path.join(home, '.gemini', 'config', 'mcp_config.json'), ['mcpServers']],
+    ['factory-droid', 'Factory Droid', '.factory', path.join(home, '.factory', 'mcp.json'), ['mcpServers'], path.join(home, '.factory', 'hooks.json'), 'factory-droid'],
+    ['devin', 'Devin CLI', '.config/devin', path.join(xdgConfig, 'devin', 'config.json'), ['mcpServers'], path.join(xdgConfig, 'devin', 'hooks.v1.json'), 'devin'],
+    ['cline', 'Cline', '.cline', path.join(home, '.cline', 'data', 'settings', 'cline_mcp_settings.json'), ['mcpServers'], path.join(home, '.cline', 'hooks', 'PreToolUse'), 'cline'],
+    ['roo-code', 'Roo Code', '.roo', path.join(home, '.roo', 'mcp.json'), ['mcpServers'], path.join(home, '.roo', 'hooks.json'), 'roo-code'],
+    ['kilo-code', 'Kilo Code', '.kilocode', path.join(home, '.kilocode', 'mcp.json'), ['mcpServers'], path.join(home, '.kilocode', 'hooks.json'), 'kilo-code'],
+    ['goose', 'Block Goose', '.config/goose', path.join(xdgConfig, 'goose', 'config.json'), ['mcpServers'], path.join(xdgConfig, 'goose', 'hooks.json'), 'goose'],
+    ['crush', 'Charm Crush', '.config/crush', path.join(xdgConfig, 'crush', 'crush.json'), ['mcp'], path.join(xdgConfig, 'crush', 'crush.json'), 'crush'],
+    ['openhands', 'OpenHands', '.openhands', path.join(home, '.openhands', 'settings.json'), ['mcpServers'], path.join(home, '.openhands', 'hooks.json'), 'openhands'],
+    ['amazon-q', 'Amazon Q CLI', '.aws/amazonq', path.join(home, '.aws', 'amazonq', 'mcp.json'), ['mcpServers'], path.join(home, '.aws', 'amazonq', 'cli-agents', 'q_cli_default.json'), 'amazon-q'],
+    ['continue', 'Continue', '.continue', path.join(home, '.continue', 'mcp.json'), ['mcpServers'], path.join(home, '.continue', 'hooks.json'), 'continue'],
+    ['amp', 'Sourcegraph Amp', '.config/amp', path.join(xdgConfig, 'amp', 'settings.json'), ['mcpServers'], path.join(xdgConfig, 'amp', 'hooks.json'), 'amp'],
   ];
   if (platform === 'darwin') entries.push(['xcode','Xcode', 'Library/Developer/Xcode', path.join(home,'Library','Developer','Xcode','CodingAssistant','ClaudeAgentConfig','.claude'), ['projects','*','mcpServers']]);
   return entries.map(([id, name, marker, file, keys, hookFile, dialect]) => ({ id, name, file, keys, hookFile, dialect,
@@ -134,6 +148,7 @@ function catalog(home, platform, env = process.env) {
     coverage: id === 'antigravity'
       ? 'SessionStart, PreInvocation, PreToolUse, PostToolUse, PostInvocation, Stop + Reflex + fail-closed bridge'
       : dialect === 'cursor' ? 'session context, prompt capture/recall, post-tool context, turn save, precompact, end; prompt injection awaits a tool result'
+      : BRIDGE_DIALECT_EVENTS[dialect] ? 'full lifecycle hooks via vestige-bridge.cjs (recall, call coach, reflex, guard, stop)'
       : dialect ? 'session, prompt, turn, precompact, end (client trust/restart required)'
       : 'MCP tools; lifecycle hooks unavailable in this adapter' }));
 }
@@ -142,6 +157,22 @@ const EVENTS = {
   codex: { SessionStart: 'session', UserPromptSubmit: 'prompt', Stop: 'turn', PreCompact: 'compact', SessionEnd: 'end' },
   gemini: { SessionStart: 'session', BeforeAgent: 'prompt', AfterAgent: 'turn', PreCompress: 'compact', SessionEnd: 'end' },
   cursor: { sessionStart: 'session', beforeSubmitPrompt: 'prompt', afterAgentResponse: 'turn', preCompact: 'compact', sessionEnd: 'end', postToolUse: 'tool' },
+};
+const BRIDGE_DIALECT_EVENTS = {
+  copilot: { schema: 'copilot', events: ['sessionStart', 'userPromptSubmitted', 'preToolUse', 'postToolUse', 'errorOccurred', 'preCompact', 'subagentStart', 'subagentStop', 'agentStop', 'sessionEnd'] },
+  windsurf: { schema: 'windsurf', events: ['pre_user_prompt', 'pre_read_code', 'pre_write_code', 'pre_run_command', 'pre_mcp_tool_use', 'post_write_code', 'post_run_command', 'post_mcp_tool_use', 'post_cascade_response'] },
+  'factory-droid': { schema: 'claude', events: ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PreCompact', 'Stop'] },
+  devin: { schema: 'claude', events: ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PreCompact', 'Stop'] },
+  openhands: { schema: 'claude', events: ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop'] },
+  goose: { schema: 'claude', events: ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop'] },
+  'roo-code': { schema: 'cursor', events: ['sessionStart', 'beforeSubmitPrompt', 'preToolUse', 'postToolUse', 'preCompact', 'stop'] },
+  'kilo-code': { schema: 'cursor', events: ['sessionStart', 'beforeSubmitPrompt', 'preToolUse', 'postToolUse', 'stop'] },
+  continue: { schema: 'cursor', events: ['sessionStart', 'beforeSubmitPrompt', 'preToolUse', 'postToolUse', 'stop'] },
+  zed: { schema: 'cursor', events: ['sessionStart', 'preToolUse', 'postToolUse', 'stop'] },
+  amp: { schema: 'cursor', events: ['sessionStart', 'beforeSubmitPrompt', 'preToolUse', 'postToolUse', 'stop'] },
+  kiro: { schema: 'kiro', events: ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostFileSave', 'SessionEnd'] },
+  crush: { schema: 'crush', events: ['PreToolUse', 'PostToolUse'] },
+  'amazon-q': { schema: 'amazon-q', events: ['agentSpawn', 'userPromptSubmit', 'preToolUse', 'postToolUse', 'stop'] },
 };
 function nativeGuardRegistered(value, gate, dialect) {
   // Recognize the native argv, including Lite's POSIX existence check. A name
@@ -192,7 +223,7 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
   const found = binary(home, platform, env);
   const handAdd = [];
   const detected = catalog(home, platform, env).filter(c => c.detected && (!clients || clients.includes(c.id))).filter(c => {
-    const kept = [c.id === 'codex' ? null : c.file, c.hookFile].filter(Boolean).find(commented);
+    const kept = [c.id === 'codex' ? null : c.file, ['opencode', 'cline'].includes(c.id) ? null : c.hookFile].filter(Boolean).find(commented);
     if (kept) handAdd.push({ id: c.id, name: c.name, file: kept, keys: c.keys });
     return !kept;
   });
@@ -260,30 +291,103 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
       add(client.file, [...client.keys, 'vestige'], entry, 'merge MCP connection');
     }
     if (client.hookFile) {
-      migrateReflex(client.hookFile);
-      if (client.dialect === 'cursor') add(client.hookFile, ['version'], 1, 'merge memory hooks');
-      for (const [eventName, event] of Object.entries(EVENTS[client.dialect])) {
-        const command = [node, path.join(base, 'hooks', 'memory.cjs'), '--config', path.join(base, 'config.json'), '--client', client.dialect, '--event', event].map(p => quote(p, platform)).join(' ');
-        const handler = { type: 'command', command, timeout: 1 };
-        const entry = client.dialect === 'cursor' ? { command, timeout: 1, failClosed: false } : { hooks: [handler] };
-        add(client.hookFile, ['hooks', eventName], entry, 'merge memory hooks alongside existing hooks', true);
-      }
-      if (reflex) {
-        const shimCommand = [node, path.join(base, 'hooks', 'reflex.cjs'), '--config', path.join(base, 'config.json'), '--client', client.dialect].map(p => quote(p, platform)).join(' ');
-        const siblingVestige = path.join(path.dirname(found), platform === 'win32' ? 'vestige.exe' : 'vestige');
-        const vestigeCommand = fs.existsSync(siblingVestige) ? quote(siblingVestige, platform) : 'vestige';
-        for (const [eventName, entry] of reflexHooks(client.dialect, shimCommand, { enforce, vestigeCommand })) add(client.hookFile, ['hooks', eventName], entry, 'merge reflex hooks: every hook firing reaches Vestige', true);
+      const bridgeSpec = BRIDGE_DIALECT_EVENTS[client.dialect];
+      if (EVENTS[client.dialect]) {
+        migrateReflex(client.hookFile);
+        if (client.dialect === 'cursor') add(client.hookFile, ['version'], 1, 'merge memory hooks');
+        for (const [eventName, event] of Object.entries(EVENTS[client.dialect])) {
+          const command = [node, path.join(base, 'hooks', 'memory.cjs'), '--config', path.join(base, 'config.json'), '--client', client.dialect, '--event', event].map(p => quote(p, platform)).join(' ');
+          const handler = { type: 'command', command, timeout: 1 };
+          const entry = client.dialect === 'cursor' ? { command, timeout: 1, failClosed: false } : { hooks: [handler] };
+          add(client.hookFile, ['hooks', eventName], entry, 'merge memory hooks alongside existing hooks', true);
+        }
+        if (reflex) {
+          const shimCommand = [node, path.join(base, 'hooks', 'reflex.cjs'), '--config', path.join(base, 'config.json'), '--client', client.dialect].map(p => quote(p, platform)).join(' ');
+          const siblingVestige = path.join(path.dirname(found), platform === 'win32' ? 'vestige.exe' : 'vestige');
+          const vestigeCommand = fs.existsSync(siblingVestige) ? quote(siblingVestige, platform) : 'vestige';
+          for (const [eventName, entry] of reflexHooks(client.dialect, shimCommand, { enforce, vestigeCommand })) add(client.hookFile, ['hooks', eventName], entry, 'merge reflex hooks: every hook firing reaches Vestige', true);
+        }
+      } else if (bridgeSpec) {
+        const bridgeScript = path.join(base, 'hooks', 'vestige-bridge.cjs');
+        const bridgeCfg = path.join(base, 'bridge.json');
+        const mkCmd = ev => [node, bridgeScript, '--runtime', client.id, '--event', ev, '--config', bridgeCfg].map(p => quote(p, platform)).join(' ');
+        if (bridgeSpec.schema === 'copilot' || bridgeSpec.schema === 'cursor') {
+          add(client.hookFile, ['version'], 1, `configure ${client.name} Vestige hooks`);
+        } else if (bridgeSpec.schema === 'crush') {
+          add(client.hookFile, ['$schema'], 'https://charm.land/crush.json', `configure ${client.name} schema`);
+        } else if (bridgeSpec.schema === 'kiro') {
+          add(client.hookFile, ['version'], 'v1', `configure ${client.name} hooks version`);
+        } else if (bridgeSpec.schema === 'amazon-q') {
+          add(client.hookFile, ['name'], 'q_cli_default', `configure ${client.name} agent`);
+        }
+        for (const ev of bridgeSpec.events) {
+          const command = mkCmd(ev);
+          if (bridgeSpec.schema === 'copilot') {
+            add(client.hookFile, ['hooks', ev], { type: 'command', ...(platform === 'win32' ? { powershell: command } : { bash: command }), timeoutSec: 15 }, `merge ${client.name} Vestige hooks`, true);
+          } else if (bridgeSpec.schema === 'cursor') {
+            const fc = enforce && ['preToolUse', 'stop'].includes(ev);
+            add(client.hookFile, ['hooks', ev], { command, timeout: 12, failClosed: fc, ...(['preToolUse', 'postToolUse'].includes(ev) ? { matcher: '.*' } : {}) }, `merge ${client.name} Vestige hooks`, true);
+          } else if (bridgeSpec.schema === 'windsurf') {
+            add(client.hookFile, ['hooks', ev], { command, show_output: ev === 'pre_user_prompt' }, `merge ${client.name} Vestige hooks`, true);
+          } else if (bridgeSpec.schema === 'crush') {
+            add(client.hookFile, ['hooks', ev], { name: `vestige-${ev.toLowerCase()}`, matcher: '.*', command, timeout: 12 }, `merge ${client.name} Vestige hooks`, true);
+          } else if (bridgeSpec.schema === 'kiro') {
+            add(client.hookFile, ['hooks'], { name: `vestige-${ev.toLowerCase()}`, trigger: ev, ...(['PreToolUse', 'PostToolUse', 'PostFileSave'].includes(ev) ? { matcher: '.*' } : {}), action: { type: 'command', command } }, `merge ${client.name} Vestige hooks`, true);
+          } else if (bridgeSpec.schema === 'amazon-q') {
+            add(client.hookFile, ['hooks', ev], { ...(['preToolUse', 'postToolUse'].includes(ev) ? { matcher: '*' } : {}), command, timeout_ms: 12000 }, `merge ${client.name} Vestige hooks`, true);
+          } else {
+            add(client.hookFile, ['hooks', ev], { ...(['PreToolUse', 'PostToolUse'].includes(ev) ? { matcher: '.*' } : {}), hooks: [{ type: 'command', command, timeout: 15 }] }, `merge ${client.name} Vestige hooks`, true);
+          }
+        }
+      } else if (client.id === 'opencode') {
+        const pluginSrcDir = path.resolve(__dirname, '..', '..', '..', 'hooks', 'runtimes', 'opencode');
+        const pluginDstDir = path.dirname(client.hookFile);
+        for (const fName of ['index.js', 'package.json']) {
+          const srcPath = path.join(pluginSrcDir, fName);
+          if (fs.existsSync(srcPath)) {
+            const rPlugin = change(path.join(pluginDstDir, fName), `install OpenCode Vestige plugin ${fName}`);
+            rPlugin.after = fs.readFileSync(srcPath, 'utf8');
+            rPlugin.directWrite = true;
+          }
+        }
+      } else if (client.id === 'cline') {
+        const clineSrcDir = path.resolve(__dirname, '..', '..', '..', 'hooks', 'runtimes', 'cline');
+        const clineDstDir = path.dirname(client.hookFile);
+        for (const ev of ['TaskStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PreCompact', 'TaskComplete']) {
+          const srcPath = path.join(clineSrcDir, ev);
+          if (fs.existsSync(srcPath)) {
+            const rCline = change(path.join(clineDstDir, ev), `install Cline ${ev} hook`);
+            rCline.after = fs.readFileSync(srcPath, 'utf8');
+            rCline.directWrite = true;
+            rCline.executable = true;
+          }
+        }
       }
     }
   }
-  for (const [relative, source] of [ ['hooks/memory.cjs', '../hooks/memory.cjs'], ['hooks/reflex.cjs', '../hooks/reflex.cjs'], ['lib/memory-triggers.cjs', './memory-triggers.cjs'] ]) {
-    const row = change(path.join(base, relative), 'install bounded memory hook'); row.after = fs.readFileSync(path.resolve(__dirname, source), 'utf8');
+  for (const [relative, source] of [ ['hooks/memory.cjs', '../hooks/memory.cjs'], ['hooks/reflex.cjs', '../hooks/reflex.cjs'], ['hooks/agy-bridge.cjs', '../hooks/agy-bridge.cjs'], ['hooks/vestige-bridge.cjs', '../hooks/vestige-bridge.cjs'], ['lib/memory-triggers.cjs', './memory-triggers.cjs'] ]) {
+    const srcAbs = path.resolve(__dirname, source);
+    if (fs.existsSync(srcAbs)) {
+      const row = change(path.join(base, relative), 'install bounded memory hook'); row.after = fs.readFileSync(srcAbs, 'utf8');
+    }
   }
   const triggers = change(path.join(base, 'triggers.json'), 'user-editable recall trigger phrases');
   if (triggers.before === null) triggers.after = json(defaults);
   const config = change(path.join(base, 'config.json'), 'local memory connection');
   const configValue = config.before === null ? {} : JSON.parse(config.before);
   config.after = json({ ...configValue, version: VERSION, binary: found, triggers: triggers.file, enforce });
+  const sharedBridgeCfg = change(path.join(base, 'bridge.json'), 'shared multi-runtime hook bridge configuration');
+  const prevBridgeCfg = sharedBridgeCfg.before === null ? {} : JSON.parse(sharedBridgeCfg.before);
+  sharedBridgeCfg.after = json({
+    ...prevBridgeCfg,
+    python: prevBridgeCfg.python || (platform === 'win32' ? 'python' : 'python3'),
+    gate: guard ? path.join(home, '.operator', 'gate', 'operator-gate.py') : (prevBridgeCfg.gate || ''),
+    requireGate: Boolean(guard || prevBridgeCfg.requireGate),
+    vestigeBin: path.join(path.dirname(found), platform === 'win32' ? 'vestige.exe' : 'vestige'),
+    dataDir: (env && env.VESTIGE_DATA_DIR) || prevBridgeCfg.dataDir || path.join(home, '.vestige', 'store'),
+    memoryConfig: config.file,
+    hooksDir: path.join(base, 'hooks'),
+  });
   let guardInstall = null;
   if (guard) {
     const pyNames = platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
@@ -328,7 +432,7 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
     authority.after = json({ gate, python });
     const adapter = change(path.join(guardBase, 'guard.cjs'), 'install protected fail-closed host adapter');
     adapter.after = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'guard.cjs'), 'utf8');
-    for (const client of detected.filter(c => c.hookFile)) {
+    for (const client of detected.filter(c => c.hookFile && EVENTS[c.dialect])) {
       const event = client.dialect === 'cursor' ? 'preToolUse' : client.dialect === 'gemini' ? 'BeforeTool' : 'PreToolUse';
       const current = change(client.hookFile, 'merge optional pre-tool guard');
       if (nativeGuardRegistered(JSON.parse(current.after || '{}').hooks?.[event], gate, client.dialect)) continue;
@@ -345,7 +449,8 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
       for (const event of ['PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart']) add(client.hookFile, ['hooks', event], { hooks: [{ type: 'command', command, timeout: 1 }] }, 'merge bounded stop-to-Strata reflex', true);
     }
   }
-  const rows = [...changes.values()].filter(r => r.after !== r.before && (r.patches.length || r.block || !detected.some(c => c.file === r.file || c.hookFile === r.file)));
+  const keepRow = r => r.after !== r.before && (r.patches.length || r.block || r.directWrite || !detected.some(c => c.file === r.file || c.hookFile === r.file));
+  const rows = [...changes.values()].filter(keepRow);
   // Universal Antigravity plugin bridge wiring: installs 6 lifecycle hooks
   // (SessionStart, PreInvocation, PreToolUse, PostToolUse, PostInvocation, Stop)
   // routed through agy-bridge.cjs -> Operator + native Rust Reflex + memory_packet.
@@ -400,16 +505,16 @@ function plan({ home = os.homedir(), platform = os.platform(), env = process.env
         debug: false,
       }), 'configure Antigravity bridge runtime');
       // Refresh rows list cleanly after Antigravity additions
-      const nextRows = [...changes.values()].filter(r => r.after !== r.before && (r.patches.length || r.block || !detected.some(c => c.file === r.file || c.hookFile === r.file)));
+      const nextRows = [...changes.values()].filter(keepRow);
       return { home, base, manifestFile, previous, binary: found, detected, handAdd, changes: nextRows, guard, guardInstall };
     }
   }
   return { home, base, manifestFile, previous, binary: found, detected, handAdd, changes: rows, guard, guardInstall };
 }
-function atomic(file, contents) {
+function atomic(file, contents, mode = 0o600) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temp, contents, { mode: 0o600 }); fs.renameSync(temp, file);
+  fs.writeFileSync(temp, contents, { mode }); fs.renameSync(temp, file);
 }
 function apply(plan_) {
   if (!plan_.changes.length) return { written: 0, backups: [] };
@@ -426,7 +531,7 @@ function apply(plan_) {
       let backup = null;
       if (row.before !== null) { backup = `${row.file}.vestige-backup-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`; fs.copyFileSync(row.file, backup, fs.constants.COPYFILE_EXCL); fs.chmodSync(backup, 0o600); backups.push(backup); }
       const prior = records.get(row.file);
-      atomic(row.file, row.after); written.push(row);
+      atomic(row.file, row.after, row.executable ? 0o755 : 0o600); written.push(row);
       records.set(row.file, { file: row.file, backup: prior ? prior.backup : backup, originalHash: prior ? prior.originalHash : row.before === null ? null : hash(row.before),
         installedHash: hash(row.after), patches: [...(prior?.patches || []), ...row.patches], block: row.block || prior?.block });
     }

@@ -1,0 +1,15 @@
+{
+  "id": "vestige-hooks",
+  "name": "Vestige Full Cognitive & Operator Hook Suite",
+  "version": "7.0.0",
+  "description": "Wires OpenClaw before_tool_call, after_tool_call, before_prompt_build, and agent_end into Vestige's Operator Gate, Call Coach, Zero-Prompt Recall, Anti-Spiral, and Strata receipts.",
+  "kind": "memory-security",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

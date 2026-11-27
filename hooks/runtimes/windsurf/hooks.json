@@ -1,0 +1,58 @@
+{
+  "hooks": {
+    "pre_user_prompt": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime windsurf --event pre_user_prompt",
+        "show_output": true
+      }
+    ],
+    "pre_read_code": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime windsurf --event pre_read_code",
+        "show_output": false
+      }
+    ],
+    "pre_write_code": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime windsurf --event pre_write_code",
+        "show_output": false
+      }
+    ],
+    "pre_run_command": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime windsurf --event pre_run_command",
+        "show_output": false
+      }
+    ],
+    "pre_mcp_tool_use": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime windsurf --event pre_mcp_tool_use",
+        "show_output": false
+      }
+    ],
+    "post_write_code": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime windsurf --event post_write_code",
+        "show_output": false
+      }
+    ],
+    "post_run_command": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime windsurf --event post_run_command",
+        "show_output": false
+      }
+    ],
+    "post_mcp_tool_use": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime windsurf --event post_mcp_tool_use",
+        "show_output": false
+      }
+    ],
+    "post_cascade_response": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime windsurf --event post_cascade_response",
+        "show_output": false
+      }
+    ]
+  }
+}

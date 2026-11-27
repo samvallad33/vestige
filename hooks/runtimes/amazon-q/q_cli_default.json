@@ -1,0 +1,37 @@
+{
+  "name": "q_cli_default",
+  "hooks": {
+    "agentSpawn": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime amazon-q --event agentSpawn",
+        "timeout_ms": 10000
+      }
+    ],
+    "userPromptSubmit": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime amazon-q --event userPromptSubmit",
+        "timeout_ms": 10000
+      }
+    ],
+    "preToolUse": [
+      {
+        "matcher": "*",
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime amazon-q --event preToolUse",
+        "timeout_ms": 12000
+      }
+    ],
+    "postToolUse": [
+      {
+        "matcher": "*",
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime amazon-q --event postToolUse",
+        "timeout_ms": 10000
+      }
+    ],
+    "stop": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime amazon-q --event stop",
+        "timeout_ms": 10000
+      }
+    ]
+  }
+}

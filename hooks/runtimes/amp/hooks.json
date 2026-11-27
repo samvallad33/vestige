@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime amp --event sessionStart",
+        "timeout": 12
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime amp --event beforeSubmitPrompt",
+        "timeout": 12
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime amp --event preToolUse",
+        "timeout": 12,
+        "failClosed": true,
+        "matcher": ".*"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime amp --event postToolUse",
+        "timeout": 12,
+        "matcher": ".*"
+      }
+    ],
+    "stop": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime amp --event stop",
+        "timeout": 12,
+        "failClosed": true
+      }
+    ]
+  }
+}

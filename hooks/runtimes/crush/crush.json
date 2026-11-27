@@ -1,0 +1,21 @@
+{
+  "$schema": "https://charm.land/crush.json",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "name": "vestige-pre-tool",
+        "matcher": ".*",
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime crush --event PreToolUse",
+        "timeout": 12
+      }
+    ],
+    "PostToolUse": [
+      {
+        "name": "vestige-post-tool",
+        "matcher": ".*",
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime crush --event PostToolUse",
+        "timeout": 10
+      }
+    ]
+  }
+}

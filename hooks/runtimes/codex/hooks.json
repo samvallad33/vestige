@@ -1,0 +1,140 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event SessionStart",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event UserPromptSubmit",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event PreToolUse",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event PermissionRequest",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event PostToolUse",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event PreCompact",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event PostCompact",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event Stop",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event SubagentStart",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event SubagentStop",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event Interrupt",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime codex --event SessionEnd",
+            "timeout": 12
+          }
+        ]
+      }
+    ]
+  }
+}

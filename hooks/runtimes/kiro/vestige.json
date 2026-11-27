@@ -1,0 +1,48 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "vestige-prompt-recall",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime kiro --event UserPromptSubmit"
+      }
+    },
+    {
+      "name": "vestige-pre-tool-guard",
+      "trigger": "PreToolUse",
+      "matcher": ".*",
+      "action": {
+        "type": "command",
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime kiro --event PreToolUse"
+      }
+    },
+    {
+      "name": "vestige-post-tool-reflex",
+      "trigger": "PostToolUse",
+      "matcher": ".*",
+      "action": {
+        "type": "command",
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime kiro --event PostToolUse"
+      }
+    },
+    {
+      "name": "vestige-post-file-save",
+      "trigger": "PostFileSave",
+      "matcher": ".*",
+      "action": {
+        "type": "command",
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime kiro --event PostFileSave"
+      }
+    },
+    {
+      "name": "vestige-session-end",
+      "trigger": "SessionEnd",
+      "action": {
+        "type": "command",
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime kiro --event SessionEnd"
+      }
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime copilot --event sessionStart",
+        "powershell": "node %USERPROFILE%\\.vestige\\memory\\hooks\\vestige-bridge.cjs --runtime copilot --event sessionStart",
+        "timeoutSec": 15
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime copilot --event userPromptSubmitted",
+        "powershell": "node %USERPROFILE%\\.vestige\\memory\\hooks\\vestige-bridge.cjs --runtime copilot --event userPromptSubmitted",
+        "timeoutSec": 15
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime copilot --event preToolUse",
+        "powershell": "node %USERPROFILE%\\.vestige\\memory\\hooks\\vestige-bridge.cjs --runtime copilot --event preToolUse",
+        "timeoutSec": 15
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime copilot --event postToolUse",
+        "powershell": "node %USERPROFILE%\\.vestige\\memory\\hooks\\vestige-bridge.cjs --runtime copilot --event postToolUse",
+        "timeoutSec": 15
+      }
+    ],
+    "errorOccurred": [
+      {
+        "type": "command",
+        "bash": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime copilot --event errorOccurred",
+        "powershell": "node %USERPROFILE%\\.vestige\\memory\\hooks\\vestige-bridge.cjs --runtime copilot --event errorOccurred",
+        "timeoutSec": 15
+      }
+    ],
+    "preCompact": [
+      {
+        "type": "command",
+        "bash": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime copilot --event preCompact",
+        "powershell": "node %USERPROFILE%\\.vestige\\memory\\hooks\\vestige-bridge.cjs --runtime copilot --event preCompact",
+        "timeoutSec": 15
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime copilot --event subagentStart",
+        "powershell": "node %USERPROFILE%\\.vestige\\memory\\hooks\\vestige-bridge.cjs --runtime copilot --event subagentStart",
+        "timeoutSec": 15
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "bash": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime copilot --event subagentStop",
+        "powershell": "node %USERPROFILE%\\.vestige\\memory\\hooks\\vestige-bridge.cjs --runtime copilot --event subagentStop",
+        "timeoutSec": 15
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime copilot --event agentStop",
+        "powershell": "node %USERPROFILE%\\.vestige\\memory\\hooks\\vestige-bridge.cjs --runtime copilot --event agentStop",
+        "timeoutSec": 15
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime copilot --event sessionEnd",
+        "powershell": "node %USERPROFILE%\\.vestige\\memory\\hooks\\vestige-bridge.cjs --runtime copilot --event sessionEnd",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}

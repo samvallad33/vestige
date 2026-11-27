@@ -1,0 +1,28 @@
+#!/usr/bin/env node
+'use strict';
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const event = path.basename(__filename);
+const bridge = [
+  process.env.VESTIGE_BRIDGE_PATH,
+  path.join(os.homedir(), '.vestige', 'memory', 'hooks', 'vestige-bridge.cjs'),
+  path.resolve(__dirname, '../../../packages/vestige-init/hooks/vestige-bridge.cjs'),
+].find(p => p && fs.existsSync(p));
+
+if (!bridge) {
+  process.stdout.write('{}\n');
+  process.exit(0);
+}
+let raw = '';
+try { raw = fs.readFileSync(0, 'utf8'); } catch {}
+const res = spawnSync(process.execPath, [bridge, '--runtime', 'cline', '--event', event], {
+  input: raw,
+  encoding: 'utf8',
+  timeout: 12000,
+  windowsHide: true,
+});
+process.stdout.write((res.stdout || '{}').trim() + '\n');
+process.exit(0);

@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime roo-code --event sessionStart",
+        "timeout": 12
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime roo-code --event beforeSubmitPrompt",
+        "timeout": 12
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime roo-code --event preToolUse",
+        "timeout": 12,
+        "failClosed": true,
+        "matcher": ".*"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime roo-code --event postToolUse",
+        "timeout": 12,
+        "matcher": ".*"
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime roo-code --event preCompact",
+        "timeout": 12
+      }
+    ],
+    "stop": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime roo-code --event stop",
+        "timeout": 12,
+        "failClosed": true
+      }
+    ]
+  }
+}

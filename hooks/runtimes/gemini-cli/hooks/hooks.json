@@ -1,0 +1,90 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "name": "vestige-session-start",
+            "type": "command",
+            "command": "node \"${extensionPath}/../../packages/vestige-init/hooks/vestige-bridge.cjs\" --runtime gemini-cli --event SessionStart",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "name": "vestige-before-agent",
+            "type": "command",
+            "command": "node \"${extensionPath}/../../packages/vestige-init/hooks/vestige-bridge.cjs\" --runtime gemini-cli --event BeforeAgent",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "name": "vestige-before-tool",
+            "type": "command",
+            "command": "node \"${extensionPath}/../../packages/vestige-init/hooks/vestige-bridge.cjs\" --runtime gemini-cli --event BeforeTool",
+            "timeout": 15000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "name": "vestige-after-tool",
+            "type": "command",
+            "command": "node \"${extensionPath}/../../packages/vestige-init/hooks/vestige-bridge.cjs\" --runtime gemini-cli --event AfterTool",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "PreCompress": [
+      {
+        "hooks": [
+          {
+            "name": "vestige-pre-compress",
+            "type": "command",
+            "command": "node \"${extensionPath}/../../packages/vestige-init/hooks/vestige-bridge.cjs\" --runtime gemini-cli --event PreCompress",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "name": "vestige-after-agent",
+            "type": "command",
+            "command": "node \"${extensionPath}/../../packages/vestige-init/hooks/vestige-bridge.cjs\" --runtime gemini-cli --event AfterAgent",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "name": "vestige-session-end",
+            "type": "command",
+            "command": "node \"${extensionPath}/../../packages/vestige-init/hooks/vestige-bridge.cjs\" --runtime gemini-cli --event SessionEnd",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}

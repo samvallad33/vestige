@@ -1,0 +1,56 @@
+{
+  "vestige": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "node bridge/agy-bridge.cjs --event SessionStart",
+        "timeout": 20
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "run_command|run_shell_command|command|edit_file|write_file|write_to_file|replace_file_content|multi_replace_file_content|read_file|view_file|call_mcp_tool|mcp_vestige.*|search_web|web_search|read_url_content|fetch_url|invoke_subagent|browser_.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node bridge/agy-bridge.cjs --event PreToolUse",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "run_command|run_shell_command|command|edit_file|write_file|write_to_file|replace_file_content|multi_replace_file_content|call_mcp_tool|mcp_vestige.*|search_web|web_search|read_url_content|fetch_url|invoke_subagent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node bridge/agy-bridge.cjs --event PostToolUse",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node bridge/agy-bridge.cjs --event PreInvocation",
+        "timeout": 20
+      }
+    ],
+    "PostInvocation": [
+      {
+        "type": "command",
+        "command": "node bridge/agy-bridge.cjs --event PostInvocation",
+        "timeout": 15
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node bridge/agy-bridge.cjs --event Stop",
+        "timeout": 20
+      }
+    ]
+  }
+}

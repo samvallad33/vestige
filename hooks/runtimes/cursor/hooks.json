@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event sessionStart",
+        "timeout": 12
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event beforeSubmitPrompt",
+        "timeout": 12
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event preToolUse",
+        "timeout": 12,
+        "failClosed": true,
+        "matcher": ".*"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event beforeShellExecution",
+        "timeout": 12,
+        "failClosed": true,
+        "matcher": "*"
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event beforeMCPExecution",
+        "timeout": 12,
+        "failClosed": true
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event beforeReadFile",
+        "timeout": 12,
+        "failClosed": true
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event postToolUse",
+        "timeout": 12,
+        "matcher": ".*"
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event postToolUseFailure",
+        "timeout": 12,
+        "matcher": ".*"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event afterShellExecution",
+        "timeout": 12
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event afterMCPExecution",
+        "timeout": 12
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event afterFileEdit",
+        "timeout": 12
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event subagentStart",
+        "timeout": 12
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event subagentStop",
+        "timeout": 12
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event preCompact",
+        "timeout": 12
+      }
+    ],
+    "stop": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event stop",
+        "timeout": 12,
+        "failClosed": true
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "node '~/.vestige/memory/hooks/vestige-bridge.cjs' --runtime cursor --event sessionEnd",
+        "timeout": 12
+      }
+    ]
+  }
+}

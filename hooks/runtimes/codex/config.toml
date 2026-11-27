@@ -1,0 +1,7 @@
+# Add to ~/.codex/config.toml
+[features]
+hooks = true
+
+[mcp_servers.vestige]
+command = "vestige-mcp"
+args = []

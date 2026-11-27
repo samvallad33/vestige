@@ -1,0 +1,18 @@
+hooks:
+  SessionStart:
+    - command: "node ~/.vestige/memory/hooks/vestige-bridge.cjs --runtime goose --event SessionStart"
+      timeout: 15
+  UserPromptSubmit:
+    - command: "node ~/.vestige/memory/hooks/vestige-bridge.cjs --runtime goose --event UserPromptSubmit"
+      timeout: 15
+  PreToolUse:
+    - matcher: ".*"
+      command: "node ~/.vestige/memory/hooks/vestige-bridge.cjs --runtime goose --event PreToolUse"
+      timeout: 15
+  PostToolUse:
+    - matcher: ".*"
+      command: "node ~/.vestige/memory/hooks/vestige-bridge.cjs --runtime goose --event PostToolUse"
+      timeout: 15
+  Stop:
+    - command: "node ~/.vestige/memory/hooks/vestige-bridge.cjs --runtime goose --event Stop"
+      timeout: 15

@@ -45,6 +45,7 @@
     "lib",
     "hooks/agy-bridge.cjs",
     "hooks/agy-hooks.json",
+    "hooks/vestige-bridge.cjs",
     "hooks/operator-stop-memory.py",
     "hooks/stop-memory.cjs",
     "hooks/memory.cjs",
