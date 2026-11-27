@@ -524,9 +524,9 @@ fn is_explicit_memory_ack(text: &str) -> bool {
         || (low.contains("keep ") && low.contains(" in mind"))
 }
 
-/// Closed-class check for user imperative task prompts or request/gratitude wrappers
-/// that must never be treated as personal-state disclosures.
-/// hardcode-scan: closed-class (imperative task verbs, request framing, and gratitude markers).
+/// Closed-class check for user imperative task prompts, discourse reactions/closings,
+/// or request/gratitude wrappers that must never be treated as personal-state disclosures.
+/// hardcode-scan: closed-class (imperative task verbs, interjections, request framing, and gratitude/closure markers).
 fn is_request_or_gratitude_wrapper(text: &str) -> bool {
     let low = text.to_ascii_lowercase();
     if let Some(first) = raw_tokens(&low).first()
@@ -556,10 +556,33 @@ fn is_request_or_gratitude_wrapper(text: &str) -> bool {
                 | "provide"
                 | "outline"
                 | "continue"
+                | "wow"
+                | "yeah"
+                | "yep"
+                | "yes"
+                | "ok"
+                | "okay"
+                | "alright"
+                | "no"
+                | "nope"
+                | "yum"
+                | "oh"
+                | "ah"
+                | "cool"
+                | "awesome"
+                | "great"
+                | "nice"
+                | "interesting"
+                | "sure"
+                | "well"
+                | "hey"
+                | "hi"
+                | "hello"
         )
     {
         return true;
     }
+    // hardcode-scan: closed-class (request, gratitude, and conversational reaction/closure clauses)
     [
         "recommend",
         "suggest",
@@ -582,6 +605,101 @@ fn is_request_or_gratitude_wrapper(text: &str) -> bool {
         "okay, i'm going",
         "ok, i'm going",
         "let's see",
+        "i agree",
+        "i never realized",
+        "i had no idea",
+        "i didn't know",
+        "i didn't realize",
+        "i'm glad",
+        "i am glad",
+        "glad to hear",
+        "good to know",
+        "great to know",
+        "puts my mind at ease",
+        "give these a try",
+        "give this a try",
+        "give it a try",
+        "give them a try",
+        "i'll check out",
+        "i'll look into",
+        "i will check out",
+        "that makes sense",
+        "i see what you mean",
+        "you're right",
+        "that's helpful",
+        "very helpful",
+        "so helpful",
+        "try next time",
+        "i mean ",
+        "you mentioned",
+        "i'll try ",
+        "i'll definitely ",
+        "i'll do that",
+        "i'll start ",
+        "going to check out",
+        "i'm excited to try",
+        "i'm definitely going to",
+        "these are all great",
+        "sound amazing",
+        "sounds amazing",
+        "i provided it",
+        "there is no error",
+        "did not generate",
+        "i will tell the ",
+        "i want to send you",
+        "i am going to ask you",
+        "if i ask you",
+    ]
+    .iter()
+    .any(|p| low.contains(p))
+}
+
+/// Closed-class check for assistant task-output, apology, or farewell-closing replies
+/// that confirm the preceding user turn was a task/reaction rather than a personal disclosure.
+/// hardcode-scan: closed-class (assistant closing/apology/task-output discourse markers).
+fn is_assistant_task_or_closing_reply(text: &str) -> bool {
+    let low = text.trim_start().to_ascii_lowercase();
+    if low.starts_with("here is ")
+        || low.starts_with("here are ")
+        || low.starts_with("here's a ")
+        || low.starts_with("here's an ")
+        || low.starts_with("here's the ")
+    {
+        return true;
+    }
+    // hardcode-scan: closed-class (assistant farewell, apology, and generic output framing)
+    [
+        " here is ",
+        " here are ",
+        " here's a ",
+        " here's an ",
+        " here's the ",
+        "glad i could help",
+        "happy to help",
+        "pleased to help",
+        "here to provide helpful insights",
+        "don't hesitate",
+        "feel free to reach out",
+        "found the information useful",
+        "found that useful",
+        "found this useful",
+        "yes, that's right",
+        "yes, it's ",
+        "certainly, i completely understand",
+        "there's been a misunderstanding",
+        "as an ai",
+        "just a language model",
+        "best of luck",
+        "i hope you enjoy",
+        "i hope these tips",
+        "enjoy your visit",
+        "enjoy your stay",
+        "i apologize for",
+        "please provide me",
+        "please send me",
+        "please go ahead",
+        "natural conclusion",
+        "```",
     ]
     .iter()
     .any(|p| low.contains(p))
@@ -1213,7 +1331,7 @@ fn find_sparse_personal_disclosure_pairs(ix: &Index) -> Vec<(usize, usize, bool)
         if !(3..=42).contains(&uw) || !(3..=50).contains(&aw) {
             continue;
         }
-        if is_request_or_gratitude_wrapper(ut) {
+        if is_request_or_gratitude_wrapper(ut) || is_assistant_task_or_closing_reply(at) {
             continue;
         }
         let u_toks = raw_tokens(ut);
