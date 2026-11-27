@@ -148,6 +148,7 @@ pub(in crate::retrieval) fn named_partner(a: &str, b: &str) -> bool {
 /// consuming or distorting episodic `sessions` / `turns` slots.
 pub(in crate::retrieval) fn rank_standing_rules(
     ix: &Index,
+    q_text: &str,
     plan: &QueryPlan,
     eff_it: &QueryIntent,
     episodic_user_quote: bool,
@@ -160,16 +161,21 @@ pub(in crate::retrieval) fn rank_standing_rules(
     let it = eff_it;
     let multi_evidence = it.multi_hop || it.sniper_how_many || it.temporal || it.is_event_sequence;
 
-    // Precompute query words + human-knowledge lexicon (WordNet 3.1 + Roget + ConceptNet)
-    // once per query so condition/scope matching catches typos ("desing"->"design"),
-    // alphanumeric splits ("html"->"html5"), and lexical bridges ("sources"->"references/citation",
-    // "jobs"->"work/experience") in O(1) per rule word.
-    let q_words: Vec<&str> = plan
+    // Precompute query words (combining `plan.groups` AND raw query content tokens so high-DF
+    // conversation-domain nouns stripped by `corpus_frame` still activate their conditioned
+    // standing rules!) + human-knowledge lexicon (WordNet 3.1 + Roget + ConceptNet) once per query.
+    let mut q_words_owned: Vec<String> = plan
         .groups
         .iter()
-        .map(String::as_str)
         .filter(|w| !w.starts_with('\u{1}') && is_content(w))
+        .cloned()
         .collect();
+    for rw in raw_tokens(q_text) {
+        if is_content(&rw) && !q_words_owned.iter().any(|existing| existing == &rw) {
+            q_words_owned.push(rw);
+        }
+    }
+    let q_words: Vec<&str> = q_words_owned.iter().map(String::as_str).collect();
     let mut q_lex_words: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for &qw in &q_words {
         for (lem, _) in crate::wordnet::full_lexicon_neighbors(qw).into_iter().take(24) {
@@ -262,8 +268,11 @@ pub(in crate::retrieval) fn rank_standing_rules(
                             cnt += 1;
                         }
                     }
-                    let iso_fmt = (body_l.contains("mm/") || body_l.contains("/mm") || body_l.contains("mm-"))
-                        && (body_l.contains("dd") || body_l.contains("yyyy"));
+                    let iso_fmt = ((body_l.contains("mm/") || body_l.contains("/mm") || body_l.contains("mm-"))
+                        && (body_l.contains("dd") || body_l.contains("yyyy")))
+                        || body_l.contains("exact date")
+                        || body_l.contains("format date")
+                        || body_l.contains("date format");
                     if cnt >= 2 || iso_fmt { 1 } else { 0 }
                 })
                 .unwrap_or(0)

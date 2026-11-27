@@ -61,6 +61,11 @@ pub(in crate::retrieval) fn run<'a>(
         && !summary_hold;
     let fl = if p.enable_roles && it.assistant_attribution {
         Fields { w: [0.65, p.assistant_attribution_weight, 0.75], b: [p.b_user, p.b_assistant_attributed, 0.0] }
+    } else if p.enable_roles && explicit_you_asst && !has_named_s1 && ix.turns.len() >= 4 {
+        // Movement IV (Roberts Role-Target Binding): explicit 2nd-person advice-recall queries
+        // ("How did you recommend...", "What approach did you suggest...") bind primarily to
+        // assistant turns (`field 1`) while retaining user-turn topic context.
+        Fields { w: [0.80, p.assistant_attribution_weight, 0.75], b: [p.b_user, p.b_assistant_attributed, 0.0] }
     } else if p.enable_roles && eff_asst_attr {
         Fields { w: [1.10, p.assistant_attribution_weight, 0.75], b: [p.b_user, p.b_assistant_attributed, 0.0] }
     } else if user_role {

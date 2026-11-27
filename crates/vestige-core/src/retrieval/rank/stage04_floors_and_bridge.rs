@@ -64,7 +64,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     // Compound/prepositional task wording (" and ", "first ", "before ") must not
     // drop the standing-policy floor. Only count-snipers and event sequences do.
     let policy_blocked = it.sniper_how_many || eff_it.is_event_sequence;
-    let mut standing_rules = rank_standing_rules(ix, &plan, &eff_it, episodic_user_quote, &t_mask, k);
+    let mut standing_rules = rank_standing_rules(ix, &q.text, &plan, &eff_it, episodic_user_quote, &t_mask, k);
     // Decouple Standing-Policy Register from literal token overlap on live project/preference consultations:
     if (eff_it.task_under_rules || eff_it.preference)
         && !policy_blocked

@@ -4245,18 +4245,32 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 if rank_i >= 5 && smax_sync_d > 0.0 && s_score.get(si).copied().unwrap_or(0.0) < 0.45 * smax_sync_d {
                     break;
                 }
+                let ql_sync = q.text.to_ascii_lowercase();
+                let sync_prefers_asst = eff_it.assistant_attribution
+                    || ql_sync.contains("did you ")
+                    || ql_sync.contains("you recommend")
+                    || ql_sync.contains("you suggest")
+                    || ql_sync.contains("you help");
                 let pick = ix.session_turns[si]
                     .iter()
                     .copied()
                     .filter(|&ti| !ix.turns[ti].is_backchannel && !ix.turns[ti].is_standing_policy)
                     .max_by(|&a, &b| {
-                        let a_user = u8::from(ix.turns[a].field == 0);
-                        let b_user = u8::from(ix.turns[b].field == 0);
+                        let a_role = if sync_prefers_asst {
+                            u8::from(ix.turns[a].field == 1)
+                        } else {
+                            u8::from(ix.turns[a].field == 0)
+                        };
+                        let b_role = if sync_prefers_asst {
+                            u8::from(ix.turns[b].field == 1)
+                        } else {
+                            u8::from(ix.turns[b].field == 0)
+                        };
                         let a_exact = (t_exact_mask.get(a).copied().unwrap_or(0) & qg_mask).count_ones();
                         let b_exact = (t_exact_mask.get(b).copied().unwrap_or(0) & qg_mask).count_ones();
                         let a_sc = t_scene.get(a).copied().unwrap_or(0.0);
                         let b_sc = t_scene.get(b).copied().unwrap_or(0.0);
-                        a_user.cmp(&b_user)
+                        a_role.cmp(&b_role)
                             .then_with(|| a_exact.cmp(&b_exact))
                             .then_with(|| a_sc.partial_cmp(&b_sc).unwrap_or(std::cmp::Ordering::Equal))
                             .then_with(|| b.cmp(&a))
@@ -4577,12 +4591,17 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
     // is never left stranded outside official Top-5 after downstream gatekeepers run.
     // hardcode-scan: closed-class (past-episodic, aggregation, and pairwise comparison guards)
     let ql_sr = ctx.q.text.trim().to_ascii_lowercase();
+    let top_sr_verified_cond = ctx.standing_rules.first().is_some_and(|sr| {
+        sr.score >= 14.0
+            && (ctx.ix.turns.iter().position(|t| t.id == sr.id).is_some_and(|ti| ctx.cond_rule_turns.contains(&ti))
+                || (ql_sr.starts_with("when ") && sr.score >= 15.0))
+    });
     let sr_excluded_q = ql_sr.contains("did i ")
         || ql_sr.contains("did we ")
         || ql_sr.contains("did you ")
         || ql_sr.contains("have i ")
-        || ql_sr.contains("have we ")
-        || ql_sr.contains("was my ")
+        || (ql_sr.contains("have we ") && !top_sr_verified_cond)
+        || (ql_sr.contains("was my ") && !top_sr_verified_cond)
         || ql_sr.contains("were my ")
         || ql_sr.starts_with("how many ")
         || ql_sr.starts_with("how long ")
@@ -4702,7 +4721,7 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         let mut rescue_ti: Option<usize> = None;
         if is_1p_duration_q {
             let max_ent_df = ((ctx.ix.session_turns.len() as u32) / 3).max(4);
-            let rare_q: Vec<u32> = ctx
+            let mut rare_q: Vec<u32> = ctx
                 .plan
                 .terms
                 .iter()
@@ -4713,6 +4732,28 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
                 })
                 .map(|qt| qt.id)
                 .collect();
+            // Fallback when the duration query's main entity appears across > 33% of sessions
+            // (e.g., a frequent partner or project name stripped by `max_ent_df`): select the
+            // single lowest-DF substantive token directly from raw query tokens.
+            if rare_q.is_empty() {
+                let mut best_fallback: Option<(u32, u32)> = None;
+                for tok in raw_tokens(&ctx.q.text) {
+                    if !is_content(&tok)
+                        || matches!(tok.as_str(), "long" | "been" | "have" | "did" | "had" | "with" | "how")
+                    {
+                        continue;
+                    }
+                    if let Some(id) = ctx.ix.vocab.get(&tok) {
+                        let df = ctx.ix.s_stats.df.get(&id).copied().unwrap_or(0);
+                        if df > 0 && best_fallback.is_none_or(|(_, bdf)| df < bdf) {
+                            best_fallback = Some((id, df));
+                        }
+                    }
+                }
+                if let Some((id, _)) = best_fallback {
+                    rare_q.push(id);
+                }
+            }
             if !rare_q.is_empty() {
                 rescue_ti = ctx.ix.turns.iter().enumerate().find_map(|(ti, tr)| {
                     if tr.field != 0 || tr.is_question || tr.is_backchannel || tr.is_standing_policy
