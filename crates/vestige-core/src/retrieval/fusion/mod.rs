@@ -7,6 +7,7 @@ pub(in crate::retrieval) mod kemeny;
 pub(in crate::retrieval) mod kemeny_mrf;
 pub(in crate::retrieval) mod lin_bilmes;
 pub(in crate::retrieval) mod pit_commensuration_q16;
+pub(in crate::retrieval) mod quantifier_restriction_q16;
 pub(in crate::retrieval) mod submodular_residual_cover_q16;
 pub(in crate::retrieval) mod summary_silhouette_q16;
 

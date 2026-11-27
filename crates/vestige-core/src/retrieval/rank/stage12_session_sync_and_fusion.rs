@@ -4557,6 +4557,10 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
         crate::retrieval::seating::abduct::apply_abductive_pragmatic_seating(ctx);
         crate::retrieval::fusion::emgr::apply_emgr_steiner_dpp_fusion(ctx);
         crate::retrieval::graph::rtec::apply_rtec_discourse_dbm(ctx);
+        // Movement III (Barwise-Cooper Quantifier Restriction Grounding & 1st-Person Voice All@5):
+        crate::retrieval::fusion::quantifier_restriction_q16::apply_quantifier_restriction_all5(
+            ctx,
+        );
         // Post-Submodular Causal Source-Attribution Snap: ensure Mode B / C distinct-session
         // cover never leaves assistant echo turns (`2k+1`) seated ahead of their substantive
         // originating user turns (`2k`) on user-attributed temporal/counting/update queries.
