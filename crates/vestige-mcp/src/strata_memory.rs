@@ -2134,21 +2134,6 @@ impl MemoryStoreSend for StrataMemory {
 
     fn resolve_handle(&self, query: &str) -> HandleResolution {
         let query = query.trim();
-        let store = self.lock();
-        // Every live node, native or imported from v3: origins only list
-        // natively admitted writes, so an upgraded store's memories were
-        // unreachable by handle. Retired nodes stay out.
-        let ids: Vec<String> = store.node_ids_where(retrievable);
-        // Exact tag handle (case-sensitive, like the SQLite resolver): every
-        // live node carrying exactly this tag. No prefix or fuzzy matching.
-        let tagged: Vec<String> = if query.is_empty() {
-            Vec::new()
-        } else {
-            store.node_ids_where(|record| {
-                retrievable(record) && record.tags.iter().any(|tag| tag == query)
-            })
-        };
-        drop(store);
         if query.is_empty() {
             return HandleResolution {
                 kind: HandleKind::Unknown,
@@ -2158,21 +2143,26 @@ impl MemoryStoreSend for StrataMemory {
                 handle_required: Some(HANDLE_REQUIRED_DETAIL.to_string()),
             };
         }
-        if let Some(id) = ids.iter().find(|id| id.as_str() == query) {
+        let store = self.lock();
+        // 1. O(1) exact node id lookup (native or imported).
+        if let Some(record) = store.node_record(query)
+            && retrievable(record)
+        {
             return HandleResolution {
                 kind: HandleKind::Memory,
-                ids: vec![id.clone()],
+                ids: vec![record.id.clone()],
                 exact: true,
                 candidates: Vec::new(),
                 handle_required: None,
             };
         }
+        // 2. O(log N + K) unique prefix lookup for >= 8-char prefixes via BTreeMap::range.
         if query.len() >= 8 {
-            let hits: Vec<&String> = ids.iter().filter(|id| id.starts_with(query)).collect();
+            let hits = store.live_node_ids_with_prefix(query, MAX_CANDIDATES + 1);
             if hits.len() == 1 {
                 return HandleResolution {
                     kind: HandleKind::Memory,
-                    ids: vec![hits[0].clone()],
+                    ids: hits,
                     exact: false,
                     candidates: Vec::new(),
                     handle_required: None,
@@ -2186,12 +2176,14 @@ impl MemoryStoreSend for StrataMemory {
                     candidates: hits
                         .into_iter()
                         .take(MAX_CANDIDATES)
-                        .map(|id| (id.clone(), HandleKind::Memory))
+                        .map(|id| (id, HandleKind::Memory))
                         .collect(),
                     handle_required: None,
                 };
             }
         }
+        // 3. O(1) exact case-sensitive tag lookup via `StrataStore::tag_index`.
+        let tagged = store.live_node_ids_with_tag(query);
         if !tagged.is_empty() {
             return HandleResolution {
                 kind: HandleKind::Tag,
@@ -2636,7 +2628,7 @@ impl MemoryStoreSend for StrataMemory {
             is_live
         };
         let mut linked = Vec::new();
-        for edge in store.edges().iter() {
+        for edge in store.edge_list().iter() {
             if edge.source_id != edge.target_id && live(&edge.source_id) && live(&edge.target_id) {
                 linked.push((edge.source_id.clone(), edge.target_id.clone()));
             }
@@ -2714,7 +2706,7 @@ impl MemoryStoreSend for StrataMemory {
         }
 
         let mut edges: Vec<VestigeEdge> = store
-            .edges()
+            .edge_list()
             .iter()
             .filter(|edge| seen.contains(&edge.source_id) && seen.contains(&edge.target_id))
             .map(project_edge)
@@ -2745,41 +2737,40 @@ impl MemoryStoreSend for StrataMemory {
 
     fn get_stats(&self) -> Result<MemoryStats, StorageError> {
         let store = self.lock();
-        let nodes: Vec<_> = store.nodes().into_iter().filter(retrievable).collect();
-        let strengths: Vec<f64> = nodes
-            .iter()
-            .map(|record| {
-                store
-                    .retrievability(&record.id)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(0.0)
-            })
-            .collect();
-        let total = strengths.len() as i64;
-        let average = if strengths.is_empty() {
-            0.0
-        } else {
-            strengths.iter().sum::<f64>() / strengths.len() as f64
-        };
-        let oldest = nodes.iter().map(|n| n.created_at_ms).min().map(ms_to_dt);
-        let newest = nodes.iter().map(|n| n.created_at_ms).max().map(ms_to_dt);
+        let as_of = store.head_clock_ms();
+        let mut total = 0i64;
+        let mut sum = 0.0f64;
+        let mut oldest_ms: Option<i64> = None;
+        let mut newest_ms: Option<i64> = None;
+        for record in store.node_map().values().filter(|r| retrievable(r)) {
+            let score = store
+                .retrievability_at(&record.id, as_of)
+                .ok()
+                .flatten()
+                .unwrap_or(0.0);
+            total += 1;
+            sum += score;
+            oldest_ms = Some(oldest_ms.map_or(record.created_at_ms, |m| m.min(record.created_at_ms)));
+            newest_ms = Some(newest_ms.map_or(record.created_at_ms, |m| m.max(record.created_at_ms)));
+        }
+        let average = if total == 0 { 0.0 } else { sum / total as f64 };
         let mut stats = MemoryStats::default();
         stats.total_nodes = total;
         stats.average_retention = average;
         stats.average_storage_strength = average;
         stats.average_retrieval_strength = average;
-        stats.oldest_memory = oldest;
-        stats.newest_memory = newest;
+        stats.oldest_memory = oldest_ms.map(ms_to_dt);
+        stats.newest_memory = newest_ms.map(ms_to_dt);
         Ok(stats)
     }
 
     fn state_distribution(&self) -> Result<(i64, i64, i64, i64), StorageError> {
         let store = self.lock();
+        let as_of = store.head_clock_ms();
         let mut bands = [0i64; 4];
-        for record in store.nodes().into_iter().filter(retrievable) {
+        for record in store.node_map().values().filter(|r| retrievable(r)) {
             let score = store
-                .retrievability(&record.id)
+                .retrievability_at(&record.id, as_of)
                 .ok()
                 .flatten()
                 .unwrap_or(0.0);
@@ -2803,10 +2794,11 @@ impl MemoryStoreSend for StrataMemory {
 
     fn get_retention_distribution(&self) -> Result<Vec<(String, i64)>, StorageError> {
         let store = self.lock();
+        let as_of = store.head_clock_ms();
         let mut counts: BTreeMap<&'static str, i64> = BTreeMap::new();
-        for record in store.nodes().into_iter().filter(retrievable) {
+        for record in store.node_map().values().filter(|r| retrievable(r)) {
             let score = store
-                .retrievability(&record.id)
+                .retrievability_at(&record.id, as_of)
                 .ok()
                 .flatten()
                 .unwrap_or(0.0);
@@ -2824,13 +2816,14 @@ impl MemoryStoreSend for StrataMemory {
 
     fn count_memories_below_retention(&self, threshold: f64) -> Result<i64, StorageError> {
         let store = self.lock();
+        let as_of = store.head_clock_ms();
         let count = store
-            .nodes()
-            .iter()
+            .node_map()
+            .values()
             .filter(|record| retrievable(record))
             .filter(|record| {
                 store
-                    .retrievability(&record.id)
+                    .retrievability_at(&record.id, as_of)
                     .ok()
                     .flatten()
                     .unwrap_or(0.0)
@@ -3057,14 +3050,14 @@ impl MemoryStoreSend for StrataMemory {
         let store = self.lock();
         let mut out = Vec::new();
         let cap = usize::try_from(limit).unwrap_or(0);
-        for record in store.nodes() {
-            if !retrievable(&record) || record.node_type != node_type || record.scope != scope {
+        for record in store.node_map().values() {
+            if !retrievable(record) || record.node_type != node_type || record.scope != scope {
                 continue;
             }
             if tag.is_some_and(|wanted| !record.tags.iter().any(|stored| stored == wanted)) {
                 continue;
             }
-            out.push(project_node(&store, &record));
+            out.push(project_node(&store, record));
             if out.len() >= cap {
                 break;
             }
@@ -3080,8 +3073,8 @@ impl MemoryStoreSend for StrataMemory {
         let store = self.lock();
         let mut counts: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
-        for record in store.nodes() {
-            if !retrievable(&record) || record.node_type != node_type {
+        for record in store.node_map().values() {
+            if !retrievable(record) || record.node_type != node_type {
                 continue;
             }
             if tag.is_some_and(|wanted| !record.tags.iter().any(|stored| stored == wanted)) {
@@ -4201,20 +4194,21 @@ impl StrataMemory {
         offset: i32,
     ) -> Result<Vec<KnowledgeNode>, StorageError> {
         let store = self.lock();
-        let mut nodes: Vec<KnowledgeNode> = store
-            .nodes()
-            .iter()
+        let mut records: Vec<&strata_store::NodeRecord> = store
+            .node_map()
+            .values()
             .filter(|record| retrievable(record) && scope.is_none_or(|scope| record.scope == scope))
-            .map(|record| project_node(&store, record))
             .collect();
-        nodes.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
+        records.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms).then(a.id.cmp(&b.id)));
         let offset = usize::try_from(offset).unwrap_or(0);
-        if offset >= nodes.len() || limit <= 0 {
+        if offset >= records.len() || limit <= 0 {
             return Ok(Vec::new());
         }
-        nodes.drain(0..offset);
-        nodes.truncate(limit as usize);
-        Ok(nodes)
+        let end = offset.saturating_add(limit as usize).min(records.len());
+        Ok(records[offset..end]
+            .iter()
+            .map(|record| project_node(&store, record))
+            .collect())
     }
 
     /// GhostLink bridge lens (the owner ruling of 2026-09-28): pool pairs

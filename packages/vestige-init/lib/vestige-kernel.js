@@ -12,7 +12,7 @@ const path = require('path');
 const readline = require('readline');
 const { spawn, spawnSync } = require('child_process');
 
-const BINARIES = ['vestige-mcp', 'vestige', 'vestige-restore', 'vestige-upgrade'];
+const BINARIES = ['vestige-mcp', 'vestige', 'vestige-hook', 'vestige-restore', 'vestige-upgrade'];
 
 // Claude Code runs a SessionStart command hook on these sources (hooks/settings.rules.fragment.json).
 const RULES_MATCHER = 'startup|resume|clear|compact|fork';

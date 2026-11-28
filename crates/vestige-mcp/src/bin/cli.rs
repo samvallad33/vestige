@@ -221,6 +221,14 @@ enum GateCommands {
         /// 24-hex action digest from a STOP receipt
         action_digest: String,
     },
+    /// Record a cryptographic [FULL-DRY-RUN PASS] witness for a training script (OP-GPU-DRYRUN)
+    VerifyGpu {
+        /// Path to the Python training script that passed a local/CPU full dry-run
+        script: PathBuf,
+        /// Optional summary of the dry-run verification (e.g. shape/loss/smoke metrics)
+        #[arg(long)]
+        summary: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1635,6 +1643,7 @@ fn main() -> anyhow::Result<()> {
             GateCommands::Verify => run_gate_verify(),
             GateCommands::Test => run_gate_test(),
             GateCommands::Approve { action_digest } => run_gate_approve(action_digest),
+            GateCommands::VerifyGpu { script, summary } => run_gate_verify_gpu(script, summary),
         },
         Commands::Init {
             git_hooks,
@@ -8049,6 +8058,23 @@ fn run_gate_approve(action_digest: String) -> anyhow::Result<()> {
     let home = vestige_mcp::native_gate::operator_home_dir();
     vestige_mcp::native_gate::grant_single_use_permit(&home, action_digest.trim(), "owner-tty")?;
     println!("Permit granted for one use.");
+    Ok(())
+}
+
+fn run_gate_verify_gpu(script: PathBuf, summary: Option<String>) -> anyhow::Result<()> {
+    let summary_text = summary.unwrap_or_else(|| "verified local dry-run".to_string());
+    let (sha, out_path) =
+        vestige_mcp::native_gate::record_gpu_dryrun_receipt(&script, &summary_text)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "status": "FULL-DRY-RUN PASS",
+            "script": script.display().to_string(),
+            "sha256": sha,
+            "receipt": out_path.display().to_string(),
+            "summary": summary_text,
+        }))?
+    );
     Ok(())
 }
 

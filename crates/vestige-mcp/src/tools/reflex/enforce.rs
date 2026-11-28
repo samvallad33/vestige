@@ -453,12 +453,37 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
             note_gate(g, inp, storage);
             note_success(g, inp);
             note_store_receipts(g, inp, storage);
+            let anomaly_reason = detect_exit0_output_anomaly(inp);
+            let mut auto_escalated_msg: Option<String> = None;
             {
                 let s = g.session(&inp.session);
                 s.ledger.tool_calls_this_turn = s.ledger.tool_calls_this_turn.saturating_add(1);
-                if is_edit_tool(&inp.tool) {
-                    s.ledger.last_fail_key.clear();
-                    s.ledger.consecutive_same_fail = 0;
+                // NEVER wipe `last_fail_key` / `consecutive_same_fail` on blind edits:
+                // only an actual passing rerun of the failing command clears spiral state.
+                if let Some(reason) = anomaly_reason {
+                    let fail_key = super::lease::failure_key(&inp.tool, &inp.file, &inp.command);
+                    if s.ledger.last_fail_key == fail_key {
+                        s.ledger.consecutive_same_fail =
+                            s.ledger.consecutive_same_fail.saturating_add(1);
+                    } else {
+                        s.ledger.last_fail_key = fail_key.clone();
+                        s.ledger.consecutive_same_fail = 1;
+                    }
+                    if s.ledger.spiral_investigated && !s.ledger.spiral_escalated {
+                        s.ledger.spiral_stage = 2;
+                        s.ledger.spiral_sig = fail_key.clone();
+                        auto_escalated_msg = Some(format!(
+                            "Vestige Anti-Spiral [Stage 2 / Exit-0 Anomaly]: `{fail_key}` reported `{reason}` even after local recall/walk. Stop local guesses — call `search_web` or `invoke_subagent` before your next mutation."
+                        ));
+                    } else {
+                        if s.ledger.spiral_stage < 1 {
+                            s.ledger.spiral_stage = 1;
+                            s.ledger.spiral_sig = fail_key.clone();
+                        }
+                        auto_escalated_msg = Some(format!(
+                            "Vestige Anti-Spiral [Stage 1 / Exit-0 Anomaly]: `{fail_key}` exited 0 but output contains `{reason}`. Call `causal_walk` or `recall` before retrying or editing."
+                        ));
+                    }
                 }
                 if is_recall_or_walk(inp)
                     && (s.ledger.spiral_stage >= 1
@@ -466,12 +491,27 @@ pub(super) fn observe(g: &mut Global, inp: &Input, storage: &Arc<Storage>) -> Ve
                         || s.ledger.consecutive_same_fail >= 1)
                 {
                     s.ledger.spiral_investigated = true;
+                    // If local Strata investigation returned 0 hits for an active failure,
+                    // auto-escalate directly to Stage 2 so the agent searches the web / delegates
+                    // instead of looping back into blind edits.
+                    if response_has_zero_investigation_hits(&inp.tool_response)
+                        && !s.ledger.spiral_escalated
+                    {
+                        s.ledger.spiral_stage = 2;
+                        auto_escalated_msg = Some(
+                            "Vestige Anti-Spiral [Stage 2 Auto-Escalation]: local `causal_walk`/`recall` returned 0 matching causes. Escalate to `search_web` or `invoke_subagent` (browser/research) before your next edit or command."
+                                .to_string(),
+                        );
+                    }
                 }
                 if is_web_or_subagent(inp)
                     && (s.ledger.spiral_stage >= 1 || !s.ledger.unpaired.is_empty())
                 {
                     s.ledger.spiral_escalated = true;
                 }
+            }
+            if let Some(msg) = auto_escalated_msg {
+                lines.push(msg);
             }
             if pairing::is_shell(&inp.tool) {
                 super::lease::release_mutex_for_session(storage.data_dir(), &inp.session);
@@ -2452,6 +2492,57 @@ fn is_web_or_subagent(inp: &Input) -> bool {
     )
 }
 
+/// Detect real runtime/training failures hidden inside exit-0 wrapper commands
+/// (e.g., `colab exec`, remote runners, or Python scripts that print Tracebacks / OOM / 100% FPR).
+fn detect_exit0_output_anomaly(inp: &Input) -> Option<&'static str> {
+    if !pairing::is_shell(&inp.tool) {
+        return None;
+    }
+    let combined = format!("{}\n{}", inp.stdout, inp.stderr);
+    if combined.trim().is_empty() {
+        return None;
+    }
+    // hardcode-scan: protocol (runtime stderr/stdout anomaly signatures for exit-0 failure detection)
+    const SIGNATURES: &[&str] = &[
+        "Traceback (most recent call last):",
+        "CUDA out of memory",
+        "RuntimeError:",
+        "AssertionError:",
+        "fpr=100.00%",
+        "FPR=100.00%",
+        "panicked at ",
+        "error[E0",
+    ];
+    SIGNATURES.iter().copied().find(|sig| combined.contains(sig))
+}
+
+/// True when a `causal_walk` or `recall` tool response explicitly returned zero causes/nodes.
+fn response_has_zero_investigation_hits(resp: &Value) -> bool {
+    let Some(obj) = resp.as_object() else {
+        return false;
+    };
+    let mut saw_collection = false;
+    for key in ["causes", "nodes", "memories", "results", "hits", "matches"] {
+        if let Some(arr) = obj.get(key).and_then(Value::as_array) {
+            saw_collection = true;
+            if !arr.is_empty() {
+                return false;
+            }
+        }
+    }
+    if let Some(n) = obj
+        .get("count")
+        .or_else(|| obj.get("total"))
+        .and_then(Value::as_u64)
+    {
+        saw_collection = true;
+        if n > 0 {
+            return false;
+        }
+    }
+    saw_collection
+}
+
 fn normalize_repo_path(raw: &str, cwd: &str) -> String {
     let trimmed = raw
         .trim()
@@ -3990,5 +4081,153 @@ mod tests {
             "",
         );
         assert!(d_read_after.permission_decision.is_none());
+    }
+
+    #[test]
+    fn blind_edit_between_failures_never_wipes_anti_spiral_counter() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let mut g = Global::load(dir.path().to_path_buf());
+        let sess = "spiral-edit-preserve";
+
+        // 1. Failure #1
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUseFailure".into(),
+                session: sess.into(),
+                tool: "run_command".into(),
+                command: "cargo test -p vestige-mcp".into(),
+                error: "exit 101".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+        // 2. Agent makes a blind Edit without calling causal_walk/recall -> must NOT reset failure state!
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUse".into(),
+                session: sess.into(),
+                tool: "Edit".into(),
+                file: "crates/vestige-mcp/src/lib.rs".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+        // 3. Same command fails again -> consecutive_same_fail must advance to >= 2 and hard-deny raw read_file!
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUseFailure".into(),
+                session: sess.into(),
+                tool: "run_command".into(),
+                command: "cargo test -p vestige-mcp".into(),
+                error: "exit 101".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+        let d = decide(
+            &mut g,
+            &Input {
+                event: "PreToolUse".into(),
+                session: sess.into(),
+                tool: "read_file".into(),
+                file: "crates/vestige-mcp/src/lib.rs".into(),
+                ..Input::default()
+            },
+            &store,
+            "",
+        );
+        assert_eq!(d.permission_decision.as_deref(), Some("deny"), "{d:?}");
+    }
+
+    #[test]
+    fn zero_hit_causal_walk_during_active_failure_escalates_directly_to_stage_2() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let mut g = Global::load(dir.path().to_path_buf());
+        let sess = "spiral-zero-hit-stage2";
+
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUseFailure".into(),
+                session: sess.into(),
+                tool: "run_command".into(),
+                command: "python train.py".into(),
+                error: "CUDA out of memory".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+        // Agent calls causal_walk, which returns empty causes: [] -> must escalate to Stage 2!
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUse".into(),
+                session: sess.into(),
+                tool: "mcp__vestige__causal_walk".into(),
+                tool_response: serde_json::json!({ "causes": [] }),
+                ..Input::default()
+            },
+            &store,
+        );
+        let d = decide(
+            &mut g,
+            &Input {
+                event: "PreToolUse".into(),
+                session: sess.into(),
+                tool: "run_command".into(),
+                command: "python train.py".into(),
+                ..Input::default()
+            },
+            &store,
+            "",
+        );
+        assert_eq!(d.permission_decision.as_deref(), Some("deny"), "{d:?}");
+        assert!(
+            d.permission_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("Stage 2") && (r.contains("search_web") || r.contains("invoke_subagent"))),
+            "expected Stage 2 escalation, got: {:?}",
+            d.permission_reason
+        );
+    }
+
+    #[test]
+    fn exit0_stdout_traceback_and_oom_anomalies_trigger_anti_spiral_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strata_memory::open(dir.path()).unwrap();
+        let mut g = Global::load(dir.path().to_path_buf());
+        let sess = "spiral-exit0-anomaly";
+
+        // Wrapper exits 0 (`PostToolUse`), but stdout hides a real Python Traceback / CUDA OOM!
+        observe(
+            &mut g,
+            &Input {
+                event: "PostToolUse".into(),
+                session: sess.into(),
+                tool: "run_command".into(),
+                command: "colab exec train.py".into(),
+                stdout: "Traceback (most recent call last):\nRuntimeError: CUDA out of memory\nfpr=100.00%".into(),
+                ..Input::default()
+            },
+            &store,
+        );
+        let d = decide(
+            &mut g,
+            &Input {
+                event: "PreToolUse".into(),
+                session: sess.into(),
+                tool: "run_command".into(),
+                command: "colab exec train.py".into(),
+                ..Input::default()
+            },
+            &store,
+            "",
+        );
+        assert_eq!(d.permission_decision.as_deref(), Some("deny"), "exit-0 anomaly must trigger anti-spiral: {d:?}");
     }
 }

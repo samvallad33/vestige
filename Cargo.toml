@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/vestige-lexicons",
     "crates/vestige-core",
+    "crates/vestige-hook",
     "crates/vestige-mcp",
     "crates/vestige-proof",
     "crates/vestige-upgrade",
@@ -42,16 +44,28 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 
 [profile.release]
-lto = true
+lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
+opt-level = 3
+
+# Fat LTO shipping profile for CI release artifacts when binary size is prioritized.
+[profile.dist]
+inherits = "release"
+lto = "fat"
 opt-level = "z"
 
 [profile.dev]
 opt-level = 1
-debug = 0
+debug = "line-tables-only"
 incremental = true
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.build-override]
+opt-level = 3
 
 # Local benchmarking only: fast to build, fast to run. `release` stays the shipping profile.
 [profile.bench-fast]

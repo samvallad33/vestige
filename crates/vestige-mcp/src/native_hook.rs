@@ -130,6 +130,9 @@ pub struct HookDispatchResult {
     pub exit_code: i32,
 }
 
+/// Maximum consecutive Stop blocks per mission contract before releasing cleanly.
+pub const MAX_MISSION_STOP_BLOCKS: u32 = 3;
+
 /// Persisted imperative mission contract automatically captured on `UserPromptSubmit`
 /// and enforced on `Stop` without requiring the agent to voluntarily register a goal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,8 +141,18 @@ pub struct MissionContract {
     pub cwd: String,
     pub prompt_excerpt: String,
     pub required_deleted_paths: Vec<String>,
+    #[serde(default)]
+    pub required_net_loc_negative: bool,
+    #[serde(default)]
+    pub stop_blocks: u32,
+    #[serde(default = "default_max_stop_blocks")]
+    pub max_stop_blocks: u32,
     pub active: bool,
     pub created_at: String,
+}
+
+const fn default_max_stop_blocks() -> u32 {
+    MAX_MISSION_STOP_BLOCKS
 }
 
 fn missions_dir() -> PathBuf {
@@ -211,10 +224,11 @@ pub fn extract_deletion_targets(prompt: &str, cwd: &Path) -> Vec<String> {
         {
             continue;
         }
-        // Only track explicit repo path-like targets (contain '/' or known extension, or exist as a directory under cwd).
+        // Track explicit repo paths or existing directories/files named after a delete/consolidate verb.
         let looks_like_path = cleaned.contains('/')
             || cleaned.contains('.')
-            || raw_tok.trim_matches(|c: char| matches!(c, '`' | '\'' | '"' | ',' | '(' | ')')).ends_with('/');
+            || raw_tok.trim_matches(|c: char| matches!(c, '`' | '\'' | '"' | ',' | '(' | ')')).ends_with('/')
+            || (cleaned.len() >= 3 && cwd.join(cleaned).is_dir());
         if !looks_like_path {
             continue;
         }
@@ -224,6 +238,41 @@ pub fn extract_deletion_targets(prompt: &str, cwd: &Path) -> Vec<String> {
         }
     }
     targets
+}
+
+fn prompt_requires_net_loc_shrink(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    (lower.contains("consolidat") || lower.contains("mega consolidation") || lower.contains("shrink"))
+        && (lower.contains("delete")
+            || lower.contains("remove")
+            || lower.contains("strip")
+            || lower.contains("loc")
+            || lower.contains("lines"))
+}
+
+fn git_net_loc_delta(cwd: &Path) -> Option<(i64, i64)> {
+    let out = std::process::Command::new("git")
+        .args(["diff", "--numstat", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut added = 0i64;
+    let mut deleted = 0i64;
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(a), Some(d)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if let (Ok(ai), Ok(di)) = (a.parse::<i64>(), d.parse::<i64>()) {
+            added += ai;
+            deleted += di;
+        }
+    }
+    Some((added, deleted))
 }
 
 /// Automatically capture an imperative mission contract from `UserPromptSubmit` into `dir`.
@@ -238,7 +287,8 @@ pub fn capture_mission_from_prompt(
         return None;
     }
     let targets = extract_deletion_targets(prompt, cwd_path);
-    if targets.is_empty() {
+    let need_shrink = prompt_requires_net_loc_shrink(prompt);
+    if targets.is_empty() && !need_shrink {
         return None;
     }
     let excerpt: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -247,6 +297,9 @@ pub fn capture_mission_from_prompt(
         cwd: cwd.to_string(),
         prompt_excerpt: excerpt.chars().take(240).collect(),
         required_deleted_paths: targets,
+        required_net_loc_negative: need_shrink,
+        stop_blocks: 0,
+        max_stop_blocks: MAX_MISSION_STOP_BLOCKS,
         active: true,
         created_at: Utc::now().to_rfc3339(),
     };
@@ -260,41 +313,71 @@ pub fn capture_mission_from_prompt(
     Some(contract)
 }
 
-/// Verify an active mission contract on `Stop`. Returns `Some(reason)` when required
-/// deletion targets still exist on disk (blocking premature termination), or `None`
-/// once all targets are fulfilled (closing the contract).
+/// Verify an active mission contract on `Stop`. Enforces up to `max_stop_blocks` (default 3)
+/// even when `stop_hook_active` is true so an agent cannot escape after 1 incomplete retry.
 pub fn verify_mission_on_stop(
     dir: &Path,
     session_id: &str,
-    stop_hook_active: bool,
+    _stop_hook_active: bool,
 ) -> Option<String> {
-    if stop_hook_active {
-        return None;
-    }
     let path = mission_file_path(dir, session_id);
     let raw = fs::read_to_string(&path).ok()?;
     let mut contract: MissionContract = serde_json::from_str(&raw).ok()?;
     if !contract.active {
         return None;
     }
-    let cwd = Path::new(&contract.cwd);
-    let remaining: Vec<String> = contract
-        .required_deleted_paths
-        .iter()
-        .filter(|rel| cwd.join(rel).exists())
-        .cloned()
-        .collect();
-    if remaining.is_empty() {
+    let max_blocks = if contract.max_stop_blocks == 0 {
+        MAX_MISSION_STOP_BLOCKS
+    } else {
+        contract.max_stop_blocks
+    };
+    if contract.stop_blocks >= max_blocks {
         contract.active = false;
         if let Ok(text) = serde_json::to_string_pretty(&contract) {
             let _ = fs::write(&path, text);
         }
         return None;
     }
+    let cwd = Path::new(&contract.cwd);
+    let mut failures: Vec<String> = Vec::new();
+    let remaining: Vec<String> = contract
+        .required_deleted_paths
+        .iter()
+        .filter(|rel| cwd.join(rel).exists())
+        .cloned()
+        .collect();
+    if !remaining.is_empty() {
+        failures.push(format!(
+            "{} target(s) requested for removal still exist on disk ({})",
+            remaining.len(),
+            remaining.join(", ")
+        ));
+    }
+    if contract.required_net_loc_negative
+        && let Some((added, deleted)) = git_net_loc_delta(cwd)
+        && added > deleted
+    {
+        failures.push(format!(
+            "consolidation contract requires negative net LOC, but git diff is +{added}/-{deleted} (net +{})",
+            added - deleted
+        ));
+    }
+    if failures.is_empty() {
+        contract.active = false;
+        if let Ok(text) = serde_json::to_string_pretty(&contract) {
+            let _ = fs::write(&path, text);
+        }
+        return None;
+    }
+    contract.stop_blocks = contract.stop_blocks.saturating_add(1);
+    if let Ok(text) = serde_json::to_string_pretty(&contract) {
+        let _ = fs::write(&path, text);
+    }
     Some(format!(
-        "Mission contract unfinished: {} target(s) requested for removal still exist on disk ({}). Complete the mission before stopping.",
-        remaining.len(),
-        remaining.join(", ")
+        "Mission contract unfinished (block {}/{}): {}. Complete the mission before stopping.",
+        contract.stop_blocks,
+        max_blocks,
+        failures.join("; ")
     ))
 }
 

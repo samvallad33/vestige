@@ -6,7 +6,9 @@
 //! in meaning." A term scores only when it occurs as a whole token in the
 //! memory's content or in one of its tags.
 
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use vestige_core::KnowledgeNode;
 
@@ -21,6 +23,7 @@ const K1: f64 = 1.2;
 const B: f64 = 0.75;
 
 /// Identity tags a two-hop bridge may walk. Exact prefix, case-sensitive.
+#[cfg(test)]
 const IDENTITY_PREFIXES: &[&str] = &["person:", "place:", "food:", "file:", "service:", "symbol:"];
 
 #[cfg(test)]
@@ -191,6 +194,7 @@ pub fn pack<'a>(
     out
 }
 
+#[cfg(test)]
 fn identity_tags(node: &KnowledgeNode) -> Vec<&str> {
     node.tags
         .iter()
@@ -207,6 +211,7 @@ fn identity_tags(node: &KnowledgeNode) -> Vec<&str> {
 /// identity with a middle memory, and that middle shares a different identity
 /// with the far memory. The far memory shares none of the seed identities, so
 /// a one-hop neighbor is not reported again as a bridge.
+#[cfg(test)]
 pub fn bridges(nodes: &[KnowledgeNode], seed_indexes: &[usize], limit: usize) -> Vec<TagBridge> {
     if limit == 0 || seed_indexes.is_empty() {
         return Vec::new();
@@ -272,45 +277,6 @@ pub fn bridges(nodes: &[KnowledgeNode], seed_indexes: &[usize], limit: usize) ->
         }
     }
     found
-}
-
-/// Person tags literally named by `prompt` (the tag, or the text after `person:`).
-pub fn named_people(nodes: &[KnowledgeNode], prompt: &str) -> BTreeSet<String> {
-    let mut people = BTreeSet::new();
-    let prompt_lower = prompt.to_lowercase();
-    if prompt_lower.is_empty() {
-        return people;
-    }
-    for node in nodes {
-        for tag in &node.tags {
-            let Some(name) = tag.strip_prefix("person:") else {
-                continue;
-            };
-            if name.is_empty() || people.contains(tag.as_str()) {
-                continue;
-            }
-            if phrase_in_lower(&prompt_lower, &tag.to_lowercase())
-                || phrase_in_lower(&prompt_lower, &name.to_lowercase())
-            {
-                people.insert(tag.clone());
-            }
-        }
-    }
-    people
-}
-
-fn phrase_in_lower(text_lower: &str, surface_lower: &str) -> bool {
-    if surface_lower.is_empty() {
-        return false;
-    }
-    text_lower.match_indices(surface_lower).any(|(at, _)| {
-        let word = |c: char| c.is_alphanumeric() || c == '_';
-        text_lower[..at].chars().next_back().is_none_or(|c| !word(c))
-            && text_lower[at + surface_lower.len()..]
-                .chars()
-                .next()
-                .is_none_or(|c| !word(c))
-    })
 }
 
 /// Drop a memory that is about some other recorded person when the prompt

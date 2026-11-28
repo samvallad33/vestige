@@ -27,7 +27,132 @@ const TAIL_READ_BYTES: u64 = 8_192;
 pub const GENESIS_PREV: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// Number of deterministic open-core gate rules evaluated before provider escalation.
-pub const DETERMINISTIC_RULE_COUNT: usize = 10;
+pub const DETERMINISTIC_RULE_COUNT: usize = 11;
+
+/// Freshness window for verified GPU dry-run receipts (24 hours).
+const GPU_DRYRUN_TTL_SECS: i64 = 24 * 60 * 60;
+
+fn gpu_dryruns_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("VESTIGE_GPU_DRYRUNS_DIR")
+        && !dir.trim().is_empty()
+    {
+        return PathBuf::from(dir);
+    }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.trim().is_empty()
+    {
+        return PathBuf::from(home).join(".vestige").join("gpu_dryruns");
+    }
+    if let Ok(profile) = std::env::var("USERPROFILE")
+        && !profile.trim().is_empty()
+    {
+        return PathBuf::from(profile).join(".vestige").join("gpu_dryruns");
+    }
+    if let Some(base) = directories::UserDirs::new() {
+        return base.home_dir().join(".vestige").join("gpu_dryruns");
+    }
+    PathBuf::from(".vestige").join("gpu_dryruns")
+}
+
+/// Compute SHA-256 hex digest of a file on disk for exact GPU dry-run witness binding.
+pub fn file_sha256_hex(path: &Path) -> std::io::Result<String> {
+    let bytes = fs::read(path)?;
+    Ok(Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+/// Record a fresh `[FULL-DRY-RUN PASS]` witness for `script_path` under `~/.vestige/gpu_dryruns/<sha256>.json`.
+pub fn record_gpu_dryrun_receipt(script_path: &Path, summary: &str) -> std::io::Result<(String, PathBuf)> {
+    let sha = file_sha256_hex(script_path)?;
+    let dir = gpu_dryruns_dir();
+    fs::create_dir_all(&dir)?;
+    let out_path = dir.join(format!("{sha}.json"));
+    let body = json!({
+        "script": script_path.display().to_string(),
+        "sha256": sha,
+        "status": "FULL-DRY-RUN PASS",
+        "ts": Utc::now().timestamp(),
+        "created_at": Utc::now().to_rfc3339(),
+        "summary": summary,
+    });
+    fs::write(&out_path, serde_json::to_string_pretty(&body).unwrap_or_default())?;
+    Ok((sha, out_path))
+}
+
+fn is_paid_gpu_launch(lower: &str) -> bool {
+    // Always allow stop/list/status/kill/rm inspection and teardown commands.
+    if lower.contains("colab stop")
+        || lower.contains("colab ls")
+        || lower.contains("colab status")
+        || lower.contains("colab rm")
+        || lower.contains("colab kill")
+        || lower.contains("modal app stop")
+        || lower.contains("runpodctl stop")
+        || lower.contains("runpodctl remove")
+        || lower.contains("sky down")
+        || lower.contains("sky stop")
+    {
+        return false;
+    }
+    // Always allow explicit dry-run / syntax / local-check flags.
+    if lower.contains("--dry-run")
+        || lower.contains("--dry_run")
+        || lower.contains("py_compile")
+        || lower.contains("full-dry-run")
+    {
+        return false;
+    }
+    lower.contains("colab exec")
+        || lower.contains("colab new")
+        || lower.contains("modal run")
+        || lower.contains("runpodctl create")
+        || lower.contains("sky launch")
+        || lower.contains("torchrun ")
+        || lower.contains("accelerate launch")
+}
+
+fn extract_python_script_in_cmd(cmd: &str) -> Option<&str> {
+    for raw in cmd.split_whitespace() {
+        let tok = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | ',' | ';'));
+        if tok.ends_with(".py") && !tok.starts_with('-') {
+            return Some(tok);
+        }
+    }
+    None
+}
+
+fn has_fresh_gpu_dryrun_receipt(cmd: &str, cwd: Option<&str>) -> bool {
+    let Some(script_tok) = extract_python_script_in_cmd(cmd) else {
+        return false;
+    };
+    let candidate = {
+        let p = Path::new(script_tok);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else if let Some(base) = cwd {
+            Path::new(base).join(p)
+        } else {
+            p.to_path_buf()
+        }
+    };
+    let Ok(sha) = file_sha256_hex(&candidate) else {
+        return false;
+    };
+    let receipt_path = gpu_dryruns_dir().join(format!("{sha}.json"));
+    let Ok(raw) = fs::read_to_string(receipt_path) else {
+        return false;
+    };
+    let Ok(val) = serde_json::from_str::<Value>(&raw) else {
+        return false;
+    };
+    if val.get("status").and_then(Value::as_str) != Some("FULL-DRY-RUN PASS") {
+        return false;
+    }
+    let ts = val.get("ts").and_then(Value::as_i64).unwrap_or(0);
+    Utc::now().timestamp().saturating_sub(ts) <= GPU_DRYRUN_TTL_SECS
+}
 
 /// Hash-chained JSONL receipt written by [`append_receipt_o1`] in the exact format
 /// read and verified by `precedent(query="stops")`.
@@ -49,6 +174,8 @@ pub struct GateReceipt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     pub tool: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_preview: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -352,6 +479,7 @@ fn append_receipt_with_decision_and_action(
         session: req.session_id.clone(),
         cwd: req.cwd.clone(),
         tool: req.tool_name.clone(),
+        action_preview: req.command.clone().or_else(|| req.file_path.clone()),
         target: req.command.clone().or_else(|| req.file_path.clone()),
         command: req.command.clone(),
         via,
@@ -720,6 +848,16 @@ pub fn evaluate_deterministic_rules(
                 "OP-008",
                 "ASI08",
                 "Recursive deletion outside temporary directories requires owner approval.".into(),
+            ));
+        }
+
+        // OP-GPU-DRYRUN: Paid cloud GPU launch without a fresh verified full dry-run receipt.
+        if is_paid_gpu_launch(&lower) && !has_fresh_gpu_dryrun_receipt(cmd, req.cwd.as_deref()) {
+            return Some((
+                "OP-GPU-DRYRUN",
+                "ASI08",
+                "Paid GPU launch blocked: no fresh (<24h) [FULL-DRY-RUN PASS] receipt found for this exact script SHA-256. Run a full local CPU/mock dry-run and record it with `vestige gate verify-gpu <script.py>` first."
+                    .into(),
             ));
         }
 

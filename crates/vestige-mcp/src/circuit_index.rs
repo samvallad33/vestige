@@ -129,9 +129,17 @@ fn cache_registry() -> &'static Mutex<HashMap<PathBuf, StoreCircuitCache>> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Fast O(1) structural fingerprint of `storage` without cloning all nodes/edges/receipts.
+/// Fast O(1) structural fingerprint of `storage` without cloning any nodes/edges/receipts.
 pub(crate) fn fast_store_stamp(storage: &Storage) -> (usize, u64, u64) {
-    let node_count = crate::strata_memory::read_store(storage, |s| s.nodes().len()).unwrap_or(0);
+    if let Some((node_count, seq, edge_count)) = crate::strata_memory::read_store(storage, |s| {
+        (
+            s.total_node_count(),
+            s.log().head().last_acked_seq,
+            s.edge_count() as u64,
+        )
+    }) {
+        return (node_count, seq, edge_count);
+    }
     let path = storage.db_path();
     let (mut files, mut bytes) = (0u64, 0u64);
     if let Ok(meta) = std::fs::metadata(path) {
@@ -149,7 +157,7 @@ pub(crate) fn fast_store_stamp(storage: &Storage) -> (usize, u64, u64) {
             }
         }
     }
-    (node_count, files, bytes)
+    (0, files, bytes)
 }
 
 /// Notify the incremental `ZSet` cache that a node or edge changed so the next

@@ -314,6 +314,7 @@ function loadConfig(runtime, explicitConfig) {
     gate: defaultGate,
     enforceGuard,
     vestigeBin: resolveHome(cfg.vestigeBin || process.env.VESTIGE_BIN || findExecutable(['vestige']) || (process.platform === 'win32' ? 'vestige.exe' : 'vestige')),
+    hookBin: resolveHome(cfg.hookBin || process.env.VESTIGE_HOOK_BIN || findExecutable(['vestige-hook']) || ''),
     dataDir,
     memoryConfig: effectiveMemCfgPath,
     memCfg: effectiveMemCfg,
@@ -879,6 +880,37 @@ async function handleSessionStart(cfg, payload) {
   return { context };
 }
 
+function resolveFastHookBin(cfg) {
+  if (cfg.hookBin && fs.existsSync(cfg.hookBin)) return cfg.hookBin;
+  if (cfg.vestigeBin) {
+    const sibling = path.join(path.dirname(cfg.vestigeBin), process.platform === 'win32' ? 'vestige-hook.exe' : 'vestige-hook');
+    if (fs.existsSync(sibling)) return sibling;
+  }
+  return '';
+}
+
+function nativeMissionHookRun(cfg, event, payload) {
+  const hookBin = resolveFastHookBin(cfg);
+  const bin = hookBin || cfg.vestigeBin;
+  if (!bin || !fs.existsSync(bin)) return null;
+  const args = hookBin
+    ? ['dispatch', cfg.runtime || 'claude-code', event, '--no-receipt']
+    : ['hook', 'dispatch', cfg.runtime || 'claude-code', event, '--no-receipt'];
+  try {
+    const r = spawnSync(bin, args, {
+      input: JSON.stringify(payload),
+      encoding: 'utf8',
+      timeout: 4000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true,
+    });
+    const out = String(r.stdout || '').trim();
+    return out ? JSON.parse(out) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function handlePrompt(cfg, payload) {
   const sid = payload.session_id;
   const t = turnState(cfg.runtime, sid);
@@ -886,6 +918,8 @@ async function handlePrompt(cfg, payload) {
   const promptKey = crypto.createHash('sha256').update(prompt).digest('hex').slice(0, 16);
   const parts = [];
   if (t.s.promptKey !== promptKey || cfg.runtime !== 'antigravity') {
+    // Capture automatic imperative mission contracts in native Rust (<5ms, zero Python).
+    nativeMissionHookRun(cfg, 'UserPromptSubmit', payload);
     // Serialize reflex ahead of memory context so they never contend on the Strata store lock.
     const rfxOut = await reflexRun(cfg, payload, 'UserPromptSubmit');
     const mem = await memoryContext(cfg, payload, 'prompt', 900);
@@ -924,10 +958,15 @@ async function handlePreToolUse(cfg, payload, nativeEvent, input) {
     const useNative = !cfg.gate || cfg.gate === 'native';
     let r;
     if (useNative) {
-      if (!cfg.vestigeBin || !fs.existsSync(cfg.vestigeBin)) {
-        return { deny: true, reason: `Native Vestige gate binary missing at ${cfg.vestigeBin || 'vestige'}. Fail-closed: a missing gate is never permission to run.` };
+      const hookBin = resolveFastHookBin(cfg);
+      const bin = hookBin || cfg.vestigeBin;
+      if (!bin || !fs.existsSync(bin)) {
+        return { deny: true, reason: `Native Vestige gate binary missing at ${bin || 'vestige'}. Fail-closed: a missing gate is never permission to run.` };
       }
-      r = spawnSync(cfg.vestigeBin, ['gate', 'hook', '--source', cfg.runtime], {
+      const gateArgs = hookBin
+        ? ['gate', '--source', cfg.runtime]
+        : ['gate', 'hook', '--source', cfg.runtime];
+      r = spawnSync(bin, gateArgs, {
         input: JSON.stringify(payload),
         encoding: 'utf8',
         timeout: cfg.gateTimeoutMs,
@@ -1169,13 +1208,20 @@ async function handleStop(cfg, payload, input, nativeEvent) {
   }
 
   if (nativeEvent === 'afterAgentResponse') return {};
+  const missionOut = nativeMissionHookRun(cfg, 'Stop', payload);
+  const missionBlock = (missionOut && (missionOut.decision === 'deny' || missionOut.decision === 'block') && missionOut.reason) || '';
   const rfxOut = await reflexRun(cfg, payload, 'Stop');
-  const reason = (rfxOut && rfxOut.decision === 'block' && rfxOut.reason) || '';
+  const reason = missionBlock || (rfxOut && rfxOut.decision === 'block' && rfxOut.reason) || '';
   const t = payload.session_id ? turnState(cfg.runtime, payload.session_id) : null;
-  const alreadyBlocked = t && t.s.promptKey && t.s.stopBlockedPromptKey === t.s.promptKey;
-  if (reason && payload.stop_hook_active !== true && !alreadyBlocked) {
+  const maxBlocks = 3;
+  let blockCount = 0;
+  if (t && t.s.promptKey && t.s.stopBlockedPromptKey === t.s.promptKey) {
+    blockCount = Number(t.s.stopBlockCount || 0);
+  }
+  if (reason && blockCount < maxBlocks) {
     if (t && t.s.promptKey) {
       t.s.stopBlockedPromptKey = t.s.promptKey;
+      t.s.stopBlockCount = blockCount + 1;
       t.save(t.s);
     }
     return { block: true, reason };

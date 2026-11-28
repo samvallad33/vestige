@@ -73,9 +73,24 @@ try {
     deny('');
     return;
   }
-  const useNativeRust = Boolean(config.vestigeBin) && (!config.gate || config.gate === 'native');
+  const path = require('path');
+  const useNativeRust = Boolean(config.hookBin || config.vestigeBin) && (!config.gate || config.gate === 'native');
+  let nativeBin = config.vestigeBin;
+  let nativeArgs = ['gate', 'hook', '--source', client];
+  if (useNativeRust) {
+    if (config.hookBin && fs.existsSync(config.hookBin)) {
+      nativeBin = config.hookBin;
+      nativeArgs = ['gate', '--source', client];
+    } else if (config.vestigeBin) {
+      const fastHook = path.join(path.dirname(config.vestigeBin), process.platform === 'win32' ? 'vestige-hook.exe' : 'vestige-hook');
+      if (fs.existsSync(fastHook)) {
+        nativeBin = fastHook;
+        nativeArgs = ['gate', '--source', client];
+      }
+    }
+  }
   const result = useNativeRust
-    ? spawnSync(config.vestigeBin, ['gate', 'hook', '--source', client], {
+    ? spawnSync(nativeBin, nativeArgs, {
         input, encoding: 'utf8', timeout: 10000, maxBuffer: 256 * 1024, windowsHide: true,
       })
     : spawnSync(config.python, ['-I', config.gate, 'hook', '--source', client], {
