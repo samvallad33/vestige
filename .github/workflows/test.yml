@@ -167,7 +167,9 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - run: |
+          cargo build -p vestige-mcp --bin vestige-mcp --bin vestige
+          cargo llvm-cov --workspace --lcov --output-path lcov.info
       - uses: codecov/codecov-action@v5
         with:
           files: lcov.info

@@ -4,7 +4,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://github.com/samvallad33/vestige)
 [![License: AGPL-3.0](https://img.shields.io/github/license/samvallad33/vestige)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/samvallad33/vestige)](https://github.com/samvallad33/vestige/releases/tag/v7.0.0) · [Live WebGPU Demo](https://stara-companion.pages.dev/?v=pro-reset)
+[![Release](https://img.shields.io/github/v/release/samvallad33/vestige)](https://github.com/samvallad33/vestige/releases/tag/v7.1.0) · [Live WebGPU Demo](https://stara-companion.pages.dev/?v=pro-reset)
 
 ## Install (1 Command)
 
@@ -18,10 +18,10 @@ Detects Antigravity, Claude Code, Cursor, Codex, and Windsurf, configures the lo
 <summary>Standalone binaries, manual MCP JSON, Nix & CI Gate</summary>
 
 - **macOS / Linux:** `curl -fsSL https://raw.githubusercontent.com/samvallad33/vestige/main/scripts/install.sh | sh`
-- **Windows / binaries:** [GitHub Releases](https://github.com/samvallad33/vestige/releases/tag/v7.0.0)
+- **Windows / binaries:** [GitHub Releases](https://github.com/samvallad33/vestige/releases/tag/v7.1.0)
 - **Nix:** `nix run github:samvallad33/vestige`
 - **Manual MCP JSON:** `{"mcpServers":{"vestige":{"command":"npx","args":["-y","vestige-mcp-server"]}}}`
-- **GitHub PR Gate:** `uses: samvallad33/vestige@v7.0.0`
+- **GitHub PR Gate:** `uses: samvallad33/vestige@v7.1.0`
 
 </details>
 
@@ -42,14 +42,16 @@ Detects Antigravity, Claude Code, Cursor, Codex, and Windsurf, configures the lo
 | `curate` | Edit, supersede, link, or hide stale memories |
 | `precedent` | Inspect safety stops, scan secrets, verify receipts |
 
-## Benchmarks (`v7.0.0`, CPU-Only)
+## Benchmarks (`v7.1.0`, CPU-Only, `$0.00` Cost)
 
 | Benchmark | Metric | Score |
 | :--- | :--- | :--- |
-| **LongMemEval-S** (`470` q) | Session Any@5 / Any@10 | **97.87%** / **99.57%** |
-| **LoCoMo-10** (`1,982` q) | Session R@5 / Turn Exact R@5 | **93.95%** / **83.55%** |
-| **BEAM 100K** (`355` q) | Session Any@5 / Any@10 | **78.31%** / **87.32%** |
+| **InMind** (`125` q) | Implicit Turn R@1 / R@5 | **97.6%** / **97.6%** |
+| **LongMemEval-S** (`470` q) | Session Any@5 / Any@10 | **97.66%** / **99.57%** |
+| **LoCoMo-10** (`1,982` q) | Session R@5 / Turn Exact R@5 | **93.95%** / **83.35%** |
+| **BEAM 100K** (`355` q) | Session Any@5 / Any@10 | **80.56%** / **88.45%** |
 | **STATE-Bench** (`86` episodes) | Turn Exact R@5 / R@10 | **95.35%** / **100.0%** |
+| **ConvoMem** (`100` q) | Turn Exact R@5 / Sess@5 | **93.0%** / **100.0%** |
 
 Reproduce locally: `bash benchmarks/run_all.sh` · Full tables: [benchmarks/README.md](benchmarks/README.md)
 

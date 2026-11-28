@@ -284,7 +284,7 @@ function loadConfig(runtime, explicitConfig) {
       fs.writeFileSync(trigFile, JSON.stringify(defaults, null, 2));
     }
     effectiveMemCfg = {
-      version: '7.0.0',
+      version: '7.1.0',
       binary: mcpBinary,
       binaryArgs: dataDir ? ['--data-dir', dataDir] : [],
       triggers: trigFile,

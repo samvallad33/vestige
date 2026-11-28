@@ -1,6 +1,6 @@
 {
   "name": "@vestige/init",
-  "version": "7.0.0",
+  "version": "7.1.0",
   "description": "Local memory setup for AI agents: merge MCP connections and memory hooks, with native Rust pre-tool gate",
   "bin": {
     "vestige-init": "bin/init.js"
@@ -31,14 +31,14 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@vestige/mcp-darwin-arm64": "7.0.0",
-    "@vestige/mcp-darwin-x64": "7.0.0",
-    "@vestige/mcp-linux-arm64": "7.0.0",
-    "@vestige/mcp-linux-arm64-musl": "7.0.0",
-    "@vestige/mcp-linux-x64": "7.0.0",
-    "@vestige/mcp-linux-x64-musl": "7.0.0",
-    "@vestige/mcp-win32-arm64": "7.0.0",
-    "@vestige/mcp-win32-x64": "7.0.0"
+    "@vestige/mcp-darwin-arm64": "7.1.0",
+    "@vestige/mcp-darwin-x64": "7.1.0",
+    "@vestige/mcp-linux-arm64": "7.1.0",
+    "@vestige/mcp-linux-arm64-musl": "7.1.0",
+    "@vestige/mcp-linux-x64": "7.1.0",
+    "@vestige/mcp-linux-x64-musl": "7.1.0",
+    "@vestige/mcp-win32-arm64": "7.1.0",
+    "@vestige/mcp-win32-x64": "7.1.0"
   },
   "files": [
     "bin",

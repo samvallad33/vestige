@@ -1,0 +1,1 @@
+import{pt as e}from"../chunks/C30ycVZ-.js";import{t}from"../chunks/CuKL6KjG.js";var n=e({load:()=>r}),r=({url:e})=>t(`/timeline`,e);export{n as universal};

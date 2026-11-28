@@ -30,9 +30,9 @@ MAX_BINARY_BYTES = 256 * 1024 * 1024
 JSON_MANIFESTS = [
     "package.json", "apps/dashboard/package.json", "packages/vestige-init/package.json",
     "packages/vestige-mcp-npm/package.json", "packages/vestige-mcpb/manifest.json",
-    "lhm.plugin.json", "server.json", "plugins/vestige-strata/package.json",
+    "server.json", "plugins/vestige-strata/package.json",
     "plugins/vestige-strata/openclaw.plugin.json",
-    # Legacy standalone operator-lite npm/openclaw packages removed in v7.1 native Rust gate consolidation.
+    # Legacy standalone operator-lite npm/openclaw packages & lhm.plugin.json removed in v7.1 consolidation.
 ] + [f"packages/mcp-{platform}/package.json" for platform in TARGETS.values() if platform]
 CARGO_MANIFESTS = ["Cargo.toml"] + [
     f"crates/{name}/Cargo.toml" for name in ("vestige-core", "vestige-mcp", "vestige-upgrade", "strata", "strata-gate",

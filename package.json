@@ -1,6 +1,6 @@
 {
   "name": "vestige",
-  "version": "7.0.0",
+  "version": "7.1.0",
   "private": true,
   "description": "Deterministic Operating System, Safety Kernel, and Zero-Vector Causal Memory Engine for AI Agents. Enforces BLAKE3 hash-chained audit logs, out-of-band Operator execution gates, and deterministic retrieval in Rust.",
   "keywords": [

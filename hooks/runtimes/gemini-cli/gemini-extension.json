@@ -1,6 +1,6 @@
 {
   "name": "vestige",
-  "version": "7.0.0",
+  "version": "7.1.0",
   "description": "Deterministic causal memory, Zero-Prompt Recall, Call Coach, Anti-Spiral, and Operator Gate for Gemini CLI.",
   "mcpServers": {
     "vestige": {

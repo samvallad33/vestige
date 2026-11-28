@@ -31,17 +31,23 @@ struct Client {
 
 impl Client {
     fn spawn(name: &'static str, data_dir: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_vestige-mcp"))
-            .env("VESTIGE_DATA_DIR", data_dir)
+        Self::spawn_with_env(name, data_dir, &[])
+    }
+
+    fn spawn_with_env(name: &'static str, data_dir: &Path, extra_env: &[(&str, &str)]) -> Self {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_vestige-mcp"));
+        cmd.env("VESTIGE_DATA_DIR", data_dir)
             .env("VESTIGE_DASHBOARD_ENABLED", "false")
             .env("VESTIGE_HTTP_ENABLED", "0")
             .env("VESTIGE_AUTOPILOT_ENABLED", "0")
             .env("RUST_LOG", "info")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn vestige-mcp");
+            .stderr(Stdio::piped());
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn().expect("spawn vestige-mcp");
         let stdin = child.stdin.take().expect("stdin");
         let raw_stdout = child.stdout.take().expect("stdout");
         let raw_stderr = child.stderr.take().expect("stderr");
@@ -278,15 +284,16 @@ fn three_clients_share_one_store_through_one_owner() {
         third.stderr()
     );
 
-    // Unix listens on a socket in the data directory; only Windows (or a
-    // path too long for a socket address) uses loopback TCP.
+    // Unix listens on a socket in the data directory; Windows prefers local Named Pipes
+    // (falling back to loopback TCP when VESTIGE_ATTACH_TCP=1 or socket path is too long).
     let endpoint = std::fs::read_to_string(dir.path().join(".serve.endpoint")).unwrap();
     if cfg!(unix) {
         assert!(endpoint.starts_with("unix "), "{endpoint}");
         assert!(dir.path().join(".serve.sock").exists());
     } else {
+        let head = endpoint.split(' ').next().unwrap();
         assert!(
-            endpoint.split(' ').next().unwrap().parse::<u16>().is_ok(),
+            head.starts_with(r"pipe:\\.\pipe\vestige-") || head.parse::<u16>().is_ok(),
             "{endpoint}"
         );
     }
@@ -649,9 +656,10 @@ fn a_data_dir_too_long_for_a_socket_attaches_over_loopback_tcp() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("a".repeat(60)).join("b".repeat(60));
     std::fs::create_dir_all(&dir).unwrap();
-    let mut owner = Client::spawn("owner", &dir);
+    let tcp_env = [("VESTIGE_ATTACH_TCP", "1")];
+    let mut owner = Client::spawn_with_env("owner", &dir, &tcp_env);
     owner.initialize();
-    let mut second = Client::spawn("second", &dir);
+    let mut second = Client::spawn_with_env("second", &dir, &tcp_env);
     second.initialize();
 
     let endpoint = std::fs::read_to_string(dir.join(".serve.endpoint")).unwrap();

@@ -231,7 +231,7 @@ function rpc(binary, args = [], timeoutMs = 210, env = process.env) {
         lines.on('error', () => rejectAll(new Error('Vestige disconnected')));
         lines.on('line', onLine);
       }
-      await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vestige-memory-hook', version: '7.0.0' } });
+      await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vestige-memory-hook', version: '7.1.0' } });
       writeRaw('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
     },
     close,

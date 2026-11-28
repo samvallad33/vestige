@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0] - 2026-11-27
+
+### Native Hook Acceleration, Windows Named Pipes & Nov 2026 Tier 2 Open-Core
+- **Ultra-Thin Native Rust Gate (`vestige-hook`):** Replaced slow per-call Python gate subprocesses with the standalone `vestige-hook` native Rust binary (`crates/vestige-hook`) across all 24 host hook integrations and `@vestige/init` bridges, cutting hook preflight and `memory_hook` latency by **3.6×–19.3×** on live workstations.
+- **Windows Named Pipes IPC (`crates/vestige-mcp/src/attach.rs` & `packages/vestige-init/hooks/memory.cjs`):** Switched local owner attach IPC on Windows from loopback TCP to local Windows Named Pipes (`pipe:\\.\pipe\vestige-...`), delivering `16.5 ms` `session(status)`, `4.2 ms` `session(reflex)`, and `361.7 ms` warm `memory_hook` round-trips over local pipes.
+- **Tier 2 Open-Core & Cross-Platform Distribution:** Added 8-platform optional npm packages (`mcp-{darwin,linux,win32}-{x64,arm64}` plus `-musl` Linux variants), TTY-aware CLI formatting (`TtyColorize` honoring `NO_COLOR`/`IsTerminal`), LZ4 cold snapshot compression, offline FIPS 204 PQ DSSE verifier, unified 20-crate Cargo workspace, and serialized Windows cold-start `SessionStart` hook locking.
+- **Verified `v7.1.0` Zero-Vector, Zero-LLM Benchmark Baseline (`CPU-only`, `$0.00` runtime cost):**
+  - **InMind (`n=125`):** Implicit Turn R@1 / R@5 **`97.6% / 97.6%`** (NDCG **`0.9760`**), Direct Turn R@1 / R@5 **`90.4% / 97.6%`**.
+  - **LongMemEval-S (`470` non-abstention / `500` total):** RecallAny@1 **`81.70%`**, RecallAny@5 **`97.66%`**, RecallAny@10 **`99.57%`** (`99.60%` all 500), NDCG@10 **`0.8927`**, `single-session-preference` R@5 **`90.00%`**.
+  - **LongMemEval Temporal (`n=211`):** Sess@1 **`88.15%`**, Sess@5 **`97.63%`**, Turn@5 **`84.80%`**, MRR **`0.9251`**.
+  - **STATE-Bench (`n=86`):** Turn R@1 **`82.56%`**, R@5 **`95.35%`**, R@10 **`100.0%`**.
+  - **BEAM 100K (`n=355`):** Sess@5 **`80.56%`**, Sess@10 **`88.45%`**, Turn@5 **`76.34%`**, Turn@10 **`84.23%`**.
+  - **LoCoMo-10 (`1,982` q / `985` blind q):** All Sess@5 **`93.95%`** (Turn@5 **`83.35%`**, Turn@10 **`89.96%`**); Blind Convs 6–10 Sess@5 **`93.40%`** / Turn@5 **`82.94%`**.
+  - **ConvoMem (`n=100`):** Turn@1 **`65.0%`**, Turn@5 **`93.0%`**, Sess@5 **`100.0%`**.
+  - **MemConflict (`Step4_4.jsonl`, `n=98`):** Macro AA **`57.66%`** (`+8.85 pp` over BM25).
+
 ## [7.0.0] - 2026-11-25
 
 ### Zero-Vector Causal Retrieval Engine (`vestige-core` & `strata-store`, Closes #853, #854, #855)

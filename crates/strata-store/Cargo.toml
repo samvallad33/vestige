@@ -1,6 +1,6 @@
 [package]
 name = "strata-store"
-version = "7.0.0"
+version = "7.1.0"
 edition = "2024"
 rust-version = "1.91"
 license = "AGPL-3.0-only"

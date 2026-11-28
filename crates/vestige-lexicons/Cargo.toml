@@ -1,6 +1,6 @@
 [package]
 name = "vestige-lexicons"
-version = "7.0.0"
+version = "7.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "Bundled sha256-pinned lexical knowledge graphs (WordNet 3.1, Roget 1911, GeoNames, ConceptNet 5.7, Wikidata CC0) isolated into a leaf crate for fast incremental builds"

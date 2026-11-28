@@ -73,7 +73,7 @@ class VestigeClient:
                 {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
-                    "clientInfo": {"name": "vestige-client-py", "version": "7.0.0"},
+                    "clientInfo": {"name": "vestige-client-py", "version": "7.1.0"},
                 },
             )
             self._initialized = True

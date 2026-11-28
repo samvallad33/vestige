@@ -1,6 +1,6 @@
 [package]
 name = "vestige-hook"
-version = "7.0.0"
+version = "7.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "Sub-10ms zero-bloat native Rust hook & Operator reference monitor binary for Vestige (zero Python, zero Node, zero embedded lexicons)"

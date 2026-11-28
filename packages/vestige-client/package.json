@@ -1,6 +1,6 @@
 {
   "name": "@vestige/client",
-  "version": "7.0.0",
+  "version": "7.1.0",
   "description": "Zero-config TypeScript/Node SDK and Vercel AI SDK / Letta adapters for Vestige Causal Proof Engine",
   "type": "module",
   "main": "./index.js",

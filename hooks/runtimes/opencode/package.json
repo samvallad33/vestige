@@ -1,6 +1,6 @@
 {
   "name": "vestige-opencode-hooks",
-  "version": "7.0.0",
+  "version": "7.1.0",
   "type": "module",
   "description": "Vestige 6-tool Cognitive Autopilot, Call Coach, Zero-Prompt Recall, Anti-Spiral & Operator Gate plugin for OpenCode (V1 + V2 compatible)."
 }
