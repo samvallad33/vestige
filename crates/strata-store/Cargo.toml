@@ -25,6 +25,7 @@ borsh = { version = "1", features = ["derive"] }
 blake3 = "1.8.8"
 ed25519-dalek = "3"
 rapidhash = "4.5"
+lz4_flex = { version = "0.11", default-features = false, features = ["frame", "std"] }
 # Canonical content identity (NFC pipeline) for the duplicate gate. Version
 # pinned to vestige-mcp's so both crates compose text identically.
 unicode-normalization = "0.1"

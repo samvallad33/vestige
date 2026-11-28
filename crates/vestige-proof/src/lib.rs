@@ -23,6 +23,7 @@ pub mod config;
 pub mod didkey;
 pub mod dsse;
 pub mod git;
+pub mod pq;
 pub mod statement;
 pub mod tests_count;
 pub mod verify;

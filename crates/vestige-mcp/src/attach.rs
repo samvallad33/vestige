@@ -214,12 +214,23 @@ type ReadHalf = Box<dyn AsyncRead + Send + Unpin>;
 type WriteHalf = Box<dyn AsyncWrite + Send + Unpin>;
 
 /// How the owner is reached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Addr {
     /// `.serve.sock` in the data directory.
     Unix,
+    /// Windows Named Pipe (`\\.\pipe\vestige-<hash>`), zero firewall prompts & zero TIME_WAIT.
+    Pipe(String),
     /// 127.0.0.1 on this port.
     Tcp(u16),
+}
+
+/// Deterministic local Named Pipe path for `data_dir` on Windows.
+#[cfg(windows)]
+fn named_pipe_path(data_dir: &Path) -> String {
+    let canonical = fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+    let hash = blake3::hash(canonical.to_string_lossy().as_bytes());
+    let hex = hash.to_hex();
+    format!(r"\\.\pipe\vestige-{}", &hex[..16])
 }
 
 /// The socket path, when it fits in a socket address.
@@ -233,12 +244,16 @@ enum Listener {
     Tcp(TcpListener),
     #[cfg(unix)]
     Unix(UnixListener),
+    #[cfg(windows)]
+    Pipe {
+        name: String,
+        server: tokio::net::windows::named_pipe::NamedPipeServer,
+    },
 }
 
 impl Listener {
-    /// Listen on the data directory's socket, else on a free loopback port.
-    /// Called only while holding the serve lock, so a socket file already
-    /// there belongs to a dead owner.
+    /// Listen on the data directory's Unix socket (Unix), local Named Pipe (Windows),
+    /// else on a free loopback port. Called only while holding the serve lock.
     async fn bind(data_dir: &Path) -> io::Result<(Self, Addr)> {
         #[cfg(unix)]
         if let Some(path) = socket_path(data_dir) {
@@ -248,14 +263,36 @@ impl Listener {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
             return Ok((Self::Unix(listener), Addr::Unix));
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        if std::env::var("VESTIGE_ATTACH_TCP").as_deref() != Ok("1") {
+            let name = named_pipe_path(data_dir);
+            match tokio::net::windows::named_pipe::ServerOptions::new()
+                .first_pipe_instance(true)
+                .reject_remote_clients(true)
+                .create(&name)
+            {
+                Ok(server) => {
+                    return Ok((
+                        Self::Pipe {
+                            name: name.clone(),
+                            server,
+                        },
+                        Addr::Pipe(name),
+                    ));
+                }
+                Err(err) => {
+                    warn!("named pipe bind failed ({err}); falling back to loopback TCP");
+                }
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
         let _ = data_dir;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let port = listener.local_addr()?.port();
         Ok((Self::Tcp(listener), Addr::Tcp(port)))
     }
 
-    async fn accept(&self) -> io::Result<Option<(ReadHalf, WriteHalf)>> {
+    async fn accept(&mut self) -> io::Result<Option<(ReadHalf, WriteHalf)>> {
         match self {
             Self::Tcp(listener) => {
                 let (stream, _) = listener.accept().await?;
@@ -271,6 +308,16 @@ impl Listener {
                     return Ok(None);
                 }
                 let (read, write) = stream.into_split();
+                Ok(Some((Box::new(read), Box::new(write))))
+            }
+            #[cfg(windows)]
+            Self::Pipe { name, server } => {
+                server.connect().await?;
+                let next = tokio::net::windows::named_pipe::ServerOptions::new()
+                    .reject_remote_clients(true)
+                    .create(&*name)?;
+                let connected = std::mem::replace(server, next);
+                let (read, write) = tokio::io::split(connected);
                 Ok(Some((Box::new(read), Box::new(write))))
             }
         }
@@ -322,12 +369,37 @@ fn unix_peer_is_owner(stream: &tokio::net::UnixStream, owner_pid: u32) -> bool {
 }
 
 async fn connect(data_dir: &Path, endpoint: &Endpoint) -> io::Result<(ReadHalf, WriteHalf)> {
-    match endpoint.addr {
+    match &endpoint.addr {
         Addr::Tcp(port) => {
-            let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await?;
+            let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, *port)).await?;
             stream.set_nodelay(true)?;
             let (read, write) = stream.into_split();
             Ok((Box::new(read), Box::new(write)))
+        }
+        #[cfg(windows)]
+        Addr::Pipe(name) => {
+            let _ = data_dir;
+            let mut attempts = 0u32;
+            let client = loop {
+                match tokio::net::windows::named_pipe::ClientOptions::new().open(name) {
+                    Ok(c) => break c,
+                    Err(err) if err.raw_os_error() == Some(231) && attempts < 20 => {
+                        attempts += 1;
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    Err(err) => return Err(err),
+                }
+            };
+            let (read, write) = tokio::io::split(client);
+            Ok((Box::new(read), Box::new(write)))
+        }
+        #[cfg(not(windows))]
+        Addr::Pipe(_) => {
+            let _ = data_dir;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the endpoint names a Windows named pipe, which this platform does not have",
+            ))
         }
         #[cfg(unix)]
         Addr::Unix => {
@@ -366,8 +438,9 @@ pub struct Endpoint {
 
 impl Endpoint {
     fn render(&self) -> String {
-        let addr = match self.addr {
+        let addr = match &self.addr {
             Addr::Unix => "unix".to_string(),
+            Addr::Pipe(name) => format!("pipe:{name}"),
             Addr::Tcp(port) => port.to_string(),
         };
         format!("{addr} {} {}\n", self.token, self.pid)
@@ -377,6 +450,7 @@ impl Endpoint {
         let mut parts = text.split_whitespace();
         let addr = match parts.next()? {
             "unix" => Addr::Unix,
+            raw if raw.starts_with("pipe:") && raw.len() > 5 => Addr::Pipe(raw[5..].to_string()),
             port => Addr::Tcp(port.parse().ok().filter(|port: &u16| *port != 0)?),
         };
         let token = parts.next()?.to_string();
@@ -648,7 +722,7 @@ impl Drop for AttachPoint {
 type PendingHandshakes = Arc<Mutex<VecDeque<(u64, Arc<Notify>)>>>;
 
 async fn accept_loop(
-    listener: Listener,
+    mut listener: Listener,
     token: Arc<str>,
     gate: Arc<Gate>,
     services: Arc<Services>,

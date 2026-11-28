@@ -66,6 +66,7 @@ mod error;
 mod gate_log;
 mod ghostlink;
 mod op;
+pub mod snapshot;
 mod store;
 mod types;
 

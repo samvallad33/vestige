@@ -130,7 +130,6 @@ jobs:
             'packages/vestige-init/package.json',
             'packages/vestige-mcp-npm/package.json',
             'packages/vestige-mcpb/manifest.json',
-            'lhm.plugin.json',
             'server.json'
           ];
           for (const file of packageFiles) {
@@ -184,20 +183,21 @@ jobs:
       - name: Build
         run: |
           cargo build --locked --package vestige-mcp --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
+          cargo build --locked --package vestige-hook --release --target ${{ matrix.target }}
           cargo build --locked --package vestige-upgrade --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
+          tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-hook vestige-restore vestige-upgrade
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           cd target/${{ matrix.target }}/release
-          Compress-Archive -Path vestige-mcp.exe,vestige.exe,vestige-restore.exe,vestige-upgrade.exe -DestinationPath ../../../vestige-mcp-${{ matrix.target }}.zip
+          Compress-Archive -Path vestige-mcp.exe,vestige.exe,vestige-hook.exe,vestige-restore.exe,vestige-upgrade.exe -DestinationPath ../../../vestige-mcp-${{ matrix.target }}.zip
 
       - name: Require vestige-upgrade in the archive
         shell: bash
@@ -324,7 +324,6 @@ jobs:
             'packages/vestige-init/package.json',
             'packages/vestige-mcp-npm/package.json',
             'packages/vestige-mcpb/manifest.json',
-            'lhm.plugin.json',
             'server.json'
           ];
           for (const file of packageFiles) {
@@ -389,12 +388,13 @@ jobs:
           RUSTFLAGS: -C link-arg=-static-libstdc++ -L native=/usr/lib/gcc/x86_64-linux-gnu/13
         run: |
           cargo build --locked --package vestige-mcp --release --target x86_64-unknown-linux-gnu
+          cargo build --locked --package vestige-hook --release --target x86_64-unknown-linux-gnu
           cargo build --locked --package vestige-upgrade --release --target x86_64-unknown-linux-gnu
 
       - name: Package
         run: |
           cd target/x86_64-unknown-linux-gnu/release
-          tar -czf ../../../vestige-mcp-x86_64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
+          tar -czf ../../../vestige-mcp-x86_64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-hook vestige-restore vestige-upgrade
 
       - name: Require vestige-upgrade in the archive
         run: bash scripts/check-release-archive.sh vestige-mcp-x86_64-unknown-linux-gnu.tar.gz
@@ -563,7 +563,6 @@ jobs:
             'packages/vestige-init/package.json',
             'packages/vestige-mcp-npm/package.json',
             'packages/vestige-mcpb/manifest.json',
-            'lhm.plugin.json',
             'server.json'
           ];
           for (const file of packageFiles) {
@@ -628,12 +627,13 @@ jobs:
           RUSTFLAGS: -C link-arg=-static-libstdc++ -L native=/usr/lib/gcc/aarch64-linux-gnu/13
         run: |
           cargo build --locked --package vestige-mcp --release --target aarch64-unknown-linux-gnu
+          cargo build --locked --package vestige-hook --release --target aarch64-unknown-linux-gnu
           cargo build --locked --package vestige-upgrade --release --target aarch64-unknown-linux-gnu
 
       - name: Package
         run: |
           cd target/aarch64-unknown-linux-gnu/release
-          tar -czf ../../../vestige-mcp-aarch64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
+          tar -czf ../../../vestige-mcp-aarch64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-hook vestige-restore vestige-upgrade
 
       - name: Require vestige-upgrade in the archive
         run: bash scripts/check-release-archive.sh vestige-mcp-aarch64-unknown-linux-gnu.tar.gz

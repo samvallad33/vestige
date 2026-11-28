@@ -12,7 +12,7 @@ const path = require('path');
 const readline = require('readline');
 const { spawn, spawnSync } = require('child_process');
 
-const BINARIES = ['vestige-mcp', 'vestige', 'vestige-restore', 'vestige-upgrade'];
+const BINARIES = ['vestige-mcp', 'vestige', 'vestige-hook', 'vestige-restore', 'vestige-upgrade'];
 
 // Claude Code runs a SessionStart command hook on these sources (hooks/settings.rules.fragment.json).
 const RULES_MATCHER = 'startup|resume|clear|compact|fork';
@@ -21,12 +21,26 @@ function exe(name, platform = os.platform()) {
   return platform === 'win32' ? `${name}.exe` : name;
 }
 
-// The npm package that carries this machine's binaries, pinned in optionalDependencies.
-function platformPackage(platform = os.platform(), arch = os.arch()) {
+function isLinuxMusl(platform = os.platform()) {
+  if (platform !== 'linux') return false;
+  try {
+    const header = process.report && typeof process.report.getReport === 'function'
+      ? process.report.getReport().header
+      : null;
+    if (header && Object.prototype.hasOwnProperty.call(header, 'glibcVersionRuntime')) {
+      return !header.glibcVersionRuntime;
+    }
+  } catch {}
+  return false;
+}
+
+// The npm package that carries this machine's binaries, pinned in optionalDependencies (8 platforms).
+function platformPackage(platform = os.platform(), arch = os.arch(), { musl = isLinuxMusl(platform) } = {}) {
   if (platform === 'darwin' && arch === 'arm64') return '@vestige/mcp-darwin-arm64';
   if (platform === 'darwin' && arch === 'x64') return '@vestige/mcp-darwin-x64';
-  if (platform === 'linux' && arch === 'arm64') return '@vestige/mcp-linux-arm64';
-  if (platform === 'linux' && arch === 'x64') return '@vestige/mcp-linux-x64';
+  if (platform === 'linux' && arch === 'arm64') return musl ? '@vestige/mcp-linux-arm64-musl' : '@vestige/mcp-linux-arm64';
+  if (platform === 'linux' && arch === 'x64') return musl ? '@vestige/mcp-linux-x64-musl' : '@vestige/mcp-linux-x64';
+  if (platform === 'win32' && arch === 'arm64') return '@vestige/mcp-win32-arm64';
   if (platform === 'win32' && arch === 'x64') return '@vestige/mcp-win32-x64';
   return null;
 }

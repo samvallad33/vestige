@@ -103,6 +103,8 @@ function tryDirectAttach(binary, args = [], timeoutMs = 80, env = process.env) {
     const sockPath = path.join(dir, '.serve.sock');
     if (!fs.existsSync(sockPath)) return Promise.resolve(null);
     target = { path: sockPath };
+  } else if (addr.startsWith('pipe:') && addr.length > 5) {
+    target = { path: addr.slice(5) };
   } else {
     const port = Number(addr);
     if (!Number.isInteger(port) || port <= 0 || port > 65535) return Promise.resolve(null);
