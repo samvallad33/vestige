@@ -1,0 +1,19 @@
+{
+  "name": "@vestige/mcp-win32-arm64",
+  "version": "7.0.0",
+  "description": "Platform binary for vestige-mcp-server (do not install directly).",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samvallad33/vestige.git"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/"
+  ]
+}

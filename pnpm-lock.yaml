@@ -73,7 +73,13 @@ importers:
 
   packages/mcp-linux-arm64: {}
 
+  packages/mcp-linux-arm64-musl: {}
+
   packages/mcp-linux-x64: {}
+
+  packages/mcp-linux-x64-musl: {}
+
+  packages/mcp-win32-arm64: {}
 
   packages/mcp-win32-x64: {}
 
