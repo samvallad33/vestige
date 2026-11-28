@@ -227,16 +227,17 @@ fn run_open_circuit_bridge_peeling(
     let preserve_cap = target_k.saturating_sub(1).min(3);
     // Inspect strictly Slots 1..=2 so distinct-session incumbents stay locked while same-session
     // clones or empty slots yield cleanly to a residual `newly_covered > 0` bridge turn.
+    let allow_sup = crate::retrieval::graph::ghostcurrent_mdl_q16::is_state_delta_or_contradiction_query(inp.query);
     for &ti in final_turn_indices.iter().skip(1).take(2) {
         if selected.len() >= preserve_cap {
             break;
         }
         let tr = &inp.ix.turns[ti];
         let t_m = inp.t_exact_mask.get(ti).copied().unwrap_or(0) & inp.q_group_mask;
-        if t_m != 0
+        if (t_m != 0 || allow_sup)
             && !covered_sessions.contains(&tr.session)
             && !tr.is_backchannel
-            && !turn_is_superseded(inp.ix, ti)
+            && (!turn_is_superseded(inp.ix, ti) || allow_sup)
             && !is_discourse_closure_or_meta_echo(inp.ix, ti, inp.query)
         {
             selected.push(ti);
@@ -261,7 +262,7 @@ fn run_open_circuit_bridge_peeling(
             }
             let tr = &inp.ix.turns[ti];
             if tr.is_backchannel
-                || turn_is_superseded(inp.ix, ti)
+                || (!allow_sup && turn_is_superseded(inp.ix, ti))
                 || is_discourse_closure_or_meta_echo(inp.ix, ti, inp.query)
             {
                 continue;

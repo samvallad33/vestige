@@ -1817,7 +1817,9 @@ pub(in crate::retrieval) fn apply_revdict_harmonic_bridge(ctx: &mut RankCtx<'_>)
     // explicit open-domain inferential queries, or ungrounded biographical hypernym queries so
     // solved factual / temporal / multi-session queries keep 100% latency & Top-5 integrity.
     let has_deficit = if ctx.has_named_speakers_eff {
-        !top5_has_any_exact || is_inferential
+        !top5_has_any_exact
+            || is_inferential
+            || (!top5_has_star_bit && is_bio_hypernym)
     } else if ctx.eff_it.temporal || ctx.eff_it.sniper_when || ctx.eff_it.current_state {
         !top5_has_any_exact
     } else {
@@ -1831,10 +1833,16 @@ pub(in crate::retrieval) fn apply_revdict_harmonic_bridge(ctx: &mut RankCtx<'_>)
         return;
     }
 
-    // Build filtered non-speaker query content words (`<= 10`).
+    // Build filtered non-speaker query content words (`<= 10`), excluding demoted delta/task scaffolding.
+    let active_group_set: BTreeSet<String> = ctx.plan.groups.iter().map(|g| clean_word_lower(g)).collect();
     let q_words_owned: Vec<String> = collect_content_words(&q_refs, 12)
         .into_iter()
-        .filter(|w| !queried_speakers.contains(w))
+        .filter(|w| {
+            !queried_speakers.contains(w)
+                && (active_group_set.is_empty()
+                    || active_group_set.contains(w)
+                    || active_group_set.iter().any(|g| g == w))
+        })
         .take(10)
         .collect();
     if q_words_owned.is_empty() {

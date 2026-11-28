@@ -2292,6 +2292,9 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
             || tr.is_standing_policy
             || tr.body_for_headers.contains('?')
             || is_request_or_gratitude_wrapper(&tr.body_for_headers)
+            || crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                ctx.ix, ti, &ctx.q.text,
+            )
         {
             continue;
         }
@@ -2438,7 +2441,6 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
             ]
             .iter()
             .any(|p| low.contains(p));
-        let in_top3_sess = s_rank.is_some_and(|r| r < 3);
         let aside_surprisal = if s_rank.is_some() && toks.len() >= 12 {
             compute_aside_surprisal(ti)
         } else {
@@ -2455,20 +2457,8 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
             || next_g > 0.0
             || next_haz > 0.0
             || has_sheaf_proof;
-        let has_concept_link = dh > 0
-            || next_dh > 0
-            || fh >= 2
-            || (fh + next_fh) >= 2
-            || g_sc.galois_meet_q16 > 0
-            || g_sc.hazard_resonance_q16 > 0
-            || next_g > 0.0
-            || next_haz > 0.0
-            || has_sheaf_proof
-            || (s_rank.is_some() && (trop_q16 >= 20_480 || gloss_q16 >= 20_480 || trop_hits >= 2))
-            || (s_rank == Some(0) && has_rst_nucleus)
-            || (in_top3_sess
-                && (fh >= 1 || next_fh >= 1 || (anaphoric_val && aside_surprisal >= 0.72))
-                && (has_stance || tr.has_prose_disclosure));
+        let has_concept_link = has_real_concept
+            || (s_rank.is_some() && (trop_q16 >= 20_480 || gloss_q16 >= 20_480 || trop_hits >= 2));
         if !has_concept_link {
             continue;
         }
@@ -2536,17 +2526,54 @@ fn apply_dense_advice_user_rescue(ctx: &mut RankCtx<'_>) {
         && let Some((win_sc, win_ti, win_s)) = slot0_cand
         && win_sc > base_t0_sc + 0.25
     {
-        if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == win_ti) {
-            ctx.final_turn_indices.remove(pos);
-        }
-        ctx.final_turn_indices.insert(0, win_ti);
-        if !ctx.final_session_indices.is_empty() && ctx.final_session_indices[0] != win_s {
-            if let Some(sp) = ctx.final_session_indices.iter().position(|&s| s == win_s) {
-                ctx.final_session_indices.remove(sp);
+        let max_decl_scene_top5 = ctx
+            .final_turn_indices
+            .iter()
+            .take(5)
+            .filter(|&&ti| {
+                let tr = &ctx.ix.turns[ti];
+                tr.field == 0
+                    && !tr.is_pure_info_question
+                    && !tr.is_backchannel
+                    && !crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                        ctx.ix, ti, &ctx.q.text,
+                    )
+            })
+            .map(|&ti| ctx.t_scene.get(ti).copied().unwrap_or(0.0))
+            .fold(0.0f32, f32::max);
+        let win_scene = ctx.t_scene.get(win_ti).copied().unwrap_or(0.0);
+        let win_has_exact = !ctx.final_turn_indices.is_empty()
+            && ctx
+                .t_exact_mask
+                .get(win_ti)
+                .copied()
+                .unwrap_or(0)
+                != 0;
+        let is_sparse_reg_c = ctx.ix.session_turns.iter().filter(|s| s.len() <= 4).count() * 2
+            >= ctx.ix.session_turns.len().max(1);
+        let seat_slot0 = is_sparse_reg_c
+            || win_has_exact
+            || max_decl_scene_top5 < 12.0
+            || win_scene * 2.2 >= max_decl_scene_top5;
+        if seat_slot0 {
+            if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == win_ti) {
+                ctx.final_turn_indices.remove(pos);
             }
-            ctx.final_session_indices.insert(0, win_s);
+            ctx.final_turn_indices.insert(0, win_ti);
+            if !ctx.final_session_indices.is_empty() && ctx.final_session_indices[0] != win_s {
+                if let Some(sp) = ctx.final_session_indices.iter().position(|&s| s == win_s) {
+                    ctx.final_session_indices.remove(sp);
+                }
+                ctx.final_session_indices.insert(0, win_s);
+            }
+            seated_slot0 = true;
+        } else {
+            if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == win_ti) {
+                ctx.final_turn_indices.remove(pos);
+            }
+            let at = 1usize.min(ctx.final_turn_indices.len());
+            ctx.final_turn_indices.insert(at, win_ti);
         }
-        seated_slot0 = true;
     }
 
     // 2. Non-destructive Top-5 disclosure packing: protect Slots 0..2 on preference/temporal/

@@ -74,6 +74,38 @@ pub(in crate::retrieval) fn is_contradiction_or_audit_query(q_text: &str) -> boo
         || low.contains("refut")
 }
 
+/// Closed-class state-delta / comparison query detector (before-vs-after state audit).
+/// hardcode-scan: closed-class (state-change and invariance interrogative frames only).
+pub(in crate::retrieval) fn is_state_delta_query(q_text: &str) -> bool {
+    let low = q_text.trim().to_ascii_lowercase();
+    low.contains("what changed")
+        || low.contains("what change ")
+        || low.contains("change occurred")
+        || low.contains("change happened")
+        || low.contains("before and after")
+        || low.contains("from and to")
+        || low.contains("remain the same")
+        || low.contains("remained the same")
+        || low.contains("stay the same")
+        || low.contains("stayed the same")
+        || low.contains("recently move")
+        || (low.contains(" did the user ") && low.contains(" switch"))
+        || ((low.starts_with("did ") || low.starts_with("has ") || low.starts_with("how did "))
+            && (low.contains(" change")
+                || low.contains(" changed")
+                || low.contains(" switch")
+                || low.contains(" move")
+                || low.contains(" stay ")
+                || low.contains(" stayed ")
+                || low.contains(" remain ")
+                || low.contains(" remained ")))
+}
+
+#[inline]
+pub(in crate::retrieval) fn is_state_delta_or_contradiction_query(q_text: &str) -> bool {
+    is_state_delta_query(q_text) || is_contradiction_or_audit_query(q_text)
+}
+
 /// Closed-class negative-polarity query detector (`#853`).
 /// hardcode-scan: closed-class (English negation auxiliaries and adverbs only).
 fn query_is_negated(q_text: &str) -> bool {
@@ -239,7 +271,8 @@ pub(in crate::retrieval) fn evaluate_epistemic_deficit_gate(
                 .saturating_mul(23)
     });
 
-    let is_contradiction_q = is_contradiction_or_audit_query(&inp.q.text);
+    let is_contradiction_q =
+        is_contradiction_or_audit_query(&inp.q.text) || is_state_delta_query(&inp.q.text);
     let sealed = head0_full
         && !head0_sup
         && !head0_q_or_bc
@@ -463,8 +496,9 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
         .max(1);
 
     let is_contradiction_q = is_contradiction_or_audit_query(&inp.q.text);
+    let is_delta_q = is_state_delta_query(&inp.q.text);
     let q_is_neg = query_is_negated(&inp.q.text);
-    let strict_false_channel = is_contradiction_q || inp.eff_it.current_state;
+    let strict_false_channel = is_contradiction_q || is_delta_q || inp.eff_it.current_state;
     // AC GhostCurrent (#853): precompute Reichenbach temporal phase `theta_time in {-1, 0, +1}` per session.
     let sess_phase: Vec<i8> = (0..inp.ix.session_turns.len())
         .map(|si| {
@@ -716,9 +750,8 @@ pub(in crate::retrieval) fn run_ghostcurrent_mdl_q16(
                 }
             }
             // Strata Live-Leaf Law keeps `g_sink = 0` on superseded nodes for all normal/current-state
-            // queries; on contradiction/audit queries (#853), superseded theses also deposit so Belnap
-            // `Both` captures both the superseded thesis and its contradicting antithesis.
-            if !is_contradiction_q {
+            // queries; on contradiction/audit or state-delta queries, prior superseded states also deposit.
+            if !is_contradiction_q && !is_delta_q {
                 continue;
             }
         }
@@ -1418,13 +1451,15 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
             || (ql_gc.contains("which ") && ql_gc.contains(" should i")));
 
     // Case 1: Proven live-leaf terminating h0's own forward supersession chain (strictly on current-state queries
-    // where the live leaf shares query topic coverage so unrelated revision links never hijack IF/IE/MSR/KU heads)
-    let proven_sup_leaf = if h0_sup && ctx.eff_it.current_state && !ctx.eff_it.temporal && !h0_protected {
+    // where the live leaf shares query topic coverage so unrelated revision links never hijack IF/IE/MSR/KU heads,
+    // or on explicit state-delta queries where the live updated state may use a concrete value rather than the slot noun).
+    let is_delta_q_s0 = is_state_delta_query(&ctx.q.text);
+    let proven_sup_leaf = if h0_sup && (ctx.eff_it.current_state || is_delta_q_s0) && !ctx.eff_it.temporal && !h0_protected {
         ctx.res.sup_live_leaf_of_h0.filter(|&leaf| {
             let leaf_cov =
                 (ctx.t_exact_mask.get(leaf).copied().unwrap_or(0) & ctx.q_group_mask).count_ones();
             leaf != h0
-                && leaf_cov >= 1
+                && (leaf_cov >= 1 || is_delta_q_s0)
                 && !turn_is_superseded(ctx.ix, leaf)
                 && !ctx.ix.turns[leaf].is_pure_info_question
                 && !ctx.ix.turns[leaf].is_backchannel
@@ -1498,7 +1533,7 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
             let has_proven_receipt = !ctx.res.witness_receipt_ids.is_empty()
                 && ctx.res.ranked_targets.first().is_some_and(|&(t0, _)| t0 == best_ti);
             let strong_enough = best_cov >= 1
-                || (best_type_hit && best_g >= (Q16 * 3) / 4)
+                || (h0_own_zero && best_type_hit && best_g >= (Q16 * 3) / 4)
                 || (has_proven_receipt && best_g >= (Q16 >> 1))
                 || ((h0_is_meta_echo || h0_only_excluded) && best_g >= (Q16 >> 1));
             if strong_enough {
@@ -1512,6 +1547,35 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
     };
 
     let Some(best_ti) = proven_sup_leaf.or(zero_cov_rescue) else {
+        // On explicit state-delta comparison queries ("What changed about X?", "Which company
+        // did the user switch from and to?"), co-seat Slot-0's immediate superseded prior state
+        // into Slot 1 so both BEFORE and AFTER appear side-by-side in Top-2.
+        if is_state_delta_query(&ctx.q.text)
+            && !turn_is_superseded(ctx.ix, h0)
+            && let Some(&prior_ti) = ctx.ix.turns[h0].supersedes_turns.last()
+            && prior_ti != h0
+            && prior_ti < ctx.ix.turns.len()
+        {
+            if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == prior_ti) {
+                ctx.final_turn_indices.remove(pos);
+            }
+            let at = 1usize.min(ctx.final_turn_indices.len());
+            ctx.final_turn_indices.insert(at, prior_ti);
+            if ctx.final_turn_indices.len() > ctx.k {
+                ctx.final_turn_indices.truncate(ctx.k);
+            }
+            let p_sess = ctx.ix.turns[prior_ti].session;
+            if !ctx.final_session_indices.is_empty() && !ctx.final_session_indices[..ctx.final_session_indices.len().min(2)].contains(&p_sess) {
+                if let Some(spos) = ctx.final_session_indices.iter().position(|&s| s == p_sess) {
+                    ctx.final_session_indices.remove(spos);
+                }
+                let s_at = 1usize.min(ctx.final_session_indices.len());
+                ctx.final_session_indices.insert(s_at, p_sess);
+                if ctx.final_session_indices.len() > ctx.k {
+                    ctx.final_session_indices.truncate(ctx.k);
+                }
+            }
+        }
         return;
     };
 
@@ -1519,6 +1583,48 @@ pub(in crate::retrieval) fn apply_ghostcurrent_slot0_promotion(
         ctx.final_turn_indices.remove(pos);
     }
     ctx.final_turn_indices.insert(0, best_ti);
+
+    // If Slot 0 was promoted on a state-delta comparison query, keep/co-seat the immediate prior
+    // superseded state (`h0` when `proven_sup_leaf`, else `best_ti.supersedes_turns.last()`) at
+    // Slot 1 so BOTH AFTER (Slot 0) and BEFORE (Slot 1) appear side-by-side in Top-2.
+    if is_state_delta_query(&ctx.q.text) {
+        let prior_opt = if proven_sup_leaf.is_some() && h0 != best_ti {
+            Some(h0)
+        } else {
+            ctx.ix.turns[best_ti]
+                .supersedes_turns
+                .last()
+                .copied()
+                .filter(|&p| p != best_ti && p < ctx.ix.turns.len())
+        };
+        if let Some(prior_ti) = prior_opt {
+            if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == prior_ti) {
+                ctx.final_turn_indices.remove(pos);
+            }
+            let at = 1usize.min(ctx.final_turn_indices.len());
+            ctx.final_turn_indices.insert(at, prior_ti);
+            let b_sess = ctx.ix.turns[best_ti].session;
+            let p_sess = ctx.ix.turns[prior_ti].session;
+            for &(s_idx, s_slot) in &[(b_sess, 0usize), (p_sess, 1usize)] {
+                if s_slot > 0 && p_sess == b_sess {
+                    continue;
+                }
+                if !ctx.final_session_indices.is_empty() {
+                    if let Some(spos) = ctx.final_session_indices.iter().position(|&s| s == s_idx) {
+                        ctx.final_session_indices.remove(spos);
+                    }
+                    let ins_s = s_slot.min(ctx.final_session_indices.len());
+                    ctx.final_session_indices.insert(ins_s, s_idx);
+                }
+            }
+            if ctx.final_turn_indices.len() > ctx.k {
+                ctx.final_turn_indices.truncate(ctx.k);
+            }
+            if ctx.final_session_indices.len() > ctx.k {
+                ctx.final_session_indices.truncate(ctx.k);
+            }
+        }
+    }
 
     // Co-seat at most 1 multi-hop witness turn into Slot 1 only on zero-coverage rescue
     if zero_cov_rescue.is_some() {

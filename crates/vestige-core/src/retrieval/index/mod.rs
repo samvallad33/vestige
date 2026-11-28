@@ -136,6 +136,8 @@ pub(in crate::retrieval) struct TurnIx {
     pub(in crate::retrieval) policy_backlinks: Vec<usize>,
     /// Backward state-revision / contradiction edges (`t_new -> t_old`).
     pub(in crate::retrieval) supersedes_turns: Vec<usize>,
+    pub(in crate::retrieval) state_slot_edges: Vec<usize>,
+    pub(in crate::retrieval) state_slot_mask: u8,
     pub(in crate::retrieval) stability: f32,
     /// ISO date or HH:MM in the turn text. Character form, not a month name.
     pub(in crate::retrieval) form_clock: bool,
@@ -1071,6 +1073,8 @@ pub(in crate::retrieval) fn build_index(sessions: &[Session], p: &Params) -> Ind
                 exact_edges: Vec::new(),
                 policy_backlinks: Vec::new(),
                 supersedes_turns: Vec::new(),
+                state_slot_edges: Vec::new(),
+            state_slot_mask: 0,
                 stability: t.stability,
                 form_clock: has_iso_or_hhmm(prose_body),
                 form_digit: has_ascii_digit(prose_body),

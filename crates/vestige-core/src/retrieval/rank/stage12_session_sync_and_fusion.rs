@@ -4818,6 +4818,372 @@ pub(in crate::retrieval) fn run(ctx: &mut RankCtx<'_>) {
             }
         }
     }
+    // Late Assistant-Attribution Slot-0 Guard: when the user explicitly asks what the
+    // assistant recommended/suggested ("you recommended", "did you suggest"), never let a
+    // user question ("Do you know any good spots...?") hold Slot 0 over the assistant's reply.
+    {
+        let ql_asst = ctx.q.text.to_ascii_lowercase();
+        let asks_asst_reply = ctx.eff_it.assistant_attribution
+            || ql_asst.contains("you recommend")
+            || ql_asst.contains("you suggest")
+            || ql_asst.contains("did you ")
+            || ql_asst.contains("you advised");
+        if asks_asst_reply && !ctx.final_turn_indices.is_empty() {
+            let h0 = ctx.final_turn_indices[0];
+            let ht0 = &ctx.ix.turns[h0];
+            let h0_sc = ctx.t_scene.get(h0).copied().unwrap_or(0.0);
+            let h0_low = ht0.body_for_headers.trim_start().to_ascii_lowercase();
+            let h0_is_user_q = ht0.field == 0
+                && (ht0.is_question
+                    || ht0.is_pure_info_question
+                    || ht0.body_for_headers.trim_end().ends_with('?'));
+            let h0_is_asst_followup = ht0.field == 1
+                && (h0_low.starts_with("yes, ") || h0_low.starts_with("yes ") || h0_low.starts_with("it "))
+                && !h0_low.contains("suggest")
+                && !h0_low.contains("recommend");
+            if h0_is_user_q || h0_is_asst_followup {
+                let best_asst = ctx
+                    .ix
+                    .session_turns
+                    .get(ht0.session)
+                    .into_iter()
+                    .flat_map(|s| s.iter().copied())
+                    .filter(|&ti| {
+                        let tr = &ctx.ix.turns[ti];
+                        let t_low = tr.body_for_headers.to_ascii_lowercase();
+                        tr.field == 1
+                            && ti != h0
+                            && !tr.is_question
+                            && !tr.is_backchannel
+                            && tr.body_for_headers.len() >= 24
+                            && (!h0_is_asst_followup
+                                || (ti < h0
+                                    && (t_low.contains("suggest")
+                                        || t_low.contains("recommend")
+                                        || t_low.contains("i'd try")
+                                        || t_low.contains("check out"))))
+                            && ctx.t_scene.get(ti).copied().unwrap_or(0.0) >= 0.65 * h0_sc
+                    })
+                    .max_by(|&a, &b| {
+                        ctx.t_scene
+                            .get(a)
+                            .copied()
+                            .unwrap_or(0.0)
+                            .partial_cmp(&ctx.t_scene.get(b).copied().unwrap_or(0.0))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| b.cmp(&a))
+                    });
+                if let Some(ati) = best_asst {
+                    if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == ati) {
+                        ctx.final_turn_indices.remove(pos);
+                    }
+                    ctx.final_turn_indices.insert(0, ati);
+                    if ctx.final_turn_indices.len() > ctx.k {
+                        ctx.final_turn_indices.truncate(ctx.k);
+                    }
+                }
+            }
+        }
+    }
+    // Late Quantitative Percentage / Figure Tiebreak: when a query asks for a numeric percentage/figure
+    // ("percentage", "percent") and Slot 0 is an un-numbered setup turn in a session whose subsequent
+    // same-session turn states an explicit digit/percentage matching >= as many query terms, promote it.
+    {
+        let ql_num = ctx.q.text.to_ascii_lowercase();
+        let asks_pct = ql_num.contains("percentage") || ql_num.contains("percent");
+        if asks_pct && !ctx.final_turn_indices.is_empty() {
+            let h0 = ctx.final_turn_indices[0];
+            let ht0 = &ctx.ix.turns[h0];
+            if ht0.field == 0 && !ht0.form_digit {
+                let h0_sc = ctx.t_scene.get(h0).copied().unwrap_or(0.0);
+                let best_num = ctx
+                    .ix
+                    .session_turns
+                    .get(ht0.session)
+                    .into_iter()
+                    .flat_map(|s| s.iter().copied())
+                    .filter(|&ti| {
+                        let tr = &ctx.ix.turns[ti];
+                        ti > h0
+                            && tr.field == 0
+                            && tr.form_digit
+                            && !tr.is_backchannel
+                            && ctx.t_scene.get(ti).copied().unwrap_or(0.0) >= 0.50 * h0_sc
+                    })
+                    .max_by(|&a, &b| {
+                        let a_pct = u8::from(ctx.ix.turns[a].body_for_headers.contains('%'));
+                        let b_pct = u8::from(ctx.ix.turns[b].body_for_headers.contains('%'));
+                        a_pct
+                            .cmp(&b_pct)
+                            .then_with(|| {
+                                ctx.t_scene
+                                    .get(a)
+                                    .copied()
+                                    .unwrap_or(0.0)
+                                    .partial_cmp(&ctx.t_scene.get(b).copied().unwrap_or(0.0))
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .then_with(|| b.cmp(&a))
+                    });
+                if let Some(nti) = best_num {
+                    if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == nti) {
+                        ctx.final_turn_indices.remove(pos);
+                    }
+                    ctx.final_turn_indices.insert(0, nti);
+                    if ctx.final_turn_indices.len() > ctx.k {
+                        ctx.final_turn_indices.truncate(ctx.k);
+                    }
+                }
+            }
+        }
+    }
+    let is_delta_q_final =
+        crate::retrieval::graph::ghostcurrent_mdl_q16::is_state_delta_query(&ctx.q.text);
+    if is_delta_q_final
+        && !ctx.final_turn_indices.is_empty()
+        && ctx.k >= 2
+    {
+        // hardcode-scan: closed-class (personal state-transition question facet slots)
+        let ql_delta = ctx.q.text.to_ascii_lowercase();
+        let mut q_slot_mask = 0u8;
+        let asks_career_axis = ql_delta.contains("career")
+            || ql_delta.contains("company")
+            || ql_delta.contains("employer")
+            || ql_delta.contains("industry")
+            || ql_delta.contains("job")
+            || ql_delta.contains("title")
+            || ql_delta.contains("employ")
+            || ql_delta.contains("position");
+        if asks_career_axis {
+            q_slot_mask |= 1 << 1;
+        }
+        if ql_delta.contains("residence")
+            || ql_delta.contains("live")
+            || ql_delta.contains("living")
+            || ql_delta.contains("relocat")
+            || ql_delta.contains("city")
+            || ((ql_delta.contains("move") || ql_delta.contains("where did ")) && !asks_career_axis)
+        {
+            q_slot_mask |= 1 << 0;
+        }
+        if ql_delta.contains("marital")
+            || ql_delta.contains("married")
+            || ql_delta.contains("marriage")
+            || ql_delta.contains("relationship")
+            || ql_delta.contains("dating")
+            || ql_delta.contains("divorc")
+            || ql_delta.contains("single")
+        {
+            q_slot_mask |= 1 << 2;
+        }
+        if ql_delta.contains("income") || ql_delta.contains("salary") || ql_delta.contains("earn") {
+            q_slot_mask |= 1 << 3;
+        }
+        if ql_delta.contains("work status")
+            || ql_delta.contains("workload")
+            || ql_delta.contains("availability")
+            || ql_delta.contains("business trip")
+        {
+            q_slot_mask |= 1 << 4;
+        }
+        if ql_delta.contains("health") {
+            q_slot_mask |= 1 << 5;
+        }
+        if ql_delta.contains("social") {
+            q_slot_mask |= 1 << 6;
+        }
+        if ql_delta.contains("children") || ql_delta.contains("kids") || ql_delta.contains("family") {
+            q_slot_mask |= 1 << 7;
+        }
+
+        let h0 = ctx.final_turn_indices[0];
+        let h0_slot_ok = (q_slot_mask == 0 || (ctx.ix.turns[h0].state_slot_mask & q_slot_mask) != 0)
+            && (!ctx.ix.turns[h0].state_slot_edges.is_empty()
+                || !ctx.ix.turns[h0].supersedes_turns.is_empty());
+        let mut live_leaf = ctx.ghostcurrent.sup_live_leaf_of_h0.filter(|&leaf| {
+            leaf != h0
+                && leaf < ctx.ix.turns.len()
+                && !turn_is_superseded(ctx.ix, leaf)
+                && (q_slot_mask == 0 || (ctx.ix.turns[leaf].state_slot_mask & q_slot_mask) != 0)
+        });
+        if live_leaf.is_none() && h0_slot_ok {
+            let mut cur = h0;
+            for _ in 0..8 {
+                let nxt = ctx
+                    .ix
+                    .turns
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(ti, tr)| {
+                        (ti != cur
+                            && (tr.state_slot_edges.contains(&cur)
+                                || tr.supersedes_turns.contains(&cur)))
+                        .then_some(ti)
+                    });
+                let Some(n) = nxt else { break };
+                cur = n;
+                if !turn_is_superseded(ctx.ix, cur) {
+                    live_leaf = Some(cur);
+                }
+            }
+        }
+        let slot_latest = if q_slot_mask != 0 && !h0_slot_ok {
+            ctx.ix
+                .turns
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(ti, tr)| {
+                    ((tr.state_slot_mask & q_slot_mask) != 0
+                        && (!tr.state_slot_edges.is_empty() || !tr.supersedes_turns.is_empty()))
+                    .then_some(ti)
+                })
+                .or_else(|| {
+                    ctx.ix.turns.iter().enumerate().rev().find_map(|(ti, tr)| {
+                        ((tr.state_slot_mask & q_slot_mask) != 0).then_some(ti)
+                    })
+                })
+        } else {
+            None
+        };
+        let (after_ti, before_opt) = if let Some(slot_ti) = slot_latest {
+            let prior = ctx.ix.turns[slot_ti]
+                .state_slot_edges
+                .iter()
+                .rev()
+                .copied()
+                .find(|&p| (ctx.ix.turns[p].state_slot_mask & q_slot_mask) != 0)
+                .or_else(|| ctx.ix.turns[slot_ti].state_slot_edges.last().copied())
+                .or_else(|| ctx.ix.turns[slot_ti].supersedes_turns.last().copied())
+                .filter(|&p| p != slot_ti && p < ctx.ix.turns.len());
+            (slot_ti, prior)
+        } else if let Some(leaf) = live_leaf
+            && leaf != h0
+            && leaf < ctx.ix.turns.len()
+            && !turn_is_superseded(ctx.ix, leaf)
+        {
+            (leaf, Some(h0))
+        } else {
+            let prior = ctx.ix.turns[h0]
+                .state_slot_edges
+                .iter()
+                .rev()
+                .copied()
+                .find(|&p| q_slot_mask == 0 || (ctx.ix.turns[p].state_slot_mask & q_slot_mask) != 0)
+                .or_else(|| ctx.ix.turns[h0].state_slot_edges.last().copied())
+                .or_else(|| ctx.ix.turns[h0].supersedes_turns.last().copied())
+                .filter(|&p| p != h0 && p < ctx.ix.turns.len());
+            (h0, prior)
+        };
+        if after_ti != h0 {
+            if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == after_ti) {
+                ctx.final_turn_indices.remove(pos);
+            }
+            ctx.final_turn_indices.insert(0, after_ti);
+        }
+        if let Some(before_ti) = before_opt {
+            if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == before_ti) {
+                ctx.final_turn_indices.remove(pos);
+            }
+            let at = 1usize.min(ctx.final_turn_indices.len());
+            ctx.final_turn_indices.insert(at, before_ti);
+            let a_sess = ctx.ix.turns[after_ti].session;
+            let b_sess = ctx.ix.turns[before_ti].session;
+            for &(s_idx, s_slot) in &[(a_sess, 0usize), (b_sess, 1usize)] {
+                if s_slot > 0 && b_sess == a_sess {
+                    continue;
+                }
+                if !ctx.final_session_indices.is_empty() {
+                    if let Some(spos) = ctx.final_session_indices.iter().position(|&s| s == s_idx) {
+                        ctx.final_session_indices.remove(spos);
+                    }
+                    let ins_s = s_slot.min(ctx.final_session_indices.len());
+                    ctx.final_session_indices.insert(ins_s, s_idx);
+                }
+            }
+            if ctx.final_turn_indices.len() > ctx.k {
+                ctx.final_turn_indices.truncate(ctx.k);
+            }
+        }
+    }
+    if !is_delta_q_final
+        && ctx.eff_it.multi_hop
+        && !ctx.eff_it.is_event_sequence
+        && !crate::retrieval::eff_summary_request(&ctx.q.text)
+        && ctx.k >= 5
+        && ctx.final_turn_indices.len() >= 5
+        && ctx.final_session_indices.len() >= 3
+    {
+        let top5_lim = ctx.final_session_indices.len().min(5);
+        let top5_sess = &ctx.final_session_indices[..top5_lim];
+        let smax_mh = top5_sess
+            .iter()
+            .map(|&s| ctx.s_score.get(s).copied().unwrap_or(0.0))
+            .fold(0.0f32, f32::max);
+        let mut missing_sess: Vec<usize> = Vec::new();
+        for &si in top5_sess {
+            let s_sc = ctx.s_score.get(si).copied().unwrap_or(0.0);
+            if smax_mh > 0.0 && s_sc < 0.42 * smax_mh {
+                continue;
+            }
+            if !ctx.final_turn_indices[..5]
+                .iter()
+                .any(|&ti| ctx.ix.turns[ti].session == si)
+            {
+                missing_sess.push(si);
+            }
+        }
+        let mut replace_slots: Vec<usize> = Vec::new();
+        let mut sess_counts: std::collections::BTreeMap<usize, usize> =
+            std::collections::BTreeMap::new();
+        for (slot, &ti) in ctx.final_turn_indices[..5].iter().enumerate() {
+            let s = ctx.ix.turns[ti].session;
+            let cnt = sess_counts.entry(s).or_insert(0);
+            *cnt += 1;
+            if *cnt >= 3 && slot >= 2 {
+                replace_slots.push(slot);
+            }
+        }
+        for (slot, &ti) in ctx.final_turn_indices[..5].iter().enumerate().rev() {
+            if slot >= 2
+                && !top5_sess.contains(&ctx.ix.turns[ti].session)
+                && !replace_slots.contains(&slot)
+            {
+                replace_slots.push(slot);
+            }
+        }
+        for (ms, slot) in missing_sess.into_iter().zip(replace_slots.into_iter()) {
+            let best_ti = ctx
+                .ix
+                .session_turns
+                .get(ms)
+                .into_iter()
+                .flat_map(|v| v.iter().copied())
+                .filter(|&ti| {
+                    let tr = &ctx.ix.turns[ti];
+                    !tr.is_backchannel && !tr.is_pure_info_question && !tr.is_standing_policy
+                })
+                .max_by(|&a, &b| {
+                    ctx.t_scene
+                        .get(a)
+                        .copied()
+                        .unwrap_or(0.0)
+                        .partial_cmp(&ctx.t_scene.get(b).copied().unwrap_or(0.0))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| u8::from(ctx.ix.turns[a].field == 0).cmp(&u8::from(ctx.ix.turns[b].field == 0)))
+                        .then_with(|| b.cmp(&a))
+                });
+            if let Some(rti) = best_ti {
+                if let Some(pos) = ctx.final_turn_indices.iter().position(|&x| x == rti) {
+                    ctx.final_turn_indices.remove(pos);
+                }
+                let at = slot.min(ctx.final_turn_indices.len());
+                ctx.final_turn_indices.insert(at, rti);
+                ctx.final_turn_indices.truncate(ctx.k);
+            }
+        }
+    }
     if ctx.final_session_indices.len() > ctx.k {
         ctx.final_session_indices.truncate(ctx.k);
     }

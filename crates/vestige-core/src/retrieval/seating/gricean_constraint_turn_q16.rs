@@ -703,7 +703,13 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
 
         for &ti in turn_list {
             let tr = &ix.turns[ti];
-            if tr.field != 0 || tr.is_backchannel || tr.is_pure_info_question {
+            if tr.field != 0
+                || tr.is_backchannel
+                || tr.is_pure_info_question
+                || crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                    ix, ti, query,
+                )
+            {
                 continue;
             }
             let low_body = tr.body_for_headers.to_ascii_lowercase();
@@ -715,7 +721,11 @@ pub(in crate::retrieval) fn score_gricean_constraint_turns_q16(
                 || low_body.contains("dealbreaker")
                 || low_body.contains("won't work")
                 || low_body.contains("will not work");
-            if turn_is_superseded(ix, ti) && !is_hard_req_note {
+            let allow_sup =
+                crate::retrieval::graph::ghostcurrent_mdl_q16::is_state_delta_or_contradiction_query(
+                    query,
+                );
+            if turn_is_superseded(ix, ti) && !is_hard_req_note && !allow_sup {
                 continue;
             }
             let constraint_frame_q16 = constraint_frame_strength_q16(ix, ti);
@@ -1131,21 +1141,100 @@ pub(in crate::retrieval) fn apply_gricean_constraint_turn_seating(ctx: &mut Rank
 
     if stratified_conv_mode {
         per_sess_best.sort_by(|a, b| {
-            b.total_q16
-                .cmp(&a.total_q16)
+            let a_bound = a.entity_bind_q16 >= Q16_ONE;
+            let b_bound = b.entity_bind_q16 >= Q16_ONE;
+            b_bound
+                .cmp(&a_bound)
+                .then_with(|| b.total_q16.cmp(&a.total_q16))
                 .then_with(|| b.constraint_frame_q16.cmp(&a.constraint_frame_q16))
                 .then_with(|| a.turn_idx.cmp(&b.turn_idx))
         });
         let cur_h0 = ctx.final_turn_indices[0];
         let cur_h0_tr = &ctx.ix.turns[cur_h0];
         let cur_h0_in_top5 = top_sessions.contains(&cur_h0_tr.session);
+        let cur_h0_cont = is_dialogue_continuation_opener(&cur_h0_tr.body_for_headers);
+        let cur_h0_closure = crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+            ctx.ix, cur_h0, &ctx.q.text,
+        );
+        let top_pick = per_sess_best.first();
+        let top_pick_has_bind = top_pick.is_some_and(|p| p.entity_bind_q16 >= Q16_ONE);
+        let top_pick_exact_cnt = top_pick.map_or(0, |p| {
+            (ctx.t_exact_mask.get(p.turn_idx).copied().unwrap_or(0) & ctx.q_group_mask).count_ones()
+        });
+        let cur_h0_scene = ctx.t_scene.get(cur_h0).copied().unwrap_or(0.0);
+        let top_pick_scene = top_pick
+            .map_or(0.0, |p| ctx.t_scene.get(p.turn_idx).copied().unwrap_or(0.0));
+        let best_strong_top5 = ctx
+            .final_turn_indices
+            .iter()
+            .take(5)
+            .copied()
+            .filter(|&ti| {
+                let tr = &ctx.ix.turns[ti];
+                tr.field == 0
+                    && !tr.is_pure_info_question
+                    && !tr.is_backchannel
+                    && !is_dialogue_continuation_opener(&tr.body_for_headers)
+                    && !crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+                        ctx.ix, ti, &ctx.q.text,
+                    )
+                    && top_sessions.contains(&tr.session)
+            })
+            .max_by(|&a, &b| {
+                let a_ex = (ctx.t_exact_mask.get(a).copied().unwrap_or(0) & ctx.q_group_mask).count_ones();
+                let b_ex = (ctx.t_exact_mask.get(b).copied().unwrap_or(0) & ctx.q_group_mask).count_ones();
+                a_ex.cmp(&b_ex)
+                    .then_with(|| {
+                        ctx.t_scene
+                            .get(a)
+                            .copied()
+                            .unwrap_or(0.0)
+                            .partial_cmp(&ctx.t_scene.get(b).copied().unwrap_or(0.0))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .then_with(|| b.cmp(&a))
+            });
+        let strong_top5_blocks_aside = best_strong_top5.is_some_and(|sti| {
+            let s_sc = ctx.t_scene.get(sti).copied().unwrap_or(0.0);
+            let s_ex = (ctx.t_exact_mask.get(sti).copied().unwrap_or(0) & ctx.q_group_mask).count_ones();
+            s_ex >= 1 && s_ex > top_pick_exact_cnt && s_sc >= 10.0
+        });
+        if strong_top5_blocks_aside
+            && let Some(sti) = best_strong_top5
+            && sti != cur_h0
+            && (ctx.t_scene.get(sti).copied().unwrap_or(0.0) > cur_h0_scene * 1.5
+                || !cur_h0_in_top5
+                || cur_h0_tr.field != 0
+                || cur_h0_cont
+                || cur_h0_closure)
+        {
+            if let Some(pos) = ctx.final_turn_indices.iter().position(|&t| t == sti) {
+                ctx.final_turn_indices.remove(pos);
+            }
+            ctx.final_turn_indices.insert(0, sti);
+            ctx.final_turn_indices.truncate(orig_tlen);
+        }
+        let cur_h0 = ctx.final_turn_indices[0];
+        let cur_h0_tr = &ctx.ix.turns[cur_h0];
+        let cur_h0_in_top5 = top_sessions.contains(&cur_h0_tr.session);
         let cur_h0_anaph = has_concise_anaph_next(cur_h0);
         let cur_h0_cont = is_dialogue_continuation_opener(&cur_h0_tr.body_for_headers);
+        let cur_h0_closure = crate::retrieval::seating::habitus_energy_q16::is_discourse_closure_or_meta_echo(
+            ctx.ix, cur_h0, &ctx.q.text,
+        );
+        let cur_h0_exact_cnt =
+            (ctx.t_exact_mask.get(cur_h0).copied().unwrap_or(0) & ctx.q_group_mask).count_ones();
+        let cur_h0_scene = ctx.t_scene.get(cur_h0).copied().unwrap_or(0.0);
+        let cur_h0_beats_pick = cur_h0_exact_cnt >= 1
+            && (cur_h0_exact_cnt > top_pick_exact_cnt
+                || (cur_h0_exact_cnt == top_pick_exact_cnt
+                    && cur_h0_scene > top_pick_scene * 2.0));
         let keep_h0 = cur_h0_in_top5
             && cur_h0_tr.field == 0
             && !cur_h0_tr.is_pure_info_question
             && !cur_h0_cont
-            && cur_h0_anaph;
+            && !cur_h0_closure
+            && (cur_h0_anaph || cur_h0_beats_pick || !top_pick_has_bind);
 
         let mut next_slot = if keep_h0 { 1usize } else { 0usize };
         let mut seated_sess: DetHashSet<usize> = DetHashSet::default();

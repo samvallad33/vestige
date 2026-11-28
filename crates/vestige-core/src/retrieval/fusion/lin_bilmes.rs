@@ -597,9 +597,8 @@ pub(in crate::retrieval) fn select_submodular_sessions(
                     .session_rsb_back
                     .get(si)
                     .is_some_and(|backs| {
-                        backs.iter().any(|&(prev_s, _)| {
-                            let ps = prev_s as usize;
-                            ps < ns && direct_anchor[ps]
+                        backs.iter().any(|&(_, prev_s)| {
+                            prev_s < ns && direct_anchor[prev_s]
                         })
                     });
                 let lex_ok = !rare_anchor_lex_ids.is_empty()

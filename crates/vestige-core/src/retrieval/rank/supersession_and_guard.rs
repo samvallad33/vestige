@@ -580,6 +580,9 @@ fn rescue_zero_exact_entity_head(
         || (ctx.pref_on && !explicit_wh_fact)
         || (ctx.eff_it.task_under_rules && !explicit_wh_fact)
         || eff_summary_request(&ctx.q.text)
+        || crate::retrieval::graph::ghostcurrent_mdl_q16::is_state_delta_or_contradiction_query(
+            &ctx.q.text,
+        )
     {
         return;
     }
@@ -1089,7 +1092,22 @@ fn snap_assistant_echo_to_user_origin(ctx: &mut RankCtx<'_>, topical_mask: u64) 
         // Snap when `prev` is already ranked in Top-15 on a user-attributed temporal/counting/
         // update/multi-session query (eliminating 400-word assistant echo dominance in Slots 0..4),
         // or when `prev` genuinely carries the queried lexical/temporal signal directly.
+        let t_low = tr.body_for_headers.trim_start().to_ascii_lowercase();
+        let is_echo_acknowledgment = t_low.starts_with("certainly!")
+            || t_low.starts_with("absolutely!")
+            || t_low.starts_with("sure!")
+            || t_low.starts_with("of course!")
+            || t_low.starts_with("that's a great ")
+            || t_low.starts_with("that\u{2019}s a great ");
         let strong_origin = (is_user_event_q && prev_in_top15)
+            || (ctx.eff_it.multi_hop
+                && !is_temp_q
+                && !ctx.eff_it.current_state
+                && is_echo_acknowledgment
+                && p_cov >= 1
+                && shared_q >= 1
+                && !ptr.is_pure_info_question
+                && p_own >= 0.15 * t_own)
             || ((p_cov > 0 || (is_temp_q && p_timex) || ptr.has_numeric)
                 && (p_own >= 0.45 * t_own
                     || (p_cov > 0 && p_cov >= t_cov)
@@ -1151,6 +1169,9 @@ pub(in crate::retrieval) fn apply_late_supersession_integrity_guard(ctx: &mut Ra
         || ctx.eff_it.is_event_sequence
         || ctx.eff_it.assistant_attribution
         || eff_summary_request(&ctx.q.text)
+        || crate::retrieval::graph::ghostcurrent_mdl_q16::is_state_delta_or_contradiction_query(
+            &ctx.q.text,
+        )
         || ctx.plan.groups.is_empty()
     {
         return;
@@ -1255,12 +1276,14 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
             let t0_cov = (ctx.t_exact_mask[t0] & topical_mask).count_ones();
             let role_want = usize::from(ctx.eff_it.assistant_attribution);
             let present_q = is_present_state_query(&ctx.q.text, &ctx.eff_it);
+            let compact_non_temp = ctx.ns <= 16 && !ctx.eff_it.temporal && !ctx.eff_it.current_state;
             let best_s0 = ctx.ix.session_turns[s0]
                 .iter()
                 .copied()
                 .filter(|&ti| {
                     let tr = &ctx.ix.turns[ti];
                     let exact_cov = (ctx.t_exact_mask[ti] & topical_mask).count_ones();
+                    let mask_cov = (ctx.t_mask[ti] & topical_mask).count_ones();
                     !tr.is_backchannel
                         && !tr.is_standing_policy
                         && !tr.is_pure_info_question
@@ -1269,7 +1292,7 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
                                 && !ctx.ix.torrens_superseded.get(ti).copied().unwrap_or(false)))
                         && ctx.t_scene[ti] > 0.0
                         && ctx.t_own[ti] > 0.0
-                        && exact_cov >= 1
+                        && (exact_cov >= 1 || (compact_non_temp && t0_is_opener_req && mask_cov >= 1 && tr.field == 0))
                 })
                 .max_by(|&a, &b| {
                     let ra = u8::from(ctx.ix.turns[a].field == role_want && !ctx.ix.turns[a].is_question);
@@ -1293,9 +1316,10 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
                 });
             if let Some(win_s0_ti) = best_s0 {
                 let win_cov = (ctx.t_exact_mask[win_s0_ti] & topical_mask).count_ones();
+                let win_mask_cov = (ctx.t_mask[win_s0_ti] & topical_mask).count_ones();
                 let t0_zero_own = ctx.t_own[t0] <= 0.0 || t0_cov == 0;
                 if win_s0_ti != t0
-                    && win_cov >= 1
+                    && (win_cov >= 1 || (compact_non_temp && t0_is_opener_req && win_mask_cov >= 1))
                     && (t0_zero_own
                         || t0_is_opener_req
                         || (t0_sup && win_cov >= t0_cov)
@@ -1314,10 +1338,14 @@ pub(in crate::retrieval) fn apply_supersession_and_entity_guard(ctx: &mut RankCt
     }
     let neutral_present_state =
         ctx.eff_it.current_state || is_present_state_query(&ctx.q.text, &ctx.eff_it);
+    let preserve_history = ctx.eff_it.is_event_sequence
+        || is_historical_or_order_query(&ctx.q.text)
+        || crate::retrieval::graph::ghostcurrent_mdl_q16::is_state_delta_query(&ctx.q.text)
+        || crate::retrieval::graph::ghostcurrent_mdl_q16::is_contradiction_or_audit_query(&ctx.q.text);
     crate::retrieval::graph::state_entrenchment_dag::apply_agm_entrenchment_demotion(
         ctx.ix,
-        neutral_present_state,
-        ctx.eff_it.is_event_sequence || is_historical_or_order_query(&ctx.q.text),
+        neutral_present_state && !preserve_history,
+        preserve_history,
         &ctx.t_exact_mask,
         &mut ctx.final_turn_indices,
     );

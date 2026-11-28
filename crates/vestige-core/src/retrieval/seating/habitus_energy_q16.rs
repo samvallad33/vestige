@@ -243,6 +243,20 @@ pub(in crate::retrieval) fn is_discourse_closure_or_meta_echo(
     let is_explicit_signoff = tr.content.len() <= 32
         && (trimmed.starts_with("no, i think i'm good")
             || trimmed.starts_with("no, i think i\u{2019}m good")
+            || trimmed.starts_with("no, i'm all set")
+            || trimmed.starts_with("no, i\u{2019}m all set")
+            || trimmed.contains("going to wrap this up")
+            || (tr.content.len() <= 12
+                && trimmed.starts_with("thanks again")
+                && (trimmed.contains("have a good")
+                    || trimmed.contains("talk soon")
+                    || trimmed.contains("take care")))
+            || (tr.content.len() <= 16
+                && trimmed.starts_with("goodbye")
+                && (trimmed.contains("best of luck")
+                    || trimmed.contains("good luck")
+                    || trimmed.contains("talk soon")
+                    || trimmed.contains("take care")))
             || trimmed.starts_with("yes, that clears ")
             || ((trimmed.starts_with("thanks for the ") || trimmed.starts_with("thank you for the "))
                 && (trimmed.contains(" i'll ")
@@ -254,6 +268,7 @@ pub(in crate::retrieval) fn is_discourse_closure_or_meta_echo(
             || trimmed.starts_with("yeah, that sums it up")
             || trimmed.starts_with("that sums it up")
             || trimmed.starts_with("sure, i get the gist")
+            || (tr.content.len() <= 24 && trimmed.contains("let me know if you need help with anything"))
             || (trimmed.starts_with("these ") && trimmed.contains(" sound really helpful")));
     if is_explicit_signoff {
         return true;

@@ -1642,10 +1642,11 @@ pub(in crate::retrieval) fn apply_emgr_steiner_dpp_fusion(ctx: &mut RankCtx<'_>)
         &ctx.t_scene,
         &cand_sessions,
     );
+    let allow_sup = crate::retrieval::graph::ghostcurrent_mdl_q16::is_state_delta_or_contradiction_query(&ctx.q.text);
     emgr_scored.retain(|&(ti, sc)| {
         sc > 0
             && is_declarative_evidence(ctx.ix, ti, &ctx.q.text)
-            && !turn_is_superseded(ctx.ix, ti)
+            && (!turn_is_superseded(ctx.ix, ti) || allow_sup)
             && !is_discourse_closure_or_meta_echo(ctx.ix, ti, &ctx.q.text)
     });
     if emgr_scored.len() < 2 {

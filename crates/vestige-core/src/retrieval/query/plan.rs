@@ -344,33 +344,133 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
             || intent.is_event_sequence
             || q_low_plan.contains("order in which")
             || q_low_plan.contains("walk me through");
-        // hardcode-scan: closed-class (meta-task and ordering/enumeration scaffold operators)
-        let is_meta_task_framing = can_demote_framing
-            && is_order_or_sum_q
+        let is_delta_audit_q = (q_low_plan.contains("what changed")
+            || q_low_plan.contains("what change ")
+            || q_low_plan.contains("change occurred")
+            || q_low_plan.contains("switch from and to")
+            || q_low_plan.contains("remain the same")
+            || q_low_plan.contains("remained the same")
+            || q_low_plan.contains("stay the same")
+            || q_low_plan.contains("stayed the same")
+            || ((q_low_plan.starts_with("did ")
+                || q_low_plan.starts_with("has ")
+                || q_low_plan.starts_with("how did "))
+                && (q_low_plan.contains(" change")
+                    || q_low_plan.contains(" changed")
+                    || q_low_plan.contains(" switch"))))
+            && raw_q.iter().any(|tok| {
+                is_content(tok)
+                    && !matches!(
+                        tok.as_str(),
+                        "user"
+                            | "change"
+                            | "changed"
+                            | "changes"
+                            | "occurred"
+                            | "switch"
+                            | "switched"
+                            | "stay"
+                            | "stayed"
+                            | "remain"
+                            | "remained"
+                            | "same"
+                            | "recently"
+                    )
+            });
+        let has_specific_delta_attr = is_delta_audit_q
+            && raw_q.iter().any(|tok| {
+                is_content(tok)
+                    && !matches!(
+                        tok.as_str(),
+                        "user"
+                            | "users"
+                            | "change"
+                            | "changed"
+                            | "changes"
+                            | "occurred"
+                            | "switch"
+                            | "switched"
+                            | "stay"
+                            | "stayed"
+                            | "remain"
+                            | "remained"
+                            | "same"
+                            | "recently"
+                            | "status"
+                            | "situation"
+                            | "details"
+                            | "level"
+                    )
+            });
+        // Abstract container nouns (`status`, `situation`, `details`, `level`) on state-delta
+        // audit queries with a specific domain modifier (`marital status`, `career situation`)
+        // cause spurious BM25 matches (`"my status is normal"`), so drop them completely.
+        if has_specific_delta_attr
+            && matches!(w.as_str(), "status" | "situation" | "details" | "level")
+        {
+            continue;
+        }
+        // hardcode-scan: closed-class (meta-task, ordering, state-delta, and advisory framing modifiers)
+        let is_delta_operator = is_delta_audit_q
             && matches!(
                 w.as_str(),
-                "summary"
-                    | "summarize"
-                    | "comprehensive"
-                    | "conversations"
-                    | "overview"
-                    | "progressed"
-                    | "aspects"
-                    | "timeline"
-                    | "walkthrough"
-                    | "walk"
-                    | "brought"
-                    | "different"
-                    | "items"
-                    | "order"
-                    | "including"
-                    | "related"
-                    | "various"
-                    | "throughout"
-                    | "across"
-                    | "provide"
-                    | "give"
+                "user"
+                    | "users"
+                    | "change"
+                    | "changed"
+                    | "changes"
+                    | "occurred"
+                    | "switch"
+                    | "switched"
+                    | "stay"
+                    | "stayed"
+                    | "remain"
+                    | "remained"
+                    | "same"
+                    | "recently"
             );
+        let is_advice_q = !has_specific_delta_attr
+            && !is_order_or_sum_q
+            && (q_low_plan.contains("any suggestions")
+                || q_low_plan.contains("interesting suggestions")
+                || q_low_plan.contains("any ideas")
+                || q_low_plan.contains("ways to ")
+                || q_low_plan.contains("good recipe")
+                || q_low_plan.contains("recommend a "));
+        let is_advice_framing_tok = is_advice_q
+            && matches!(
+                w.as_str(),
+                "interesting" | "good" | "great" | "nice" | "try" | "ways" | "enjoy" | "mood"
+            )
+            && raw_q.iter().filter(|tok| is_content(tok)).count() >= 3;
+        let is_meta_task_framing = is_delta_operator
+            || is_advice_framing_tok
+            || (can_demote_framing
+                && is_order_or_sum_q
+                && matches!(
+                    w.as_str(),
+                    "summary"
+                        | "summarize"
+                        | "comprehensive"
+                        | "conversations"
+                        | "overview"
+                        | "progressed"
+                        | "aspects"
+                        | "timeline"
+                        | "walkthrough"
+                        | "walk"
+                        | "brought"
+                        | "different"
+                        | "items"
+                        | "order"
+                        | "including"
+                        | "related"
+                        | "various"
+                        | "throughout"
+                        | "across"
+                        | "provide"
+                        | "give"
+                ));
         let is_frame = (can_demote_framing && frame_token(w)) || is_meta_task_framing;
         if is_frame {
             let fw = if is_meta_task_framing { 0.12 } else { 0.30 };
@@ -762,13 +862,49 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
                 }
             }
 
-            // STRICT ZERO-DILUTION INVARIANT: never run general synonym expansion on a word that ALREADY matches the corpus!
+            // STRICT ZERO-DILUTION INVARIANT: for words already matching the corpus, only run
+            // strict shared-prefix WordNet derivational morphology (`subscription -> subscribe`),
+            // never general open synonyms.
             if group_has_corpus_hit {
+                if w.len() >= 5 && w.is_ascii() {
+                    let wb = w.as_bytes();
+                    let mut deriv_added = 0usize;
+                    let w_stem = stem(w);
+                    for (lemma, rel_w) in crate::wordnet::full_lexicon_neighbors(w) {
+                        if deriv_added >= 4 || rel_w < 85 || lemma.len() < 5 || !lemma.is_ascii() {
+                            continue;
+                        }
+                        let lb = lemma.as_bytes();
+                        if wb[..4] != lb[..4] || stem(lemma) == w_stem {
+                            continue;
+                        }
+                        let surface = ix.vocab.get(lemma);
+                        let stemmed = if p.enable_stemming {
+                            ix.vocab.get(&stem_term(&stem(lemma)))
+                        } else {
+                            None
+                        };
+                        for id in [surface, stemmed].into_iter().flatten() {
+                            let df = ix.s_stats.df.get(&id).copied().unwrap_or(0);
+                            if (1..=rare_df_cap).contains(&df) && hyp_added.insert(id) {
+                                terms.push(QTerm {
+                                    id,
+                                    weight: (p.hypernym_weight * 0.65).clamp(0.25, 0.58),
+                                    group: Some(*g),
+                                    exact_hit: false,
+                                });
+                                group_of.insert(id, *g);
+                                deriv_added += 1;
+                            }
+                        }
+                    }
+                }
                 continue;
             }
 
             // (b) Unified OOV Human-Knowledge Expansion: WordNet 3.1 (4-POS + derived `+` + instance_surnames
-            // + edit-dist-1 typo rescue) + Roget's 1911 Thesaurus + GeoNames + Wikidata CC0 + ConceptNet 5.7, IC-weighted.
+            // + edit-dist-1 typo rescue + non-temporal rare gloss bridges) + Roget's 1911 Thesaurus
+            // + GeoNames + Wikidata CC0 + ConceptNet 5.7, IC-weighted.
             let mut best_by_id: std::collections::BTreeMap<u32, (u64, u16)> = std::collections::BTreeMap::new();
             let mut consider_lemma = |lemma: &str, rel_w: u16| {
                 let surface = ix.vocab.get(lemma);
@@ -791,6 +927,30 @@ pub(in crate::retrieval) fn plan_query(ix: &Index, q: &Query, p: &Params) -> Que
             };
             for (lemma, rel_w) in crate::wordnet::full_lexicon_neighbors(w) {
                 consider_lemma(lemma, rel_w);
+            }
+            let is_order_or_sum_expand = crate::retrieval::eff_summary_request(&q.text)
+                || intent.is_event_sequence
+                || q_low_plan.contains("order in which")
+                || q_low_plan.contains("walk me through");
+            if !intent.temporal && !intent.is_event_sequence && !is_order_or_sum_expand {
+                let gloss_df_cap = rare_df_cap.min(10);
+                for gl in crate::wordnet::gloss_tokens_of(w) {
+                    if gl.len() >= 4 {
+                        let surface = ix.vocab.get(gl);
+                        let stemmed = if p.enable_stemming {
+                            ix.vocab.get(&stem_term(&stem(gl)))
+                        } else {
+                            None
+                        };
+                        for id in [surface, stemmed].into_iter().flatten() {
+                            let df = ix.s_stats.df.get(&id).copied().unwrap_or(0);
+                            if (1..=gloss_df_cap).contains(&df) && !hyp_added.contains(&id) {
+                                consider_lemma(gl, 72);
+                                break;
+                            }
+                        }
+                    }
+                }
             }
             for (lemma, rel_w) in crate::roget::conceptual_neighbors(w, 64) {
                 consider_lemma(lemma, rel_w);
