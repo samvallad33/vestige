@@ -510,11 +510,10 @@ impl StrataStore {
         let mut out = Vec::new();
         for chain in self.chains(None) {
             for effect in owned_included(&chain) {
-                // Nested: this crate is edition 2021, so a let-chain will not compile.
-                if let StoreOp::UpsertNode { record } = effect.op {
-                    if record.is_live() {
-                        out.push(record.content);
-                    }
+                if let StoreOp::UpsertNode { record } = effect.op
+                    && record.is_live()
+                {
+                    out.push(record.content);
                 }
             }
         }
@@ -1212,15 +1211,15 @@ impl StrataStore {
             None
         };
         let (effect_seq, _) = self.admit_write_with_params(op, kind, Vec::new(), params)?;
-        if let Some(note) = self.mesh.merges.last_mut() {
-            if note.effect_seq == 0 {
-                note.effect_seq = effect_seq;
-            }
+        if let Some(note) = self.mesh.merges.last_mut()
+            && note.effect_seq == 0
+        {
+            note.effect_seq = effect_seq;
         }
-        if let Some(note) = self.mesh.conflicts.last_mut() {
-            if note.effect_seq == 0 {
-                note.effect_seq = effect_seq;
-            }
+        if let Some(note) = self.mesh.conflicts.last_mut()
+            && note.effect_seq == 0
+        {
+            note.effect_seq = effect_seq;
         }
         Ok(effect_seq)
     }
@@ -1274,10 +1273,10 @@ impl StrataStore {
                     .map(|merge| merge.to_seq)
                     .max()
                     .unwrap_or(0);
-                if let Some((writer, to)) = &extra {
-                    if writer == &did {
-                        admitted = admitted.max(*to);
-                    }
+                if let Some((writer, to)) = &extra
+                    && writer == &did
+                {
+                    admitted = admitted.max(*to);
                 }
                 chains.push(ChainIn {
                     writer: did,
@@ -1436,17 +1435,17 @@ fn admitted_effects(writer: &str, frames: &[FrameRecord]) -> Vec<EffectIn> {
                 }
                 _ => {}
             }
-        } else if frame.kind == crate::KIND_STORE_WRITE {
-            if let WritePayload::StoreOp(op) = classify_write_payload(&frame.payload) {
-                let digest = hash32(&frame.payload);
-                if pending.get_mut(&digest).and_then(|queue| queue.pop_front()).is_some() {
-                    out.push(EffectIn {
-                        writer: writer.to_string(),
-                        op,
-                        data_seq: frame.seq,
-                        frame_hash: frame.frame_hash,
-                    });
-                }
+        } else if frame.kind == crate::KIND_STORE_WRITE
+            && let WritePayload::StoreOp(op) = classify_write_payload(&frame.payload)
+        {
+            let digest = hash32(&frame.payload);
+            if pending.get_mut(&digest).and_then(|queue| queue.pop_front()).is_some() {
+                out.push(EffectIn {
+                    writer: writer.to_string(),
+                    op,
+                    data_seq: frame.seq,
+                    frame_hash: frame.frame_hash,
+                });
             }
         }
     }

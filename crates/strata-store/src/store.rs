@@ -5,10 +5,12 @@
 //! is a derived index rebuilt by replay on open — proven bit-identical by
 //! [`StrataStore::state_digest`] across open/close/open cycles.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use rapidhash::HashMapExt;
+use rapidhash::fast::RapidHashMap as HashMap;
 use strata::StrataLog;
 use strata_gate::policy::{ANY_KIND, WILDCARD_PREFIX};
 use strata_gate::record::{action_kind, EffectRecord, GateRecord, Propose, RecordKind, Verdict};
@@ -1293,10 +1295,10 @@ impl StrataStore {
                                     })
                                 });
                             if covering_propose && admitting_gate {
-                                if let Some(propose) = propose_at.get(&effect.propose_seq) {
-                                    if let Some(rule) = retire_rule_id(&propose.params_hash) {
-                                        self.retire_rules.insert(gseq, rule);
-                                    }
+                                if let Some(propose) = propose_at.get(&effect.propose_seq)
+                                    && let Some(rule) = retire_rule_id(&propose.params_hash)
+                                {
+                                    self.retire_rules.insert(gseq, rule);
                                 }
                                 pending
                                     .entry(effect.payload_digest)
@@ -2814,12 +2816,10 @@ impl StrataStore {
         }
         if let (Some(target_writes), Some(trigger_writes)) =
             (self.upserts.get(&target.id), self.upserts.get(&trigger.id))
-        {
-            if target_writes.first().map(|write| write.0)
+            && target_writes.first().map(|write| write.0)
                 >= trigger_writes.first().map(|write| write.0)
-            {
-                return Err(invalid("target must precede trigger in the log"));
-            }
+        {
+            return Err(invalid("target must precede trigger in the log"));
         }
         if !records_entity(target, &adjustment.shared_entity)
             || !records_entity(trigger, &adjustment.shared_entity)
@@ -3204,10 +3204,10 @@ impl StrataStore {
     /// landed since the last seal.
     pub fn seal_checkpoint(&mut self) -> Result<Checkpoint, StoreError> {
         let log_seq = self.fsrs.applied_seq;
-        if let Some(last) = self.checkpoints.last() {
-            if log_seq <= last.log_seq {
-                return Ok(*last);
-            }
+        if let Some(last) = self.checkpoints.last()
+            && log_seq <= last.log_seq
+        {
+            return Ok(*last);
         }
         let prev = self.checkpoints.last().map_or([0u8; 32], checkpoint_hash);
         let cp = Checkpoint::seal(ALGO_V2, log_seq, prev, &self.fsrs);
@@ -3702,17 +3702,17 @@ impl StrataStore {
                 context,
             )?;
         }
-        if let Some(restored) = restores.first() {
-            if !moved_anchors.is_empty() {
-                let rows = moved_anchors
-                    .into_iter()
-                    .map(|anchor| AnchorRecord {
-                        node_id: restored.id.clone(),
-                        ..anchor
-                    })
-                    .collect();
-                self.record_anchors(rows)?;
-            }
+        if let Some(restored) = restores.first()
+            && !moved_anchors.is_empty()
+        {
+            let rows = moved_anchors
+                .into_iter()
+                .map(|anchor| AnchorRecord {
+                    node_id: restored.id.clone(),
+                    ..anchor
+                })
+                .collect();
+            self.record_anchors(rows)?;
         }
         Ok(data_seq)
     }

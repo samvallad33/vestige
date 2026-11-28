@@ -9,9 +9,11 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use chrono::Utc;
+use daachorse::DoubleArrayAhoCorasick;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -538,15 +540,111 @@ fn is_protected_kernel_path(path: &str) -> bool {
         || (p.contains("/log/") && p.ends_with(".seg"))
 }
 
-fn is_temp_path_hint(cmd_lower: &str) -> bool {
-    cmd_lower.contains("/tmp/")
-        || cmd_lower.contains("\\temp\\")
-        || cmd_lower.contains("/temp/")
-        || cmd_lower.contains("appdata/local/temp")
-        || cmd_lower.contains("appdata\\local\\temp")
+const BIT_OP1_DIRECT: u32 = 1 << 0;
+const BIT_OP1_DD_IF: u32 = 1 << 1;
+const BIT_OP1_OF_DEV: u32 = 1 << 2;
+const BIT_OP2_NET_FETCH: u32 = 1 << 3;
+const BIT_OP2_PIPE_EXEC: u32 = 1 << 4;
+const BIT_OP3_SEND_NET: u32 = 1 << 5;
+const BIT_OP4_GIT_PUSH: u32 = 1 << 6;
+const BIT_OP4_FORCE: u32 = 1 << 7;
+const BIT_OP4_MAIN_BRANCH: u32 = 1 << 8;
+const BIT_OP4_DIRECT: u32 = 1 << 9;
+const BIT_OP5_MUTATE: u32 = 1 << 10;
+const BIT_OP6_SQL: u32 = 1 << 11;
+const BIT_OP7_PRIV: u32 = 1 << 12;
+const BIT_OP8_REC_DIRECT: u32 = 1 << 13;
+const BIT_OP8_REMOVE_ITEM: u32 = 1 << 14;
+const BIT_OP8_RECURSE: u32 = 1 << 15;
+const BIT_OP8_TEMP_HINT: u32 = 1 << 16;
+const BIT_OP10_DIRECT: u32 = 1 << 17;
+const BIT_OP10_PTY: u32 = 1 << 18;
+const BIT_OP10_SOCKET: u32 = 1 << 19;
+
+fn shell_rule_automaton() -> &'static DoubleArrayAhoCorasick<u32> {
+    static AC: OnceLock<DoubleArrayAhoCorasick<u32>> = OnceLock::new();
+    AC.get_or_init(|| {
+        let patterns: &[(&str, u32)] = &[
+            // OP-001
+            ("rm -rf / ", BIT_OP1_DIRECT),
+            ("rm -rf /*", BIT_OP1_DIRECT),
+            ("rm -rf ~", BIT_OP1_DIRECT),
+            ("rm -fr /", BIT_OP1_DIRECT),
+            ("del /s /q c:\\", BIT_OP1_DIRECT),
+            ("mkfs.", BIT_OP1_DIRECT),
+            ("dd if=", BIT_OP1_DD_IF),
+            ("of=/dev/", BIT_OP1_OF_DEV),
+            // OP-002 + OP-003 shared net tools
+            ("curl ", BIT_OP2_NET_FETCH | BIT_OP3_SEND_NET),
+            ("wget ", BIT_OP2_NET_FETCH | BIT_OP3_SEND_NET),
+            ("irm ", BIT_OP2_NET_FETCH),
+            ("iwr ", BIT_OP2_NET_FETCH),
+            ("invoke-webrequest", BIT_OP2_NET_FETCH),
+            ("invoke-restmethod", BIT_OP2_NET_FETCH),
+            ("| sh", BIT_OP2_PIPE_EXEC),
+            ("|sh", BIT_OP2_PIPE_EXEC),
+            ("| bash", BIT_OP2_PIPE_EXEC),
+            ("|bash", BIT_OP2_PIPE_EXEC),
+            ("| zsh", BIT_OP2_PIPE_EXEC),
+            ("| python", BIT_OP2_PIPE_EXEC),
+            ("| iex", BIT_OP2_PIPE_EXEC),
+            ("|iex", BIT_OP2_PIPE_EXEC),
+            ("| invoke-expression", BIT_OP2_PIPE_EXEC),
+            // OP-003 extra net tools
+            ("scp ", BIT_OP3_SEND_NET),
+            ("nc ", BIT_OP3_SEND_NET),
+            ("ncat ", BIT_OP3_SEND_NET),
+            // OP-004
+            ("git push", BIT_OP4_GIT_PUSH),
+            (" --force", BIT_OP4_FORCE),
+            (" -f ", BIT_OP4_FORCE),
+            (" main", BIT_OP4_MAIN_BRANCH),
+            (" master", BIT_OP4_MAIN_BRANCH),
+            ("git reset --hard", BIT_OP4_DIRECT),
+            ("git clean -fdx", BIT_OP4_DIRECT),
+            ("git clean -fd", BIT_OP4_DIRECT),
+            ("git branch -d main", BIT_OP4_DIRECT),
+            ("git branch -d master", BIT_OP4_DIRECT),
+            // OP-005 + OP-008 shared remove-item
+            ("rm ", BIT_OP5_MUTATE),
+            ("del ", BIT_OP5_MUTATE),
+            ("remove-item", BIT_OP5_MUTATE | BIT_OP8_REMOVE_ITEM),
+            ("chmod ", BIT_OP5_MUTATE),
+            (">", BIT_OP5_MUTATE),
+            // OP-006
+            ("drop table", BIT_OP6_SQL),
+            ("drop database", BIT_OP6_SQL),
+            ("truncate table", BIT_OP6_SQL),
+            // OP-007
+            ("sudo rm ", BIT_OP7_PRIV),
+            ("chmod 777 /", BIT_OP7_PRIV),
+            ("reg delete hklm", BIT_OP7_PRIV),
+            ("bcdedit ", BIT_OP7_PRIV),
+            // OP-008
+            ("rm -rf ", BIT_OP8_REC_DIRECT),
+            ("rm -fr ", BIT_OP8_REC_DIRECT),
+            ("rmdir /s", BIT_OP8_REC_DIRECT),
+            ("-recurse", BIT_OP8_RECURSE),
+            ("/tmp/", BIT_OP8_TEMP_HINT),
+            ("\\temp\\", BIT_OP8_TEMP_HINT),
+            ("/temp/", BIT_OP8_TEMP_HINT),
+            ("appdata/local/temp", BIT_OP8_TEMP_HINT),
+            ("appdata\\local\\temp", BIT_OP8_TEMP_HINT),
+            // OP-010
+            ("/dev/tcp/", BIT_OP10_DIRECT),
+            ("nc -e ", BIT_OP10_DIRECT),
+            ("ncat -e ", BIT_OP10_DIRECT),
+            ("pty.spawn", BIT_OP10_PTY),
+            ("socket", BIT_OP10_SOCKET),
+        ];
+        DoubleArrayAhoCorasick::with_values(patterns.iter().copied())
+            .expect("static shell_rule_automaton patterns are unique")
+    })
 }
 
 /// Evaluate the deterministic core rule table (`OP-001`..`OP-010`).
+/// Uses a single-pass `daachorse` double-array Aho-Corasick scan (~1.2 us/KB)
+/// to preserve exact rule precedence without O(R*N) repeated substring scans.
 /// Returns `Some((rule_id, owasp_asi, reason))` on a deterministic match.
 pub fn evaluate_deterministic_rules(
     req: &GuardEvalRequest,
@@ -581,7 +679,7 @@ pub fn evaluate_deterministic_rules(
         }
     }
 
-    // Shell command checks.
+    // Shell command checks via single-pass Double-Array Aho-Corasick automaton.
     if is_shell_tool(&req.tool_name)
         && let Some(cmd) = req.command.as_deref()
     {
@@ -591,15 +689,15 @@ pub fn evaluate_deterministic_rules(
         let lower = cmd.to_ascii_lowercase();
         let norm = lower.replace('\\', "/");
 
+        let mut flags = 0u32;
+        for m in shell_rule_automaton().find_overlapping_iter(&lower) {
+            flags |= m.value();
+        }
+
         // OP-001: Root / home / drive wipe or disk format.
-        if lower.contains("rm -rf / ")
+        if (flags & BIT_OP1_DIRECT) != 0
             || lower.ends_with("rm -rf /")
-            || lower.contains("rm -rf /*")
-            || lower.contains("rm -rf ~")
-            || lower.contains("rm -fr /")
-            || lower.contains("del /s /q c:\\")
-            || lower.contains("mkfs.")
-            || lower.contains("dd if=") && lower.contains("of=/dev/")
+            || ((flags & BIT_OP1_DD_IF) != 0 && (flags & BIT_OP1_OF_DEV) != 0)
         {
             return Some((
                 "OP-001",
@@ -609,22 +707,7 @@ pub fn evaluate_deterministic_rules(
         }
 
         // OP-002: Remote code execution pipes (`curl|sh`, `wget|sh`, `irm|iex`).
-        let has_net_fetch = lower.contains("curl ")
-            || lower.contains("wget ")
-            || lower.contains("irm ")
-            || lower.contains("iwr ")
-            || lower.contains("invoke-webrequest")
-            || lower.contains("invoke-restmethod");
-        let has_pipe_exec = lower.contains("| sh")
-            || lower.contains("|sh")
-            || lower.contains("| bash")
-            || lower.contains("|bash")
-            || lower.contains("| zsh")
-            || lower.contains("| python")
-            || lower.contains("| iex")
-            || lower.contains("|iex")
-            || lower.contains("| invoke-expression");
-        if has_net_fetch && has_pipe_exec {
+        if (flags & BIT_OP2_NET_FETCH) != 0 && (flags & BIT_OP2_PIPE_EXEC) != 0 {
             return Some((
                 "OP-002",
                 "ASI02",
@@ -633,16 +716,12 @@ pub fn evaluate_deterministic_rules(
         }
 
         // OP-003: Credential exfiltration over network tools.
-        let touches_creds = norm.contains(".ssh/id_")
-            || norm.contains(".aws/credentials")
-            || norm.contains(".kube/config")
-            || norm.contains("/etc/shadow");
-        let sends_over_net = lower.contains("curl ")
-            || lower.contains("wget ")
-            || lower.contains("scp ")
-            || lower.contains("nc ")
-            || lower.contains("ncat ");
-        if touches_creds && sends_over_net {
+        if (flags & BIT_OP3_SEND_NET) != 0
+            && (norm.contains(".ssh/id_")
+                || norm.contains(".aws/credentials")
+                || norm.contains(".kube/config")
+                || norm.contains("/etc/shadow"))
+        {
             return Some((
                 "OP-003",
                 "ASI03",
@@ -652,14 +731,10 @@ pub fn evaluate_deterministic_rules(
         }
 
         // OP-004: Destructive git history / worktree loss.
-        if (lower.contains("git push")
-            && (lower.contains(" --force") || lower.contains(" -f "))
-            && (lower.contains(" main") || lower.contains(" master")))
-            || lower.contains("git reset --hard")
-            || lower.contains("git clean -fdx")
-            || lower.contains("git clean -fd")
-            || lower.contains("git branch -d main")
-            || lower.contains("git branch -d master")
+        if (flags & BIT_OP4_DIRECT) != 0
+            || ((flags & BIT_OP4_GIT_PUSH) != 0
+                && (flags & BIT_OP4_FORCE) != 0
+                && (flags & BIT_OP4_MAIN_BRANCH) != 0)
         {
             return Some((
                 "OP-004",
@@ -670,13 +745,7 @@ pub fn evaluate_deterministic_rules(
         }
 
         // OP-005: Shell tampering with gate / Strata log / git hooks.
-        if (lower.contains("rm ")
-            || lower.contains("del ")
-            || lower.contains("remove-item")
-            || lower.contains("chmod ")
-            || lower.contains('>'))
-            && is_protected_kernel_path(&norm)
-        {
+        if (flags & BIT_OP5_MUTATE) != 0 && is_protected_kernel_path(&norm) {
             return Some((
                 "OP-005",
                 "ASI05",
@@ -686,10 +755,7 @@ pub fn evaluate_deterministic_rules(
         }
 
         // OP-006: Destructive SQL statements.
-        if lower.contains("drop table")
-            || lower.contains("drop database")
-            || lower.contains("truncate table")
-        {
+        if (flags & BIT_OP6_SQL) != 0 {
             return Some((
                 "OP-006",
                 "ASI06",
@@ -698,11 +764,7 @@ pub fn evaluate_deterministic_rules(
         }
 
         // OP-007: Privilege escalation / system registry/boot tampering.
-        if lower.contains("sudo rm ")
-            || lower.contains("chmod 777 /")
-            || lower.contains("reg delete hklm")
-            || lower.contains("bcdedit ")
-        {
+        if (flags & BIT_OP7_PRIV) != 0 {
             return Some((
                 "OP-007",
                 "ASI07",
@@ -711,11 +773,9 @@ pub fn evaluate_deterministic_rules(
         }
 
         // OP-008: Unrestorable recursive deletion outside temp directories.
-        let is_recursive_del = lower.contains("rm -rf ")
-            || lower.contains("rm -fr ")
-            || (lower.contains("remove-item") && lower.contains("-recurse"))
-            || lower.contains("rmdir /s");
-        if is_recursive_del && !is_temp_path_hint(&lower) {
+        let is_recursive_del = (flags & BIT_OP8_REC_DIRECT) != 0
+            || ((flags & BIT_OP8_REMOVE_ITEM) != 0 && (flags & BIT_OP8_RECURSE) != 0);
+        if is_recursive_del && (flags & BIT_OP8_TEMP_HINT) == 0 {
             return Some((
                 "OP-008",
                 "ASI08",
@@ -724,10 +784,8 @@ pub fn evaluate_deterministic_rules(
         }
 
         // OP-010: Reverse shells and raw socket backdoors.
-        if lower.contains("/dev/tcp/")
-            || lower.contains("nc -e ")
-            || lower.contains("ncat -e ")
-            || (lower.contains("pty.spawn") && lower.contains("socket"))
+        if (flags & BIT_OP10_DIRECT) != 0
+            || ((flags & BIT_OP10_PTY) != 0 && (flags & BIT_OP10_SOCKET) != 0)
         {
             return Some((
                 "OP-010",

@@ -34,7 +34,10 @@
     "@vestige/mcp-darwin-arm64": "7.0.0",
     "@vestige/mcp-darwin-x64": "7.0.0",
     "@vestige/mcp-linux-arm64": "7.0.0",
+    "@vestige/mcp-linux-arm64-musl": "7.0.0",
     "@vestige/mcp-linux-x64": "7.0.0",
+    "@vestige/mcp-linux-x64-musl": "7.0.0",
+    "@vestige/mcp-win32-arm64": "7.0.0",
     "@vestige/mcp-win32-x64": "7.0.0"
   },
   "files": [

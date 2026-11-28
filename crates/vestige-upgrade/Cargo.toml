@@ -23,8 +23,8 @@ strata-verify = { path = "../strata-verify" }
 vestige-core = { path = "../vestige-core", default-features = false }
 
 [dev-dependencies]
-rusqlite = { version = "0.40", features = ["bundled"] }
-sha2 = "0.11"
+rusqlite = { version = "0.43", features = ["bundled"] }
+sha2 = "0.11.2"
 tempfile = "3"
 strata = { path = "../strata" }
 strata-migrate = { path = "../strata-migrate", features = ["sqlite-reader"] }

@@ -19,14 +19,14 @@ v3-engine = []
 bundled-sqlite = []
 codebase-git = []
 encryption = []
-connectors = ["dep:reqwest"]
-cloud-sync = ["dep:reqwest", "reqwest/blocking", "dep:chacha20poly1305", "dep:argon2"]
+connectors = ["dep:reqwest", "dep:aws-lc-rs"]
+cloud-sync = ["dep:reqwest", "reqwest/blocking", "dep:aws-lc-rs", "dep:chacha20poly1305", "dep:argon2"]
 
 [dependencies]
 # Serialization
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_json_canonicalizer = "0.3"
+serde_json = "1.0.154"
+serde_json_canonicalizer = "0.4"
 base64 = "0.23"
 ed25519-dalek = "3"
 
@@ -43,14 +43,14 @@ thiserror = "2"
 directories = "6"
 
 # Async runtime (required for codebase module; `time` backs connector backoff)
-tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.54", features = ["sync", "rt-multi-thread", "macros", "time"] }
 
 # Tracing for structured logging
 tracing = "0.1"
 
 trait-variant = "0.1"
-blake3 = "1"
-sha2 = "0.11"
+blake3 = "1.8.8"
+sha2 = "0.11.2"
 
 # ============================================================================
 # OPTIONAL: External-source connectors (#57)
@@ -58,7 +58,8 @@ sha2 = "0.11"
 # HTTP client for network-backed reference connectors (GitHub Issues, Redmine).
 # rustls so connectors build with no system OpenSSL dependency. Behind the
 # `connectors` feature — the default local-first build does not link reqwest.
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "query"], optional = true }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "query"], optional = true }
+aws-lc-rs = { version = "1.19", features = ["prebuilt-nasm"], optional = true }
 
 # ============================================================================
 # OPTIONAL: Zero-knowledge client-side encryption for Vestige Cloud sync

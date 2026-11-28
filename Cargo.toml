@@ -20,9 +20,6 @@ members = [
     "crates/strata-store",
     "crates/strata-verify",
 ]
-exclude = [
-    "fastembed-rs",
-]
 
 [workspace.package]
 version = "7.0.0"
@@ -32,26 +29,43 @@ repository = "https://github.com/samvallad33/vestige"
 authors = ["Sam Valladares"]
 
 [workspace.dependencies]
-# Share deps across workspace
-tokio = { version = "1", features = ["full"] }
+# Share deps across workspace (surgical tokio features; zero `full` bloat)
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "signal", "fs"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = "1.0.154"
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
+blake3 = "1.8.8"
+sha2 = "0.11.2"
+base64 = "0.23"
+rapidhash = "4.5"
+mimalloc = "0.1.52"
+daachorse = "5.1"
 
 [profile.release]
-lto = true
+lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
+opt-level = 3
+
+[profile.dist]
+inherits = "release"
+lto = "fat"
 opt-level = "z"
 
 [profile.dev]
 opt-level = 1
-debug = 0
+debug = "line-tables-only"
 incremental = true
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.build-override]
+opt-level = 3
 
 # Local benchmarking only: fast to build, fast to run. `release` stays the shipping profile.
 [profile.bench-fast]

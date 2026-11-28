@@ -212,14 +212,14 @@ pub fn verify_with_head<E: VersionedFold>(
                 log_seq: cp.log_seq,
             });
         }
-        if let Some(pls) = prev_log_seq {
-            if cp.log_seq <= pls {
-                return Err(VerifyError::CheckpointOutOfOrder {
-                    index,
-                    log_seq: cp.log_seq,
-                    prev_log_seq: pls,
-                });
-            }
+        if let Some(pls) = prev_log_seq
+            && cp.log_seq <= pls
+        {
+            return Err(VerifyError::CheckpointOutOfOrder {
+                index,
+                log_seq: cp.log_seq,
+                prev_log_seq: pls,
+            });
         }
         if cp.prev_checkpoint != prev_hash {
             return Err(VerifyError::ChainBreak {
@@ -251,13 +251,13 @@ pub fn verify_with_head<E: VersionedFold>(
             if event.seq() != seq {
                 return Err(VerifyError::EventSeqMismatch { seq });
             }
-            if let Some(applied) = last_applied {
-                if seq <= applied {
-                    return Err(VerifyError::OutOfOrderEvent {
-                        seq,
-                        applied_seq: applied,
-                    });
-                }
+            if let Some(applied) = last_applied
+                && seq <= applied
+            {
+                return Err(VerifyError::OutOfOrderEvent {
+                    seq,
+                    applied_seq: applied,
+                });
             }
             let bytes =
                 borsh::to_vec(&event).expect("borsh serialize of StrataEvent is infallible");
@@ -284,15 +284,14 @@ pub fn verify_with_head<E: VersionedFold>(
         prev_log_seq = Some(cp.log_seq);
     }
 
-    if let Some(hash) = head_hash {
-        if let Some(cp) = checkpoints.last() {
-            if checkpoint_hash(cp) != hash {
-                return Err(VerifyError::CheckpointHashMismatch {
-                    index: checkpoints.len() - 1,
-                    log_seq: cp.log_seq,
-                });
-            }
-        }
+    if let Some(hash) = head_hash
+        && let Some(cp) = checkpoints.last()
+        && checkpoint_hash(cp) != hash
+    {
+        return Err(VerifyError::CheckpointHashMismatch {
+            index: checkpoints.len() - 1,
+            log_seq: cp.log_seq,
+        });
     }
 
     if let Some((seq, _, _)) = pending {

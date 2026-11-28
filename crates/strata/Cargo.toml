@@ -1,7 +1,7 @@
 [package]
 name = "strata"
 version = "7.0.0"
-edition = "2021"
+edition = "2024"
 description = "Strata: append-only, fail-stop write-ahead log with hash-chained, signed segments"
 license = "AGPL-3.0-only"
 publish = false
@@ -13,7 +13,7 @@ publish = false
 [dependencies]
 # borsh >= 1.6 ships derive macros behind an opt-in feature.
 borsh = { version = "1", features = ["derive"] }
-blake3 = "1.8"
+blake3 = "1.8.8"
 ed25519-dalek = "3"
 # OS CSPRNG for the log signing seed and ids on every platform, so the
 # Windows path is the same code CI exercises on unix.

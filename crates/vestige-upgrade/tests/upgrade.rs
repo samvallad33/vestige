@@ -395,8 +395,7 @@ fn inflate_nodes(db: &Path, extra: usize) {
         .unwrap();
     let cols: Vec<String> = stmt
         .column_names()
-        .iter()
-        .map(|c| (*c).to_string())
+        .map(str::to_string)
         .collect();
     let mut rows = stmt.query([]).unwrap();
     let row = rows.next().unwrap().unwrap();

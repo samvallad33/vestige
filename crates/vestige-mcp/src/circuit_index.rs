@@ -13,11 +13,13 @@
 //! - Open-Circuit Back-EMF epistemic abstention & missing-premise proof (`#855`, `strata_causal_math`)
 //! - Rissanen MDL marginal bit-gain packet sizing (`mdl_setup_turn_bits`)
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
+use rapidhash::HashMapExt;
+use rapidhash::fast::RapidHashMap as HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use strata_causal_math::wave15_ceiling::prove_premise_coverage;
@@ -118,7 +120,7 @@ struct StoreCircuitCache {
     scope_ids: HashMap<String, HashSet<String>>,
     receipts: Vec<Value>,
     scores: BTreeMap<String, i128>,
-    links_by_id: HashMap<String, Vec<vestige_core::retrieval::TurnLink>>,
+    links_by_id: std::collections::HashMap<String, Vec<vestige_core::retrieval::TurnLink>>,
     entity_tags_lower: Vec<Vec<(String, String, Option<String>)>>,
     zset: ZSet<String>,
     generation: u64,

@@ -75,9 +75,11 @@ export interface StormOptions {
  * update(dt) each frame, and transitionTo(role, worldPos) on each narrative
  * beat. dispose() releases all GPU resources.
  */
-/** The TSL compute node Fn(...)().compute(count) produces. three@0.172 does not
- * export a public type for it; it is opaque and only handed to computeAsync(). */
-type ComputeDispatch = ReturnType<ReturnType<ReturnType<typeof Fn>>['compute']>;
+/** The TSL compute node Fn(...)().compute(count) produces. It is opaque and
+ * only handed to renderer.computeAsync(). */
+type ComputeDispatch = object;
+type TslFloat = ReturnType<typeof length>;
+type TslVec3 = ReturnType<typeof cross>;
 
 export class SemanticComputeStorm {
 	readonly count: number;
@@ -257,7 +259,7 @@ export class SemanticComputeStorm {
 
 			// ── CURL NOISE (divergence-free flow → worlds 0 nebula, 5 fluid) ──
 			// Never clumps, never stops; the signature "living smoke" motion.
-			const curl = Fn(([p]: [ReturnType<typeof vec3>]) => {
+			const curl = Fn(([p]: [TslVec3]) => {
 				const e = float(0.6);
 				const dx = mx_noise_vec3(p.add(vec3(e, 0, 0))).sub(mx_noise_vec3(p.sub(vec3(e, 0, 0))));
 				const dy = mx_noise_vec3(p.add(vec3(0, e, 0))).sub(mx_noise_vec3(p.sub(vec3(0, e, 0))));
@@ -320,7 +322,7 @@ export class SemanticComputeStorm {
 
 			// ── COMPLEX-MATH HELPERS (sinh/cosh/tanh are NOT in three@0.172 — expand
 			// via the confirmed .exp()). Used by the Calabi–Yau + Boy's surface forms. ──
-			type FNode = ReturnType<typeof float>;
+			type FNode = TslFloat;
 			type VNode = ReturnType<typeof vec2>;
 			const sinhT = (x: FNode) => x.exp().sub(x.mul(-1).exp()).mul(0.5);
 			const coshT = (x: FNode) => x.exp().add(x.mul(-1).exp()).mul(0.5);
@@ -434,7 +436,7 @@ export class SemanticComputeStorm {
 			const wFoam = tpmsBase.mul(R.mul(0.5).add(fTPMS.mul(R.mul(0.12)))); // skin ± displacement
 
 			// select() chain — no dynamic indexing in this TSL build.
-			const homeFor = (idx: ReturnType<typeof float>) =>
+			const homeFor = (idx: TslFloat) =>
 				select(idx.equal(0), wNebula,
 				select(idx.equal(1), wAnchor,
 				select(idx.equal(2), wAttractor,
@@ -616,18 +618,18 @@ export class SemanticComputeStorm {
 		// and the spectral dispersion wave.
 		const palette = Fn(
 			([t, a, b, c, d]: [
-				ReturnType<typeof float>,
-				ReturnType<typeof vec3>,
-				ReturnType<typeof vec3>,
-				ReturnType<typeof vec3>,
-				ReturnType<typeof vec3>,
+				TslFloat,
+				TslVec3,
+				TslVec3,
+				TslVec3,
+				TslVec3,
 			]) => a.add(b.mul(cos(c.mul(t).add(d).mul(6.28318))))
 		);
 
 		// ── BLACKBODY K→RGB ── real plasma-cooling color (Tanner-Helland approx).
 		// Drives the detonation: blue-white core (hot) cooling to red embers as the
 		// blast decays. if/else collapsed to select() for this TSL build.
-		const blackbody = Fn(([kelvin]: [ReturnType<typeof float>]) => {
+		const blackbody = Fn(([kelvin]: [TslFloat]) => {
 			const k = kelvin.div(100.0);
 			const rHot = pow(k.sub(60.0).max(0.0001), float(-0.1332047592)).mul(329.698727446);
 			const r = k.lessThanEqual(66.0).select(float(255.0), rHot);

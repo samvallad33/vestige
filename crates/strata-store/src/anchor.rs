@@ -22,10 +22,10 @@ impl AnchorIndex {
     /// under another node moves to the node it now names.
     pub(crate) fn record(&mut self, anchors: &[AnchorRecord]) {
         for anchor in anchors {
-            if let Some(previous) = self.node_of.get(&anchor.id).cloned() {
-                if previous != anchor.node_id {
-                    self.remove_row(&previous, &anchor.id);
-                }
+            if let Some(previous) = self.node_of.get(&anchor.id).cloned()
+                && previous != anchor.node_id
+            {
+                self.remove_row(&previous, &anchor.id);
             }
             self.node_of
                 .insert(anchor.id.clone(), anchor.node_id.clone());

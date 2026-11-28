@@ -884,8 +884,7 @@ fn read_table(
         .map_err(|e| MigrationError::Source(format!("read {table_name}: {e}")))?;
     let columns: Vec<String> = stmt
         .column_names()
-        .iter()
-        .map(|name| (*name).to_string())
+        .map(str::to_string)
         .collect();
     let column_count = columns.len();
 

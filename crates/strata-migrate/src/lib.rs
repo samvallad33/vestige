@@ -593,10 +593,10 @@ fn receipt_matching(dir: &Path, source_blake3: &str) -> Option<records::Migratio
             if frame.kind != records::KIND_MIGRATION_RECEIPT {
                 continue;
             }
-            if let Ok(receipt) = records::decode_receipt(&frame.payload) {
-                if receipt.body.source_blake3_before == source_blake3 {
-                    return Some(receipt);
-                }
+            if let Ok(receipt) = records::decode_receipt(&frame.payload)
+                && receipt.body.source_blake3_before == source_blake3
+            {
+                return Some(receipt);
             }
         }
     }
@@ -631,10 +631,10 @@ fn stage_import(
     let lock_path = staging_lock_path(&staging);
     loop {
         if destination_occupied(dest)? {
-            if allow_idempotent {
-                if let Some(receipt) = receipt_matching(dest, source_blake3) {
-                    return Ok(idempotent_report(&snapshot, &receipt, started));
-                }
+            if allow_idempotent
+                && let Some(receipt) = receipt_matching(dest, source_blake3)
+            {
+                return Ok(idempotent_report(&snapshot, &receipt, started));
             }
             return Err(MigrationError::DestinationNotEmpty {
                 path: dest.display().to_string(),
@@ -699,14 +699,14 @@ fn import_holding_lock(
     } else {
         Carryover::default()
     };
-    if let Some(hook) = before_import {
-        if let Err(detail) = hook(staging) {
-            return Err(discard_staging(
-                lock,
-                staging,
-                MigrationError::Strata(detail),
-            ));
-        }
+    if let Some(hook) = before_import
+        && let Err(detail) = hook(staging)
+    {
+        return Err(discard_staging(
+            lock,
+            staging,
+            MigrationError::Strata(detail),
+        ));
     }
     let log = match open_log(staging, seed, source_blake3) {
         Ok(log) => log,
@@ -761,14 +761,14 @@ fn import_holding_lock(
             MigrationError::Strata("replay verification failed".into()),
         ));
     }
-    if let Some(hook) = before_publish {
-        if let Err(detail) = hook(staging) {
-            return Err(discard_staging(
-                lock,
-                staging,
-                MigrationError::Strata(detail),
-            ));
-        }
+    if let Some(hook) = before_publish
+        && let Err(detail) = hook(staging)
+    {
+        return Err(discard_staging(
+            lock,
+            staging,
+            MigrationError::Strata(detail),
+        ));
     }
     if let Some(hook) = carry_over {
         let expected = carryover.intentions.len() as u64;

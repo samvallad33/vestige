@@ -21,9 +21,12 @@ struct TmpdirGuard(Option<std::ffi::OsString>);
 
 impl Drop for TmpdirGuard {
     fn drop(&mut self) {
-        match self.0.take() {
-            Some(value) => std::env::set_var("TMPDIR", value),
-            None => std::env::remove_var("TMPDIR"),
+        // Safety: serialized by ENV_LOCK across all tests in this binary.
+        unsafe {
+            match self.0.take() {
+                Some(value) => std::env::set_var("TMPDIR", value),
+                None => std::env::remove_var("TMPDIR"),
+            }
         }
     }
 }
@@ -81,7 +84,10 @@ fn snapshot_copy_is_owner_only_in_the_data_dir_and_removed() {
     let data = dest.parent().unwrap().to_path_buf();
     let probe = root.path().join("system-tmp");
     std::fs::create_dir(&probe).unwrap();
-    std::env::set_var("TMPDIR", &probe);
+    // Safety: serialized by ENV_LOCK across all tests in this binary.
+    unsafe {
+        std::env::set_var("TMPDIR", &probe);
+    }
 
     let seen: Arc<Mutex<Vec<(PathBuf, u32, u32)>>> = Arc::default();
     let seen_in_hook = Arc::clone(&seen);

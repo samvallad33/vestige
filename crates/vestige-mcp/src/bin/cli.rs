@@ -11,6 +11,9 @@
 #[path = "../glibc_compat.rs"]
 mod glibc_compat;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::collections::HashSet;
 use std::env;
 use std::fs;
@@ -23,7 +26,7 @@ use std::sync::{Arc, OnceLock};
 use anyhow::Context;
 use chrono::{NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
-use colored::Colorize;
+use owo_colors::OwoColorize;
 use vestige_core::{
     ConnectionRecord, IngestInput, PortableImportMode, SecretConfidence, SourceEnvelope,
     SourceUpsertOutcome, Storage, scan_secrets,
@@ -3539,11 +3542,11 @@ fn print_distribution_bar(label: &str, count: usize, total: usize, color: &str) 
 
     let bar = format!("{}{}", "#".repeat(filled), "-".repeat(empty));
     let colored_bar = match color {
-        "green" => bar.green(),
-        "yellow" => bar.yellow(),
-        "red" => bar.red(),
-        "magenta" => bar.magenta(),
-        _ => bar.white(),
+        "green" => bar.green().to_string(),
+        "yellow" => bar.yellow().to_string(),
+        "red" => bar.red().to_string(),
+        "magenta" => bar.magenta().to_string(),
+        _ => bar.white().to_string(),
     };
 
     println!(
@@ -3576,10 +3579,10 @@ fn run_health() -> anyhow::Result<()> {
     };
 
     let colored_status = match status_color {
-        "green" => status.green().bold(),
-        "yellow" => status.yellow().bold(),
-        "red" => status.red().bold(),
-        _ => status.white().bold(),
+        "green" => status.green().bold().to_string(),
+        "yellow" => status.yellow().bold().to_string(),
+        "red" => status.red().bold().to_string(),
+        _ => status.white().bold().to_string(),
     };
 
     println!("{}: {}", "Status".white().bold(), colored_status);
@@ -3697,9 +3700,9 @@ fn run_health() -> anyhow::Result<()> {
     println!("{}", "Recommendations:".cyan().bold());
     for rec in &recommendations {
         let icon = if rec.starts_with("CRITICAL") {
-            "!".red().bold()
+            "!".red().bold().to_string()
         } else {
-            ">".cyan()
+            ">".cyan().to_string()
         };
         let text = if rec.starts_with("CRITICAL") {
             rec.red().to_string()
@@ -4838,7 +4841,7 @@ fn run_forgotten_lesson(
             };
             println!(
                 "  {} · retention {}% · {}",
-                lesson["lesson_id"].as_str().unwrap_or("?").normal(),
+                lesson["lesson_id"].as_str().unwrap_or("?").default_color(),
                 lesson["retention_pct"].to_string().yellow(),
                 link.cyan(),
             );
@@ -7687,7 +7690,7 @@ fn run_compose(
             .chars()
             .take(70)
             .collect();
-        let idx = format!("{}.", i + 1).cyan().bold();
+        let idx = format!("{}.", i + 1).cyan().bold().to_string();
         let metrics = format!(
             "{:.2}  (novelty {:.2}, bridge {:.2})",
             c.score, c.novelty_score, c.bridge_score

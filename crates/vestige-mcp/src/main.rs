@@ -19,6 +19,9 @@
 #[path = "glibc_compat.rs"]
 mod glibc_compat;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use vestige_mcp::attach;
 use vestige_mcp::cognitive;
 use vestige_mcp::protocol;

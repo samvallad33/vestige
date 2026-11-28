@@ -6,6 +6,7 @@
 pub mod cli_ops;
 pub mod ledger;
 pub mod mmr;
+pub mod pq_fips204;
 
 #[cfg(test)]
 mod tests {

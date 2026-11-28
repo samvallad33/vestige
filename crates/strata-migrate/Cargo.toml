@@ -1,7 +1,7 @@
 [package]
 name = "strata-migrate"
 version = "7.0.0"
-edition = "2021"
+edition = "2024"
 license = "AGPL-3.0-only"
 description = "One-shot migration tool: empties the Vestige SQLite store into a STRATA log"
 publish = false
@@ -23,26 +23,26 @@ sqlite-reader = ["dep:rusqlite"]
 
 [dependencies]
 borsh = { version = "1", features = ["derive"] }
-blake3 = "1"
+blake3 = "1.8.8"
 # OS CSPRNG for the receipt key and log signing seed (works on Windows too).
 getrandom = "0.4"
 # MIGRATION_RECEIPT signatures (non-derivable key, verified via the public
 # key recorded in the log).
 ed25519-dalek = { version = "3", default-features = false, features = ["fast", "rand_core"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = "1.0.154"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 tempfile = "3"
-sha2 = "0.11"
+sha2 = "0.11.2"
 # DSSE payload/signature decoding for the receipt_envelopes chain check.
-base64 = "0.22"
+base64 = "0.23"
 # Fixture generator bin error type.
 anyhow = "1"
 # Read-only source reader (mode=ro&immutable=1 URI). Optional: log and
 # receipt checks compile without it. Same version/features as vestige-core
 # so a migrate build unifies to one bundled SQLite.
-rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+rusqlite = { version = "0.43", features = ["bundled"], optional = true }
 
 strata = { path = "../strata" }
 strata-kernel = { path = "../strata-kernel" }

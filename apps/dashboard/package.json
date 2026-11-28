@@ -13,22 +13,23 @@
   },
   "dependencies": {
     "mediabunny": "^1.55.5",
-    "three": "^0.172.0"
+    "three": "^0.187.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@sveltejs/adapter-static": "^3.0.0",
     "@sveltejs/kit": "^2.70.3",
-    "@sveltejs/vite-plugin-svelte": "^7.3.0",
-    "@tailwindcss/vite": "^4.3.3",
+    "@sveltejs/vite-plugin-svelte": "^7.3.2",
+    "@tailwindcss/vite": "^4.3.5",
     "@types/node": "^24.13.3",
-    "@types/three": "^0.172.0",
-    "@vitest/coverage-v8": "^5.0.0",
-    "svelte": "^5.57.0",
-    "svelte-check": "^4.7.6",
-    "tailwindcss": "^4.3.3",
+    "@types/three": "^0.187.0",
+    "@vitest/coverage-v8": "^5.1.1",
+    "@webgpu/types": "^0.1.74",
+    "svelte": "^5.59.2",
+    "svelte-check": "^4.7.8",
+    "tailwindcss": "^4.3.5",
     "typescript": "^6.0.3",
-    "vite": "^8.2.2",
-    "vitest": "^5.0.0"
+    "vite": "^8.4.0",
+    "vitest": "^5.1.1"
   }
 }

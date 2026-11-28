@@ -89,18 +89,23 @@ strata-import = { path = "../strata-import" }
 strata-passport = { path = "../strata-passport" }
 strata-runtime = { path = "../strata-runtime" }
 strata-simd = { path = "../strata-simd" }
-blake3 = "1"
+blake3 = "1.8.8"
 
 # ============================================================================
 # MCP Server Dependencies
 # ============================================================================
-# Async runtime
-tokio = { version = "1", features = ["full", "io-std"] }
+# Async runtime (surgical features — never pull tokio/full bloat)
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "signal", "fs", "process"] }
+
+# High-speed allocator, hasher, and double-array AC scanner (Nov 2026 frontier)
+mimalloc = "0.1.52"
+rapidhash = "4.5"
+daachorse = "5.1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.11"
+serde_json = "1.0.154"
+sha2 = "0.11.2"
 unicode-normalization = "0.1"
 
 # Date/Time
@@ -131,12 +136,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 directories = "6"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
-colored = "3"
+clap = { version = "4.6.10", features = ["derive"] }
+owo-colors = "4.4"
 
 # SQLite (for backup WAL checkpoint) — only in `legacy-sqlite` builds
 # (build/t5-legacy-isolation).
-rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+rusqlite = { version = "0.43", features = ["bundled"], optional = true }
 
 # Dashboard (v2.0) - HTTP server + WebSocket + embedded SvelteKit
 axum = { version = "0.8", default-features = false, features = ["json", "query", "tokio", "http1", "ws"] }
@@ -145,8 +150,8 @@ tower-http = { version = "0.7", features = ["cors", "set-header"] }
 futures-util = "0.3"
 open = "5"
 
-# Embedded SvelteKit dashboard (v2.0)
-include_dir = "0.7"
+# Embedded SvelteKit dashboard (compressed release assets + debug hot-reload + ETag hashes)
+rust-embed = { version = "8.14", features = ["compression"] }
 mime_guess = "2"
 
 tempfile = "3"
