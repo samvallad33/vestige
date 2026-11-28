@@ -98,9 +98,18 @@ importers:
       '@vestige/mcp-linux-arm64':
         specifier: 7.0.0
         version: link:../mcp-linux-arm64
+      '@vestige/mcp-linux-arm64-musl':
+        specifier: 7.0.0
+        version: link:../mcp-linux-arm64-musl
       '@vestige/mcp-linux-x64':
         specifier: 7.0.0
         version: link:../mcp-linux-x64
+      '@vestige/mcp-linux-x64-musl':
+        specifier: 7.0.0
+        version: link:../mcp-linux-x64-musl
+      '@vestige/mcp-win32-arm64':
+        specifier: 7.0.0
+        version: link:../mcp-win32-arm64
       '@vestige/mcp-win32-x64':
         specifier: 7.0.0
         version: link:../mcp-win32-x64
