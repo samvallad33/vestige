@@ -182,8 +182,9 @@ function nativeGuardRegistered(value, gate, dialect) {
     return (group.hooks || [group]).some(handler => {
       if (typeof handler.command !== 'string') return false;
       let argv = words(handler.command);
-      if (/^vestige(?:\.exe)?$/i.test(path.basename(argv[0] || '')) &&
-          JSON.stringify(argv.slice(1)) === JSON.stringify(['gate', 'hook', '--source', dialect])) {
+      if (/(?:^vestige(?:-hook)?(?:\.exe)?$)/i.test(path.basename(argv[0] || '')) &&
+          (JSON.stringify(argv.slice(1)) === JSON.stringify(['gate', 'hook', '--source', dialect]) ||
+           JSON.stringify(argv.slice(1)) === JSON.stringify(['gate', '--source', dialect]))) {
         return true;
       }
       if (argv[0] === '[') {
@@ -387,11 +388,16 @@ function plan({ home = os.homedir(), bin, platform = os.platform(), env = proces
   const resolvedVestigeBin = fs.existsSync(siblingVestigeBin)
     ? siblingVestigeBin
     : (executable('vestige', home, platform, env) || siblingVestigeBin);
+  const siblingHookBin = path.join(path.dirname(found), platform === 'win32' ? 'vestige-hook.exe' : 'vestige-hook');
+  const resolvedHookBin = fs.existsSync(siblingHookBin)
+    ? siblingHookBin
+    : (executable('vestige-hook', home, platform, env) || '');
   sharedBridgeCfg.after = json({
     ...prevBridgeCfg,
     gate: guard ? 'native' : (prevBridgeCfg.gate || ''),
     requireGate: Boolean(guard || prevBridgeCfg.requireGate),
     vestigeBin: resolvedVestigeBin,
+    ...(resolvedHookBin ? { hookBin: resolvedHookBin } : {}),
     dataDir: (env && env.VESTIGE_DATA_DIR) || prevBridgeCfg.dataDir || path.join(home, '.vestige', 'store'),
     memoryConfig: config.file,
     hooksDir: path.join(base, 'hooks'),
@@ -403,11 +409,11 @@ function plan({ home = os.homedir(), bin, platform = os.platform(), env = proces
     const legacyGate = path.join(home, '.operator', 'gate', 'operator-gate.py');
     const mode = change(path.join(home, '.operator', 'mode'), 'start native Rust guard in enforce mode');
     if (mode.before === null) mode.after = 'enforce\n';
-    // Native Rust `vestige gate` replaces Python operator-gate.py with <1ms evaluation
+    // Native Rust `vestige-hook` / `vestige gate` replaces Python operator-gate.py with <10ms evaluation
     // and O(1) SHA-256 day-file receipts compatible with precedent(query="stops").
     const guardBase = path.join(home, '.operator', 'state', 'vestige-memory');
     const authority = change(path.join(guardBase, 'config.json'), 'install protected native Rust guard routing');
-    authority.after = json({ vestigeBin: resolvedVestigeBin, gate: 'native' });
+    authority.after = json({ vestigeBin: resolvedVestigeBin, ...(resolvedHookBin ? { hookBin: resolvedHookBin } : {}), gate: 'native' });
     const adapter = change(path.join(guardBase, 'guard.cjs'), 'install protected fail-closed host adapter');
     adapter.after = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'guard.cjs'), 'utf8');
     for (const client of detected.filter(c => c.hookFile && EVENTS[c.dialect])) {
@@ -456,8 +462,9 @@ function plan({ home = os.homedir(), bin, platform = os.platform(), env = proces
       const agyMemCfg = path.join(agyBridge, 'memory-config.json');
       setRaw(agyMemCfg, json({ version: VERSION, binary: found, binaryArgs: ['--data-dir', agyDataDir], triggers: agyTriggers, deadlineMs: 12000 }), 'configure Antigravity memory RPC');
       setRaw(path.join(agyBridge, 'bridge.json'), json({
-        gate: gatePath,
+        gate: gatePath || 'native',
         vestigeBin: resolvedVestigeBin,
+        ...(resolvedHookBin ? { hookBin: resolvedHookBin } : {}),
         dataDir: agyDataDir,
         memoryConfig: agyMemCfg,
         hooksDir: path.join(agyBridge, 'hooks'),
@@ -602,6 +609,11 @@ async function inspect(home = os.homedir(), timeout = 2000) {
     for (const rel of ['hooks.json', 'bridge/agy-bridge.cjs', 'bridge/bridge.json', 'bridge/memory-config.json', 'bridge/hooks/memory.cjs', 'bridge/hooks/reflex.cjs']) {
       add(`Antigravity plugin: ${rel}`, fs.existsSync(path.join(agyRoot, rel)), 'Rerun npx @vestige/init to install Antigravity hooks');
     }
+    try {
+      const agyCfg = JSON.parse(fs.readFileSync(path.join(agyRoot, 'bridge', 'bridge.json'), 'utf8'));
+      const stalePyGate = typeof agyCfg.gate === 'string' && agyCfg.gate.endsWith('.py');
+      add('Antigravity bridge uses native Rust gate (not legacy Python operator-gate.py)', !stalePyGate, 'Set "gate": "native" in ~/.gemini/config/plugins/vestige/bridge/bridge.json');
+    } catch {}
   }
   if (manifest?.guard) for (const relative of ['guard.cjs','config.json']) add(`protected guard runtime: ${relative}`,fs.existsSync(path.join(home,'.operator','state','vestige-memory',relative)),'Rerun init --guard in your terminal');
   let packet = null; let transport;
@@ -663,7 +675,7 @@ async function main(args = process.argv.slice(2)) {
   const result = apply(planned);
   if (machine) { console.log(json({ status: 'installed', ...result, clients: planned.detected.map(c => c.id), skipped: planned.handAdd.map(h => h.id) })); return; }
   say(`✓ Memory ready · ${result.written} files · ${result.backups.length} backups`);
-  if (guard) say(`  Operator guard configured; owner permits: operator-gate approve <action-id> (or Python + ~/.operator/gate/operator-gate.py approve <action-id>)`);
+  if (guard) say(`  Operator guard configured; owner permits: vestige gate approve <action-id> (and vestige gate verify-gpu <script> before GPU launches)`);
   say(`  Installed in ${planned.base}`);
   say('  Restart clients; Codex also requires review/trust in /hooks. MCP-only clients use the memory tools.');
   say('  Try: Tell me something about a friend, then ask me about them later.');

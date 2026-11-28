@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/vestige-lexicons",
     "crates/vestige-core",
+    "crates/vestige-hook",
     "crates/vestige-mcp",
     "crates/vestige-proof",
     "crates/vestige-upgrade",
@@ -51,6 +53,7 @@ panic = "abort"
 strip = true
 opt-level = 3
 
+# Fat LTO shipping profile for CI release artifacts when binary size is prioritized.
 [profile.dist]
 inherits = "release"
 lto = "fat"

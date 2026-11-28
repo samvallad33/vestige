@@ -47,6 +47,7 @@ function loadConfig() {
     python: cfg.python || (process.platform === 'win32' ? 'python' : 'python3'),
     gate: cfg.gate ? resolveHome(cfg.gate) : '',
     vestigeBin: resolveHome(cfg.vestigeBin || path.join(os.homedir(), '.vestige', 'bin', process.platform === 'win32' ? 'vestige.exe' : 'vestige')),
+    hookBin: cfg.hookBin ? resolveHome(cfg.hookBin) : '',
     dataDir: resolveHome(cfg.dataDir || path.join(os.homedir(), '.vestige', 'store')),
     memoryConfig: memCfgPath,
     memCfg,
@@ -376,12 +377,26 @@ async function turnoverSessionStartAsync(_cfg, _payload) {
   // Native Rust `vestige gate` replaces legacy Python turnover startup overhead.
 }
 
+function resolveFastHookBin(cfg) {
+  if (cfg.hookBin && fs.existsSync(cfg.hookBin)) return cfg.hookBin;
+  if (cfg.vestigeBin) {
+    const sibling = path.join(path.dirname(cfg.vestigeBin), process.platform === 'win32' ? 'vestige-hook.exe' : 'vestige-hook');
+    if (fs.existsSync(sibling)) return sibling;
+  }
+  return '';
+}
+
 function nativeMissionHookRun(cfg, event, payload) {
-  if (!cfg.vestigeBin || !fs.existsSync(cfg.vestigeBin)) return null;
+  const hookBin = resolveFastHookBin(cfg);
+  const bin = hookBin || cfg.vestigeBin;
+  if (!bin || !fs.existsSync(bin)) return null;
+  const args = hookBin
+    ? ['dispatch', 'antigravity', event, '--no-receipt']
+    : ['hook', 'dispatch', 'antigravity', event, '--no-receipt'];
   try {
     const r = spawnSync(
-      cfg.vestigeBin,
-      ['hook', 'dispatch', 'antigravity', event, '--no-receipt'],
+      bin,
+      args,
       {
         input: JSON.stringify(payload),
         encoding: 'utf8',
@@ -771,10 +786,15 @@ async function preToolUse(cfg, input) {
   if (cfg.gate) {
     let r;
     if (cfg.gate === 'native') {
-      if (!cfg.vestigeBin || !fs.existsSync(cfg.vestigeBin)) {
-        return deny(`Native Vestige gate binary missing at ${cfg.vestigeBin || 'vestige'}. Fail-closed: a missing gate is never permission to run.`);
+      const hookBin = resolveFastHookBin(cfg);
+      const bin = hookBin || cfg.vestigeBin;
+      if (!bin || !fs.existsSync(bin)) {
+        return deny(`Native Vestige gate binary missing at ${bin || 'vestige'}. Fail-closed: a missing gate is never permission to run.`);
       }
-      r = spawnSync(cfg.vestigeBin, ['gate', 'hook', '--source', 'antigravity'], {
+      const gateArgs = hookBin
+        ? ['gate', '--source', 'antigravity']
+        : ['gate', 'hook', '--source', 'antigravity'];
+      r = spawnSync(bin, gateArgs, {
         input: JSON.stringify(payload),
         encoding: 'utf8',
         timeout: cfg.gateTimeoutMs,
@@ -1338,15 +1358,21 @@ async function stop(cfg, input) {
   const blockReason = missionBlock || (rfxOut && rfxOut.decision === 'block' && rfxOut.reason) || '';
 
   const t = payload.session_id ? turnState(payload.session_id) : null;
-  const alreadyBlockedPrompt = t && t.s.promptKey && t.s.stopBlockedPromptKey === t.s.promptKey;
+  const maxBlocks = 3;
+  let blockCount = 0;
+  if (t && t.s.promptKey) {
+    if (t.s.stopBlockedPromptKey === t.s.promptKey) {
+      blockCount = Number(t.s.stopBlockCount || 0);
+    }
+  }
   if (
     blockReason &&
     input.terminationReason === 'NO_TOOL_CALL' &&
-    input.continuationActive !== true &&
-    !alreadyBlockedPrompt
+    blockCount < maxBlocks
   ) {
     if (t && t.s.promptKey) {
       t.s.stopBlockedPromptKey = t.s.promptKey;
+      t.s.stopBlockCount = blockCount + 1;
       t.save(t.s);
     }
     return { decision: 'continue', reason: blockReason };

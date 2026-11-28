@@ -778,7 +778,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 2.0.119",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2131,6 +2131,15 @@ name = "lru-slab"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
+
+[[package]]
+name = "lz4_flex"
+version = "0.11.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13591d77a9b6d941f7e6fcade7f9dfd9e801308752bde50c0a9bb5852778c22c"
+dependencies = [
+ "twox-hash",
+]
 
 [[package]]
 name = "mac-addr"
@@ -3840,6 +3849,7 @@ dependencies = [
  "blake3",
  "borsh",
  "ed25519-dalek",
+ "lz4_flex",
  "rapidhash",
  "strata",
  "strata-gate",
@@ -4371,6 +4381,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "twox-hash"
+version = "2.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4520,6 +4536,26 @@ dependencies = [
  "tracing",
  "trait-variant",
  "uuid",
+ "vestige-lexicons",
+]
+
+[[package]]
+name = "vestige-hook"
+version = "7.0.0"
+dependencies = [
+ "chrono",
+ "mimalloc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.2",
+ "tempfile",
+]
+
+[[package]]
+name = "vestige-lexicons"
+version = "7.0.0"
+dependencies = [
+ "sha2 0.11.2",
 ]
 
 [[package]]
@@ -4581,7 +4617,9 @@ name = "vestige-proof"
 version = "7.0.0"
 dependencies = [
  "base64 0.23.1",
+ "blake3",
  "ed25519-dalek",
+ "fips204",
  "serde",
  "serde_json",
  "sha2 0.11.2",

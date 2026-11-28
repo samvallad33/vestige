@@ -53,10 +53,12 @@ function writeJson(file, value) {
 test('each supported platform maps to the package that carries its binaries', () => {
   assert.equal(kernel.platformPackage('darwin', 'arm64'), '@vestige/mcp-darwin-arm64');
   assert.equal(kernel.platformPackage('darwin', 'x64'), '@vestige/mcp-darwin-x64');
-  assert.equal(kernel.platformPackage('linux', 'arm64'), '@vestige/mcp-linux-arm64');
-  assert.equal(kernel.platformPackage('linux', 'x64'), '@vestige/mcp-linux-x64');
+  assert.equal(kernel.platformPackage('linux', 'arm64', { musl: false }), '@vestige/mcp-linux-arm64');
+  assert.equal(kernel.platformPackage('linux', 'x64', { musl: false }), '@vestige/mcp-linux-x64');
+  assert.equal(kernel.platformPackage('linux', 'arm64', { musl: true }), '@vestige/mcp-linux-arm64-musl');
+  assert.equal(kernel.platformPackage('linux', 'x64', { musl: true }), '@vestige/mcp-linux-x64-musl');
   assert.equal(kernel.platformPackage('win32', 'x64'), '@vestige/mcp-win32-x64');
-  assert.equal(kernel.platformPackage('win32', 'arm64'), null);
+  assert.equal(kernel.platformPackage('win32', 'arm64'), '@vestige/mcp-win32-arm64');
   assert.equal(kernel.platformPackage('freebsd', 'x64'), null);
 });
 

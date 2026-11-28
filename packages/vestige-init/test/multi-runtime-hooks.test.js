@@ -26,6 +26,8 @@ function hasUtf8Bom(buf) {
 function findExe(names, envVar) {
   if (process.env[envVar] && fs.existsSync(process.env[envVar])) return process.env[envVar];
   const roots = [
+    path.join('C:\\cargo-target-frontier', 'release'),
+    path.join('C:\\cargo-target-frontier', 'debug'),
     path.join('C:\\cargo-target-v71', 'release'),
     path.join('C:\\cargo-target-v71', 'debug'),
     path.join(REPO_ROOT, 'target', 'release'),
@@ -52,6 +54,8 @@ function findPython() {
 
 const VESTIGE_MCP_BIN = findExe(process.platform === 'win32' ? ['vestige-mcp.exe'] : ['vestige-mcp'], 'VESTIGE_MCP_BIN');
 const VESTIGE_BIN = findExe(process.platform === 'win32' ? ['vestige.exe'] : ['vestige'], 'VESTIGE_BIN');
+const VESTIGE_HOOK_BIN = findExe(process.platform === 'win32' ? ['vestige-hook.exe'] : ['vestige-hook'], 'VESTIGE_HOOK_BIN');
+const VESTIGE_GATE_BIN = VESTIGE_HOOK_BIN || VESTIGE_BIN || VESTIGE_MCP_BIN;
 
 function createTempBridgeEnv({ requireGate = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vestige-multi-rt-'));
@@ -87,6 +91,7 @@ function createTempBridgeEnv({ requireGate = true } = {}) {
     python: findPython(),
     gate: requireGate ? 'native' : '',
     requireGate,
+    hookBin: VESTIGE_HOOK_BIN || '',
     vestigeBin: VESTIGE_BIN || VESTIGE_MCP_BIN,
     dataDir,
     memoryConfig: memCfgPath,
@@ -285,7 +290,7 @@ test('2. Multi-runtime dialect normalization + Call Coach CC-001..CC-013 across 
   }
 });
 
-test('3. Fail-closed Operator Gate + mandatory precedent(query="stops") verified in EVERY host dialect', () => {
+test('3. Fail-closed Operator Gate + mandatory precedent(query="stops") verified in EVERY host dialect', { skip: !VESTIGE_GATE_BIN }, () => {
   const env = createTempBridgeEnv({ requireGate: true });
   try {
     // Codex PreToolUse -> exit 0 + hookSpecificOutput.permissionDecision: "deny" (OP-004)
@@ -361,7 +366,7 @@ test('3. Fail-closed Operator Gate + mandatory precedent(query="stops") verified
   }
 });
 
-test('4. OpenCode JS plugin enforces tool.execute.before block & Call Coach arg mutation', async () => {
+test('4. OpenCode JS plugin enforces tool.execute.before block & Call Coach arg mutation', { skip: !VESTIGE_GATE_BIN }, async () => {
   const env = createTempBridgeEnv({ requireGate: true });
   const prevBridge = process.env.VESTIGE_BRIDGE_PATH;
   const prevCfg = process.env.VESTIGE_BRIDGE_CONFIG;

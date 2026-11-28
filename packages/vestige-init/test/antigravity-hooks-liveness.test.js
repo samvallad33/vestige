@@ -996,3 +996,120 @@ test('11. UNDENIABLE E2E: 6-Tool Cognitive Autopilot (Silent Call Coach + Multi-
     env.cleanup();
   }
 });
+
+test('12. UNDENIABLE E2E: ultra-thin vestige-hook binary enforces OP-GPU-DRYRUN & 3-retry MissionContract v2 through agy-bridge', { skip: !VESTIGE_MCP_BIN }, () => {
+  const hookBin = [
+    process.env.VESTIGE_HOOK_BIN,
+    VESTIGE_BIN ? path.join(path.dirname(VESTIGE_BIN), process.platform === 'win32' ? 'vestige-hook.exe' : 'vestige-hook') : '',
+    path.join(REPO_ROOT, 'target', 'debug', process.platform === 'win32' ? 'vestige-hook.exe' : 'vestige-hook'),
+  ].find(p => p && fs.existsSync(p));
+  if (!hookBin) return; // skip cleanly when vestige-hook binary is not built in this test run
+
+  const env = createIsolatedBridgeEnv();
+  try {
+    const cfg = JSON.parse(fs.readFileSync(env.bridgeCfgPath, 'utf8'));
+    cfg.hookBin = hookBin;
+    cfg.gate = 'native';
+    fs.writeFileSync(env.bridgeCfgPath, JSON.stringify(cfg, null, 2));
+
+    const ws = path.join(env.root, 'gpu_ws');
+    const bloatDir = path.join(ws, 'legacy_bloat');
+    fs.mkdirSync(bloatDir, { recursive: true });
+    const trainPy = path.join(ws, 'train_v3.py');
+    fs.writeFileSync(trainPy, 'print("seed v3")\n');
+    const dryRunsDir = path.join(env.root, 'gpu_dryruns');
+    const missionsDir = path.join(env.root, 'missions');
+
+    const callWithEnv = (ev, payload) => {
+      const r = spawnSync(process.execPath, [SHIPPED_BRIDGE_JS, '--event', ev, '--config', env.bridgeCfgPath], {
+        cwd: ws,
+        env: {
+          ...process.env,
+          VESTIGE_DATA_DIR: env.dataDir,
+          OPERATOR_HOME: env.opHome,
+          VESTIGE_GPU_DRYRUNS_DIR: dryRunsDir,
+          VESTIGE_MISSIONS_DIR: missionsDir,
+          VESTIGE_HOOK_DEADLINE_MS: '15000',
+        },
+        input: JSON.stringify(payload),
+        encoding: 'utf8',
+        timeout: 30000,
+        windowsHide: true,
+      });
+      return JSON.parse(String(r.stdout || '{}').trim() || '{}');
+    };
+
+    const sid = 'agy-e2e-hook-v2-' + Date.now();
+    // 1. OP-GPU-DRYRUN blocks paid GPU launch without receipt
+    const gpuDenied1 = callWithEnv('PreToolUse', {
+      conversationId: sid,
+      workspacePaths: [ws],
+      cwd: ws,
+      stepIdx: 1,
+      toolCall: { id: 'gpu-1', name: 'run_command', args: { CommandLine: 'colab exec train_v3.py --gpu L4' } },
+    });
+    assert.equal(gpuDenied1.decision, 'deny', JSON.stringify(gpuDenied1));
+    assert.match(gpuDenied1.reason, /OP-GPU-DRYRUN/);
+
+    // Clear pendingOperatorStop via precedent(query="stops")
+    callWithEnv('PostToolUse', {
+      conversationId: sid,
+      workspacePaths: [ws],
+      cwd: ws,
+      stepIdx: 2,
+      toolCall: { id: 'prec-1', name: 'call_mcp_tool', args: { ServerName: 'vestige_vestige', ToolName: 'precedent', Arguments: { query: 'stops' } } },
+    });
+
+    // 2. Verify GPU script -> launch now allowed!
+    const vres = spawnSync(hookBin, ['verify-gpu', trainPy, '--summary', 'cpu dry-run ok'], {
+      env: { ...process.env, VESTIGE_GPU_DRYRUNS_DIR: dryRunsDir },
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    assert.equal(vres.status, 0, vres.stderr);
+
+    const gpuAllowed = callWithEnv('PreToolUse', {
+      conversationId: sid,
+      workspacePaths: [ws],
+      cwd: ws,
+      stepIdx: 3,
+      toolCall: { id: 'gpu-2', name: 'run_command', args: { CommandLine: 'colab exec train_v3.py --gpu L4' } },
+    });
+    assert.equal(gpuAllowed.decision, 'allow', JSON.stringify(gpuAllowed));
+
+    // 3. Mutate train_v3.py -> SHA-256 invalidated -> denied again!
+    fs.writeFileSync(trainPy, 'print("seed v3 mutated")\n');
+    const gpuDenied2 = callWithEnv('PreToolUse', {
+      conversationId: sid,
+      workspacePaths: [ws],
+      cwd: ws,
+      stepIdx: 4,
+      toolCall: { id: 'gpu-3', name: 'run_command', args: { CommandLine: 'colab exec train_v3.py --gpu L4' } },
+    });
+    assert.equal(gpuDenied2.decision, 'deny', JSON.stringify(gpuDenied2));
+    assert.match(gpuDenied2.reason, /OP-GPU-DRYRUN/);
+
+    // 4. MissionContract v2 through agy-bridge: PreInvocation captures legacy_bloat, Stop blocks up to 3 times even with continuationActive=true!
+    const mSid = 'agy-mission-v2-' + Date.now();
+    callWithEnv('PreInvocation', {
+      conversationId: mSid,
+      workspacePaths: [ws],
+      cwd: ws,
+      invocationNum: 1,
+      lastUserInput: 'Delete legacy_bloat right now',
+    });
+    for (let i = 1; i <= 3; i++) {
+      const stopRes = callWithEnv('Stop', {
+        conversationId: mSid,
+        workspacePaths: [ws],
+        cwd: ws,
+        terminationReason: 'NO_TOOL_CALL',
+        continuationActive: i > 1,
+      });
+      assert.equal(stopRes.decision, 'continue', `Stop attempt ${i} must block: ${JSON.stringify(stopRes)}`);
+      assert.match(stopRes.reason, /legacy_bloat/);
+    }
+  } finally {
+    env.cleanup();
+  }
+});

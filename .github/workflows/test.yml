@@ -42,13 +42,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run native Rust gate & hook unit suites
-        run: cargo test -p vestige-mcp --lib native_
+        run: |
+          cargo test -p vestige-hook
+          cargo test -p vestige-mcp --lib native_
       - name: Build vestige CLI and run offline gate self-test + status
         shell: bash
         run: |
+          cargo build -p vestige-hook --bin vestige-hook
           cargo build -p vestige-mcp --bin vestige
           ext=""
           if [ "${{ runner.os }}" = "Windows" ]; then ext=".exe"; fi
+          "./target/debug/vestige-hook${ext}" --version
           "./target/debug/vestige${ext}" gate test
           "./target/debug/vestige${ext}" gate status
 
@@ -124,16 +128,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build v7 vestige & vestige-mcp binaries
-        run: cargo build -p vestige-mcp --bins
-      - name: Run undeniable Antigravity E2E hook suite against live Rust binary
+      - name: Build v7 vestige-hook, vestige & vestige-mcp binaries
+        run: |
+          cargo build -p vestige-hook --bin vestige-hook
+          cargo build -p vestige-mcp --bins
+      - name: Run undeniable Antigravity & Multi-Runtime E2E hook suites against live Rust binaries
         shell: bash
         run: |
           ext=""
           if [ "${{ runner.os }}" = "Windows" ]; then ext=".exe"; fi
+          export VESTIGE_HOOK_BIN="$PWD/target/debug/vestige-hook${ext}"
           export VESTIGE_MCP_BIN="$PWD/target/debug/vestige-mcp${ext}"
           export VESTIGE_BIN="$PWD/target/debug/vestige${ext}"
-          node --test packages/vestige-init/test/antigravity-hooks-liveness.test.js
+          node --test packages/vestige-init/test/antigravity-hooks-liveness.test.js packages/vestige-init/test/multi-runtime-hooks.test.js
 
   dashboard:
     name: Dashboard Build

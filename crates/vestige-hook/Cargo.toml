@@ -1,0 +1,21 @@
+[package]
+name = "vestige-hook"
+version = "7.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Sub-10ms zero-bloat native Rust hook & Operator reference monitor binary for Vestige (zero Python, zero Node, zero embedded lexicons)"
+publish = false
+
+[[bin]]
+name = "vestige-hook"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+mimalloc = "0.1.52"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+
+[dev-dependencies]
+tempfile = "3"

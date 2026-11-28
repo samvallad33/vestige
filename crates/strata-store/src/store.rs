@@ -1173,6 +1173,12 @@ pub struct StrataStore {
     backfill_pairs: BTreeSet<(String, String)>,
     /// Mesh grants and receipts. Rebuilt by replay. Omitted from `state_digest`.
     mesh: mesh::MeshSide,
+    /// O(1) cached maximum of node `created_at_ms` and explicit `reviewed_at` clocks.
+    /// Eliminates O(N^2) full-store scans on `retrievability()` / `page_nodes()` / `get_stats()`.
+    head_clock_ms_cache: i64,
+    /// Exact tag -> live node ids (derived: rebuilt by replay and updated on every upsert/supersede).
+    /// Eliminates O(N) tag scans in `resolve_handle`.
+    tag_index: HashMap<String, BTreeSet<String>>,
 }
 
 impl StrataStore {
@@ -1242,6 +1248,8 @@ impl StrataStore {
             backfill_history: Vec::new(),
             backfill_pairs: BTreeSet::new(),
             mesh: mesh::MeshSide::default(),
+            head_clock_ms_cache: 0,
+            tag_index: HashMap::new(),
         };
         store.replay()?;
         store.verify_checkpoint_chain()?;
@@ -1378,7 +1386,16 @@ impl StrataStore {
                     .entry(record.id.clone())
                     .or_default()
                     .push((frame_seq, record.clone()));
-                self.nodes.insert(record.id.clone(), record.clone());
+                let prev_record = self.nodes.insert(record.id.clone(), record.clone());
+                self.update_tag_index_for_upsert(prev_record.as_ref(), record);
+                if record.created_at_ms > self.head_clock_ms_cache {
+                    self.head_clock_ms_cache = record.created_at_ms;
+                } else if prev_record
+                    .as_ref()
+                    .is_some_and(|old| old.created_at_ms == self.head_clock_ms_cache && record.created_at_ms < old.created_at_ms)
+                {
+                    self.recompute_head_clock_ms();
+                }
                 if is_new {
                     // Canonical dedup index: only the FIRST regular node for
                     // a canonical form becomes the dedup target, and duplicate
@@ -1419,8 +1436,15 @@ impl StrataStore {
                 }
             }
             StoreOp::SupersedeNode { id, superseded_by } => {
-                if let Some(record) = self.nodes.get_mut(id) {
+                let removed_tags = if let Some(record) = self.nodes.get_mut(id) {
+                    let was_live = record.is_live();
                     record.superseded_by = Some(superseded_by.clone());
+                    was_live.then(|| record.tags.clone())
+                } else {
+                    None
+                };
+                if let Some(tags) = removed_tags {
+                    self.remove_node_from_tag_index(id, &tags);
                 }
             }
             StoreOp::ReviewNode {
@@ -1433,10 +1457,19 @@ impl StrataStore {
                 // so retrievability falls back to sequence distance.
                 match reviewed_at_ms {
                     Some(ms) => {
-                        self.reviewed_at.insert(*card_id, *ms);
+                        let prev = self.reviewed_at.insert(*card_id, *ms);
+                        if *ms > self.head_clock_ms_cache {
+                            self.head_clock_ms_cache = *ms;
+                        } else if prev == Some(self.head_clock_ms_cache)
+                            && *ms < self.head_clock_ms_cache
+                        {
+                            self.recompute_head_clock_ms();
+                        }
                     }
                     None => {
-                        self.reviewed_at.remove(card_id);
+                        if self.reviewed_at.remove(card_id) == Some(self.head_clock_ms_cache) {
+                            self.recompute_head_clock_ms();
+                        }
                     }
                 }
             }
@@ -1569,7 +1602,27 @@ impl StrataStore {
             }),
             source_updated_at_ms: node.source_updated_at_ms,
         };
-        self.nodes.insert(record.id.clone(), record);
+        let created_ms = record.created_at_ms;
+        let is_live = record.is_live();
+        let tags = record.tags.clone();
+        let id = record.id.clone();
+        let prev = self.nodes.insert(id.clone(), record);
+        if let Some(old) = prev.as_ref()
+            && old.is_live()
+        {
+            self.remove_node_from_tag_index(&old.id, &old.tags);
+        }
+        if is_live {
+            for tag in &tags {
+                self.tag_index
+                    .entry(tag.clone())
+                    .or_default()
+                    .insert(id.clone());
+            }
+        }
+        if created_ms > self.head_clock_ms_cache {
+            self.head_clock_ms_cache = created_ms;
+        }
     }
 
     /// Imported v3 supersession: both ends must be imported nodes.
@@ -1577,8 +1630,15 @@ impl StrataStore {
         if !self.nodes.contains_key(&link.superseded_by_legacy_id) {
             return;
         }
-        if let Some(record) = self.nodes.get_mut(&link.superseded_legacy_id) {
+        let removed = if let Some(record) = self.nodes.get_mut(&link.superseded_legacy_id) {
+            let was_live = record.is_live();
             record.superseded_by = Some(link.superseded_by_legacy_id.clone());
+            was_live.then(|| record.tags.clone())
+        } else {
+            None
+        };
+        if let Some(tags) = removed {
+            self.remove_node_from_tag_index(&link.superseded_legacy_id, &tags);
         }
     }
 
@@ -1639,10 +1699,17 @@ impl StrataStore {
         self.fold_review(handle, event.rating, ALGO_V2, frame_seq)?;
         match reviewed_at_ms {
             Some(ms) => {
-                self.reviewed_at.insert(handle, ms);
+                let prev = self.reviewed_at.insert(handle, ms);
+                if ms > self.head_clock_ms_cache {
+                    self.head_clock_ms_cache = ms;
+                } else if prev == Some(self.head_clock_ms_cache) && ms < self.head_clock_ms_cache {
+                    self.recompute_head_clock_ms();
+                }
             }
             None => {
-                self.reviewed_at.remove(&handle);
+                if self.reviewed_at.remove(&handle) == Some(self.head_clock_ms_cache) {
+                    self.recompute_head_clock_ms();
+                }
             }
         }
         Ok(())
@@ -1682,6 +1749,9 @@ impl StrataStore {
             ALGO_V2,
         )?;
         self.reviewed_at.insert(handle, record.reviewed_at_ms);
+        if record.reviewed_at_ms > self.head_clock_ms_cache {
+            self.head_clock_ms_cache = record.reviewed_at_ms;
+        }
         Ok(())
     }
 
@@ -3450,6 +3520,8 @@ impl StrataStore {
             backfill_history: Vec::new(),
             backfill_pairs: BTreeSet::new(),
             mesh: mesh::MeshSide::default(),
+            head_clock_ms_cache: 0,
+            tag_index: HashMap::new(),
         };
         scratch.replay()?;
         let mut retrievability = BTreeMap::new();
@@ -3545,26 +3617,93 @@ impl StrataStore {
         self.edges.clone()
     }
 
-    /// The node registry, borrowed (GhostLink reads it without cloning).
-    pub(crate) fn node_map(&self) -> &BTreeMap<String, NodeRecord> {
+    /// The node registry, borrowed (zero-clone read path).
+    pub fn node_map(&self) -> &BTreeMap<String, NodeRecord> {
         &self.nodes
     }
 
-    /// Every edge in landing order, borrowed.
-    pub(crate) fn edge_list(&self) -> &[ConnectionRecord] {
+    /// Total stored node entries (live + superseded) in O(1) without cloning.
+    pub fn total_node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Every edge in landing order, borrowed (zero-clone read path).
+    pub fn edge_list(&self) -> &[ConnectionRecord] {
         &self.edges
     }
 
-    /// The latest clock the log records: the greatest node `created_at_ms`
-    /// or explicit review clock. Derived from the log alone, so a read that
-    /// evaluates retention at this clock is deterministic for a given head.
-    pub fn head_clock_ms(&self) -> i64 {
-        self.nodes
+    /// Exact-tag lookup in O(1) returning live node ids in sorted id order.
+    pub fn live_node_ids_with_tag(&self, tag: &str) -> Vec<String> {
+        let Some(ids) = self.tag_index.get(tag) else {
+            return Vec::new();
+        };
+        ids.iter()
+            .filter(|id| self.nodes.get(id.as_str()).is_some_and(NodeRecord::is_live))
+            .cloned()
+            .collect()
+    }
+
+    /// Unique/bounded id-prefix lookup via `BTreeMap::range` in O(log N + K).
+    pub fn live_node_ids_with_prefix(&self, prefix: &str, limit: usize) -> Vec<String> {
+        if prefix.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (id, record) in self.nodes.range::<str, _>((std::ops::Bound::Included(prefix), std::ops::Bound::Unbounded)) {
+            if !id.starts_with(prefix) {
+                break;
+            }
+            if record.is_live() {
+                out.push(id.clone());
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    fn update_tag_index_for_upsert(&mut self, prev: Option<&NodeRecord>, next: &NodeRecord) {
+        if let Some(old) = prev
+            && old.is_live()
+        {
+            self.remove_node_from_tag_index(&old.id, &old.tags);
+        }
+        if next.is_live() {
+            for tag in &next.tags {
+                self.tag_index
+                    .entry(tag.clone())
+                    .or_default()
+                    .insert(next.id.clone());
+            }
+        }
+    }
+
+    fn remove_node_from_tag_index(&mut self, id: &str, tags: &[String]) {
+        for tag in tags {
+            if let Some(set) = self.tag_index.get_mut(tag) {
+                set.remove(id);
+                if set.is_empty() {
+                    self.tag_index.remove(tag);
+                }
+            }
+        }
+    }
+
+    fn recompute_head_clock_ms(&mut self) {
+        self.head_clock_ms_cache = self
+            .nodes
             .values()
             .map(|record| record.created_at_ms)
             .chain(self.reviewed_at.values().copied())
             .max()
-            .unwrap_or(0)
+            .unwrap_or(0);
+    }
+
+    /// The latest clock the log records: the greatest node `created_at_ms`
+    /// or explicit review clock. Derived from the log alone in O(1) time.
+    pub fn head_clock_ms(&self) -> i64 {
+        self.head_clock_ms_cache
     }
 
     /// Number of live nodes (any scope).
@@ -3953,5 +4092,125 @@ fn gap_label(gap: &strata_gate::record::GapRecord) -> String {
             expected,
             found,
         } => format!("gap:duty_seq_gap:{source}:{expected}:{found}"),
+    }
+}
+
+#[cfg(test)]
+mod o1_index_tests {
+    use super::*;
+
+    fn full_scan_head_clock_ms(store: &StrataStore) -> i64 {
+        store
+            .nodes
+            .values()
+            .map(|r| r.created_at_ms)
+            .chain(store.reviewed_at.values().copied())
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn full_scan_live_tag(store: &StrataStore, tag: &str) -> Vec<String> {
+        store
+            .nodes
+            .values()
+            .filter(|r| r.is_live() && r.tags.iter().any(|t| t == tag))
+            .map(|r| r.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn o1_head_clock_and_tag_index_match_full_scan_and_refold() {
+        let dir = std::env::temp_dir().join(format!(
+            "strata-o1-parity-{}-{}",
+            std::process::id(),
+            admission_now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = StrataStore::open(&dir).expect("open fresh store");
+        assert_eq!(store.head_clock_ms(), 0);
+        assert_eq!(store.total_node_count(), 0);
+
+        let a = store
+            .ingest(IngestInput {
+                content: "alpha invariant".into(),
+                tags: vec!["pinned".into(), "alpha".into()],
+                created_at_ms: Some(1_000),
+                ..IngestInput::default()
+            })
+            .expect("ingest a");
+        let b = store
+            .ingest(IngestInput {
+                content: "beta invariant".into(),
+                tags: vec!["pinned".into(), "beta".into()],
+                created_at_ms: Some(5_000),
+                ..IngestInput::default()
+            })
+            .expect("ingest b");
+
+        assert_eq!(store.head_clock_ms(), full_scan_head_clock_ms(&store));
+        assert_eq!(store.head_clock_ms(), 5_000);
+        assert_eq!(
+            store.live_node_ids_with_tag("pinned"),
+            full_scan_live_tag(&store, "pinned")
+        );
+        assert_eq!(store.live_node_ids_with_tag("pinned").len(), 2);
+        assert_eq!(
+            store.live_node_ids_with_prefix(&a[..10], 8),
+            vec![a.clone(), b.clone()]
+        );
+        assert_eq!(store.live_node_ids_with_prefix(&a, 8), vec![a.clone()]);
+        assert_eq!(store.total_node_count(), store.node_map().len());
+        assert_eq!(store.edge_list().len(), store.edge_count());
+
+        // Explicit review advances head_clock_ms, then None review drops it back to node max.
+        store
+            .review_at(&a, 3, Some(9_000))
+            .expect("review a with explicit clock");
+        assert_eq!(store.head_clock_ms(), 9_000);
+        assert_eq!(store.head_clock_ms(), full_scan_head_clock_ms(&store));
+
+        store
+            .review_at(&a, 3, None)
+            .expect("review a clearing explicit clock");
+        assert_eq!(store.head_clock_ms(), 5_000);
+        assert_eq!(store.head_clock_ms(), full_scan_head_clock_ms(&store));
+
+        // Edit supersedes `b` and preserves exact live tag index parity.
+        let (b_next, _) = store
+            .edit(
+                &b,
+                "beta invariant v2",
+                &AdmissionContext {
+                    rule_id: Some(RULE_EDIT.into()),
+                    ..AdmissionContext::default()
+                },
+            )
+            .expect("edit b");
+        assert_eq!(
+            store.live_node_ids_with_tag("pinned"),
+            full_scan_live_tag(&store, "pinned")
+        );
+        assert_eq!(store.live_node_ids_with_tag("beta"), vec![b_next.clone()]);
+        assert_eq!(store.total_node_count(), 3);
+
+        // Reopen from disk and refold must be bit-identical.
+        let live_digest = store.state_digest();
+        let refold = store.refold().expect("refold");
+        assert_eq!(refold.state_digest, live_digest);
+        drop(store);
+
+        let reopened = StrataStore::open(&dir).expect("reopen");
+        assert_eq!(reopened.state_digest(), live_digest);
+        assert_eq!(reopened.head_clock_ms(), 5_000);
+        assert_eq!(
+            reopened.live_node_ids_with_tag("pinned"),
+            full_scan_live_tag(&reopened, "pinned")
+        );
+        assert_eq!(
+            reopened.live_node_ids_with_tag("beta"),
+            vec![b_next]
+        );
+        drop(reopened);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
