@@ -6,7 +6,45 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const guard = path.join(__dirname, '../hooks/guard.cjs');
-const gate = path.join(__dirname, '../../../operator/operator-gate.py');
+const nativeGateFixture = path.join(os.tmpdir(), `vestige-native-gate-fixture-${process.pid}.py`);
+fs.writeFileSync(nativeGateFixture, [
+  'import json, os, sys',
+  'source = sys.argv[sys.argv.index("--source") + 1] if "--source" in sys.argv else "claude"',
+  'raw = sys.stdin.read()',
+  'data = json.loads(raw) if raw.strip() else {}',
+  'ti = data.get("tool_input") or {}',
+  'cmd = (ti.get("command") or "")',
+  'if "git push --force" in cmd.lower():',
+  '    sys.stderr.write("OPERATOR: STOPPED (OP-004 ASI04): Destructive git force-push requires owner approval. Receipt: 0123456789abcdef\\n")',
+  '    sys.stderr.write(\'Next: do not retry it; call precedent(rule="OP-004") to inspect the receipt.\\n\')',
+  '    sys.stderr.write(\'Proof: recall(handle="op-receipt-0123456789abcdef") | Rule: recall(handle="op-rule-OP-004") | ALLOW ONCE 0123456789abcdef01234567\\n\')',
+  '    sys.exit(2)',
+  'op_home = os.environ.get("OPERATOR_HOME") or ""',
+  'cfile = os.path.join(op_home, "commitments.json")',
+  'if op_home and os.path.isfile(cfile):',
+  '    contracts = json.load(open(cfile, "r", encoding="utf-8")).get("file_contracts") or []',
+  '    blob = json.dumps(ti)',
+  '    for fc in contracts:',
+  '        p = (fc.get("path") or "")',
+  '        allow_hosts = fc.get("allow_hosts") or []',
+  '        if p and p in blob and not any(h in blob for h in allow_hosts):',
+  '            sys.stderr.write("OPERATOR: STOPPED (OP-022 no-export): protected file export blocked. Receipt: 0123456789abcdef\\n")',
+  '            sys.exit(2)',
+  'if isinstance(ti, dict) and any(k == "api_key" and str(v).startswith("sk-") for k, v in ti.items()):',
+  '    clean = {k: v for k, v in ti.items() if k != "api_key"}',
+  '    if source == "cursor":',
+  '        sys.stdout.write(json.dumps({"updated_input": clean}) + "\\n")',
+  '    else:',
+  '        sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": clean}}) + "\\n")',
+  'sys.exit(0)',
+  '',
+].join('\n'));
+const gate = nativeGateFixture;
+const vestigeBin = [
+  process.env.VESTIGE_BIN,
+  path.join(__dirname, '../../../target/debug', process.platform === 'win32' ? 'vestige.exe' : 'vestige'),
+  path.join(__dirname, '../../../target/release', process.platform === 'win32' ? 'vestige.exe' : 'vestige'),
+].find(p => p && fs.existsSync(p)) || '';
 
 function homeFor(name) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), `vestige-guard-${name}-`));

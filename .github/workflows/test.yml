@@ -27,90 +27,30 @@ jobs:
       - run: bash -n hooks/sanhedrin.sh scripts/install-sandwich.sh scripts/check-sandwich-prereqs.sh
 
   operator-lite:
-    name: Operator Lite (${{ matrix.os }}, Python ${{ matrix.python }})
+    name: Native Rust Gate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
-          # setup-python has no 3.9 build for ubuntu-latest (26.04); pin to 24.04.
-          - os: ubuntu-24.04
-            python: "3.9"
           - os: ubuntu-latest
-            python: "3.12"
           - os: macos-latest
-            python: "3.12"
           - os: windows-latest
-            python: "3.12"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - run: python operator-lite/test_windows.py
-      - if: runner.os != 'Windows'
-        run: python3 operator-lite/test_parser.py
-      - if: runner.os != 'Windows'
-        run: python3 operator-lite/test_replay.py
-      - if: runner.os != 'Windows'
-        run: python3 operator-lite/test_install_guard.py
-      - if: runner.os != 'Windows'
-        run: python3 operator-lite/test_sqlpipe.py
-      - if: runner.os != 'Windows'
-        run: python3 operator-lite/test_strata_guard.py
-      - if: runner.os != 'Windows'
-        run: python3 operator-lite/test_self_protect.py
-      - if: runner.os != 'Windows'
-        name: receipts chain to the ledger's last line, not to HEAD
-        run: python3 operator-lite/test_receipts.py
-      - if: runner.os != 'Windows'
-        name: a fresh install stops every clearly destructive command
-        run: python3 operator-lite/test_destructive.py
-      - if: runner.os != 'Windows'
-        name: OP-012 through OP-025, the evidence lock and planted canaries, each its own suite
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run native Rust gate & hook unit suites
+        run: cargo test -p vestige-mcp --lib native_
+      - name: Build vestige CLI and run offline gate self-test + status
+        shell: bash
         run: |
-          for t in floor root gitspawn written arming sequence session_hold memory_rules protected remote_delete brake turnover evidence_lock canary; do
-            echo "== test_$t"
-            python3 "operator-lite/test_$t.py" || exit 1
-          done
-      - name: an upgrade from 0.3.7 blocks
-        run: python operator-lite/test_upgrade.py
-      - if: runner.os != 'Windows'
-        name: the upgrade offer reaches the owner at a terminal, never an agent or a pipe
-        run: python3 operator-lite/test_upgrade_moments.py
-      - if: runner.os != 'Windows'
-        name: the npm package carries this gate at its own version
-        run: node operator-lite/npm/test.js
-      - if: runner.os != 'Windows'
-        name: the pip package's gate contract, against this gate
-        run: OPERATOR_GATE="$PWD/operator-lite/operator-gate.py" python3 operator-lite/pypi/operator-lite/test_smoke.py
-      - if: runner.os != 'Windows'
-        name: every host port's own test suite, offline
-        run: |
-          for t in operator-lite/ports/*/test.sh; do
-            echo "== $t"
-            # a home outside every temp folder: the gate treats temp paths as scratch, and the port tests
-            # check deletes that must be stopped
-            h="$HOME/operator-lite-ports/$(basename "$(dirname "$t")")"
-            mkdir -p "$h"
-            HOME="$h" bash "$t" || exit 1
-          done
-      - if: runner.os != 'Windows'
-        run: python3 operator-lite/operator-gate.py corpus guardfall
-      - if: runner.os != 'Windows'
-        name: the full Operator gate loads 102 rules and each one fires
-        run: python3 operator/test_rules.py
-      - if: runner.os != 'Windows'
-        run: cmp operator-lite/operator-gate.py operator-lite/openclaw-plugin/gate/operator-gate.py
-      - if: runner.os != 'Windows'
-        run: cmp operator-lite/operator-gate.py operator-lite/ports/opencode/operator-gate.py
-      - if: runner.os != 'Windows'
-        run: cmp operator/operator-gate.py packages/vestige-init/hooks/operator-gate.py
-      - if: runner.os != 'Windows'
-        run: cmp operator-lite/operator-gate.py operator/lite_core.py
-      - if: runner.os != 'Windows'
-        run: cmp operator-lite/operator-gate.py packages/vestige-init/hooks/lite_core.py
+          cargo build -p vestige-mcp --bin vestige
+          ext=""
+          if [ "${{ runner.os }}" = "Windows" ]; then ext=".exe"; fi
+          "./target/debug/vestige${ext}" gate test
+          "./target/debug/vestige${ext}" gate status
 
   unit-tests:
     name: Unit Tests

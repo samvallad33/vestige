@@ -33,13 +33,13 @@ const LEAKY_VARS: [&str; 6] = [
     "CLAUDE_CODE_ENTRYPOINT",
 ];
 
-/// The owner at a terminal: run `approve` in a pseudo-terminal and type ALLOW ONCE at its prompt.
+/// The owner at a terminal: run `vestige gate approve` in a pseudo-terminal and type ALLOW ONCE at its prompt.
 const OWNER_AT_A_TERMINAL: &str = r#"
 import os, pty, select, sys, time
-gate, action = sys.argv[1], sys.argv[2]
+gate_bin, action = sys.argv[1], sys.argv[2]
 pid, fd = pty.fork()
 if pid == 0:
-    os.execvp(sys.executable, [sys.executable, gate, "approve", action])
+    os.execvp(gate_bin, [gate_bin, "gate", "approve", action])
 out, sent, deadline = b"", False, time.time() + 30
 while time.time() < deadline:
     if not select.select([fd], [], [], 1)[0]:
@@ -321,33 +321,47 @@ impl Machine {
         command
     }
 
-    fn gate_file(&self) -> PathBuf {
-        self.home.join(".operator/gate/operator-gate.py")
+    fn gate_bin(&self) -> &'static str {
+        env!("CARGO_BIN_EXE_vestige")
     }
 
-    /// The owner installs Operator Lite from the repository's gate, the way the README's one line does.
+    /// Configure the native Rust gate (`vestige gate hook --source claude`) on this machine.
     fn install_gate(&self) -> String {
-        let out = self
-            .command("python3")
-            .arg(repo_root().join("operator-lite/operator-gate.py"))
-            .args(["install", "--no-replay"])
-            .output()
-            .expect("run the gate's install");
+        let op_dir = self.home.join(".operator");
+        std::fs::create_dir_all(&op_dir).expect("create .operator");
+        let mode_path = op_dir.join("mode");
+        std::fs::write(&mode_path, "enforce\n").expect("write mode");
+        let claude_dir = self.home.join(".claude");
+        std::fs::create_dir_all(&claude_dir).expect("create .claude");
+        let cmd = format!("'{}' gate hook --source claude", self.gate_bin());
+        let settings = json!({
+            "hooks": {
+                "PreToolUse": [
+                    { "matcher": "*", "hooks": [{ "type": "command", "command": cmd }] }
+                ]
+            }
+        });
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            serde_json::to_string_pretty(&settings).unwrap(),
+        )
+        .expect("write Claude settings");
+        let out = self.gate(&["status"]);
         let stdout = text(&out.stdout);
         assert!(
             out.status.success(),
-            "install failed: {stdout}{}",
+            "native gate status failed: {stdout}{}",
             text(&out.stderr)
         );
         assert!(
-            stdout.contains("mode: enforce"),
-            "a fresh install must block from the first call: {stdout}"
+            stdout.contains("vestige-native-rust-gate"),
+            "native gate must report its engine id: {stdout}"
         );
-        assert!(self.gate_file().is_file(), "install placed no gate");
+        assert!(mode_path.is_file(), "install wrote mode file");
         stdout
     }
 
-    /// The PreToolUse command install registered in Claude Code's settings.
+    /// The PreToolUse command registered in Claude Code's settings.
     fn hook_command(&self) -> String {
         let settings: Value = serde_json::from_str(
             &std::fs::read_to_string(self.home.join(".claude/settings.json"))
@@ -361,7 +375,7 @@ impl Machine {
             .expect("a PreToolUse command")
             .to_string();
         assert!(
-            command.contains("operator-gate.py hook --source claude"),
+            command.contains("gate hook --source claude"),
             "{command}"
         );
         command
@@ -369,6 +383,7 @@ impl Machine {
 
     /// An agent's Bash call, sent through the registered hook exactly as Claude Code sends it.
     fn agent_runs(&self, bash: &str, session: &str) -> Verdict {
+        let _ = self.hook_command();
         let payload = json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
@@ -377,13 +392,13 @@ impl Machine {
             "session_id": session,
         });
         let mut child = self
-            .command("sh")
-            .args(["-c", &self.hook_command()])
+            .command(self.gate_bin())
+            .args(["gate", "hook", "--source", "claude"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("run the hook command");
+            .expect("run the native gate hook");
         child
             .stdin
             .take()
@@ -397,13 +412,13 @@ impl Machine {
         }
     }
 
-    /// The installed gate's own command line.
+    /// The native Rust gate's own command line (`vestige gate <args>`).
     fn gate(&self, args: &[&str]) -> Output {
-        self.command("python3")
-            .arg(self.gate_file())
+        self.command(self.gate_bin())
+            .arg("gate")
             .args(args)
             .output()
-            .expect("run the installed gate")
+            .expect("run the native gate")
     }
 
     /// Every receipt the gate wrote, oldest first.
@@ -436,7 +451,7 @@ impl Machine {
     fn owner_allows_once(&self, action: &str) -> Output {
         self.command("python3")
             .args(["-c", OWNER_AT_A_TERMINAL])
-            .arg(self.gate_file())
+            .arg(self.gate_bin())
             .arg(action)
             .output()
             .expect("run approve in a pseudo-terminal")

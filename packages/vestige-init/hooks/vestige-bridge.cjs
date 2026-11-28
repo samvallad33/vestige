@@ -294,11 +294,12 @@ function loadConfig(runtime, explicitConfig) {
     fs.writeFileSync(effectiveMemCfgPath, JSON.stringify(effectiveMemCfg, null, 2));
   }
 
-  const defaultGate = firstExisting([
-    process.env.OPERATOR_GATE_PY,
-    cfg.gate ? resolveHome(cfg.gate) : '',
-    process.env.VESTIGE_GUARD === '1' ? path.join(home, '.operator', 'gate', 'operator-gate.py') : '',
-  ]);
+  const defaultGate = cfg.gate === 'native'
+    ? 'native'
+    : firstExisting([
+        process.env.OPERATOR_GATE_PY,
+        cfg.gate ? resolveHome(cfg.gate) : '',
+      ]) || (cfg.gate ? resolveHome(cfg.gate) : (process.env.VESTIGE_GUARD === '1' ? 'native' : ''));
   const enforceGuard = cfg.requireGate !== undefined
     ? Boolean(cfg.requireGate)
     : Boolean(cfg.gate || process.env.OPERATOR_GATE_PY || process.env.VESTIGE_GUARD === '1');
@@ -317,9 +318,9 @@ function loadConfig(runtime, explicitConfig) {
     memoryConfig: effectiveMemCfgPath,
     memCfg: effectiveMemCfg,
     hooksDir: resolvedHooksDir,
-    gateTimeoutMs: cfg.gateTimeoutMs || 15000,
-    memoryDeadlineMs: cfg.memoryDeadlineMs || 6000,
-    reflexDeadlineMs: cfg.reflexDeadlineMs || 5000,
+    gateTimeoutMs: cfg.gateTimeoutMs || 10000,
+    memoryDeadlineMs: cfg.memoryDeadlineMs || 12000,
+    reflexDeadlineMs: cfg.reflexDeadlineMs || 10000,
     capsuleTimeoutMs: cfg.capsuleTimeoutMs || 6000,
     debug: Boolean(cfg.debug || process.env.VESTIGE_HOOK_DEBUG === '1'),
     configPath: cfgPath,
@@ -750,15 +751,8 @@ function spawnAsync(cmd, args, { input = '', timeoutMs = 4000, env = process.env
   });
 }
 
-async function turnoverSessionStartAsync(cfg, payload) {
-  if (!cfg.gate || !fs.existsSync(cfg.gate)) return;
-  try {
-    await spawnAsync(cfg.python, ['-I', cfg.gate, 'turnover', '--session-start'], {
-      input: JSON.stringify(payload),
-      timeoutMs: 3500,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    });
-  } catch {}
+async function turnoverSessionStartAsync(_cfg, _payload) {
+  // Native Rust `vestige gate` replaces legacy Python turnover startup overhead.
 }
 
 async function capsuleRunAsync(cfg, source, cwd) {
@@ -925,19 +919,34 @@ async function handlePreToolUse(cfg, payload, nativeEvent, input) {
     }
   }
 
-  // 1. Operator Gate (if enabled/present)
+  // 1. Native Rust Operator Gate (if enabled/present)
   if (cfg.gate || cfg.enforceGuard) {
-    if (!cfg.gate || !fs.existsSync(cfg.gate)) {
-      return { deny: true, reason: `Operator gate missing at ${cfg.gate || '~/.operator/gate/operator-gate.py'}. Fail-closed: a missing gate is never permission to run.` };
+    const useNative = !cfg.gate || cfg.gate === 'native';
+    let r;
+    if (useNative) {
+      if (!cfg.vestigeBin || !fs.existsSync(cfg.vestigeBin)) {
+        return { deny: true, reason: `Native Vestige gate binary missing at ${cfg.vestigeBin || 'vestige'}. Fail-closed: a missing gate is never permission to run.` };
+      }
+      r = spawnSync(cfg.vestigeBin, ['gate', 'hook', '--source', cfg.runtime], {
+        input: JSON.stringify(payload),
+        encoding: 'utf8',
+        timeout: cfg.gateTimeoutMs,
+        maxBuffer: 1024 * 1024,
+        windowsHide: true,
+      });
+    } else {
+      if (!fs.existsSync(cfg.gate)) {
+        return { deny: true, reason: `Operator gate missing at ${cfg.gate}. Fail-closed: a missing gate is never permission to run.` };
+      }
+      r = spawnSync(cfg.python, ['-I', cfg.gate, 'hook', '--source', cfg.runtime], {
+        input: JSON.stringify(payload),
+        encoding: 'utf8',
+        timeout: cfg.gateTimeoutMs,
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        windowsHide: true,
+      });
     }
-    const r = spawnSync(cfg.python, ['-I', cfg.gate, 'hook', '--source', cfg.runtime], {
-      input: JSON.stringify(payload),
-      encoding: 'utf8',
-      timeout: cfg.gateTimeoutMs,
-      maxBuffer: 1024 * 1024,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-      windowsHide: true,
-    });
     const stderr = String(r.stderr || '').trim();
     if (r.error) return { deny: true, reason: `Operator gate did not answer (${r.error.code || r.error.message}). Fail-closed.` };
     if (r.status !== 0) {

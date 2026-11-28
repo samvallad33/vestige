@@ -212,6 +212,15 @@ enum GateCommands {
     },
     /// Show native Rust gate engine status and O(1) tail receipt head
     Status,
+    /// Verify the SHA-256 hash chain of every Operator receipt day file
+    Verify,
+    /// Run the offline built-in gate self-test corpus (executes zero commands)
+    Test,
+    /// Grant one single-use owner permit from an interactive terminal (owner-only)
+    Approve {
+        /// 24-hex action digest from a STOP receipt
+        action_digest: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1623,6 +1632,9 @@ fn main() -> anyhow::Result<()> {
                 authority,
             } => run_gate_check(tool, command, file, cwd, runtime, authority),
             GateCommands::Status => run_gate_status(),
+            GateCommands::Verify => run_gate_verify(),
+            GateCommands::Test => run_gate_test(),
+            GateCommands::Approve { action_digest } => run_gate_approve(action_digest),
         },
         Commands::Init {
             git_hooks,
@@ -7931,17 +7943,31 @@ fn run_gate_hook(source: String, write_receipt: bool) -> anyhow::Result<()> {
     let mut raw = String::new();
     let _ = std::io::stdin().read_to_string(&mut raw);
     let req = vestige_mcp::native_gate::request_from_hook_stdin(&source, &raw);
-    let verdict = vestige_mcp::native_gate::evaluate_gate_request(req.clone());
-    if write_receipt {
-        let _ = vestige_mcp::native_gate::append_receipt_o1(
+    let mut verdict = vestige_mcp::native_gate::evaluate_gate_request(req.clone());
+    let mut decision_override = None;
+    if verdict.decision == vestige_core::GuardDecision::Deny {
+        let op_home = vestige_mcp::native_gate::operator_home_dir();
+        let ad = vestige_mcp::native_gate::compute_action_digest(&req);
+        if vestige_mcp::native_gate::try_consume_single_use_permit(&op_home, &ad) {
+            verdict.decision = vestige_core::GuardDecision::Allow;
+            verdict.reason = "Authorized by single-use owner permit.".into();
+            decision_override = Some("ALLOW");
+        }
+    }
+    let receipt = if write_receipt {
+        vestige_mcp::native_gate::append_receipt_with_decision(
             &vestige_mcp::native_gate::default_receipts_path(),
             &req,
             &verdict,
-        );
-    }
+            decision_override,
+        )
+        .ok()
+    } else {
+        None
+    };
     if verdict.decision == vestige_core::GuardDecision::Deny {
-        let rule = verdict.rule_id.as_deref().unwrap_or("GATE");
-        eprintln!("OPERATOR: STOPPED ({rule})\nWhy: {}", verdict.reason);
+        let msg = vestige_mcp::native_gate::format_stop_stderr(&verdict, receipt.as_ref(), &req);
+        eprintln!("{msg}");
         std::process::exit(2);
     }
     Ok(())
@@ -7978,6 +8004,51 @@ fn run_gate_check(
 fn run_gate_status() -> anyhow::Result<()> {
     let report = vestige_mcp::native_gate::gate_status(None);
     println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn run_gate_verify() -> anyhow::Result<()> {
+    let home = vestige_mcp::native_gate::operator_home_dir();
+    let (count, breaks) = vestige_mcp::native_gate::verify_receipts_chain(&home);
+    if breaks.is_empty() {
+        println!("receipts={count} chain=OK");
+        Ok(())
+    } else {
+        eprintln!("receipts={count} chain=BROKEN breaks={}", breaks.len());
+        for b in breaks.iter().take(10) {
+            eprintln!("  {b}");
+        }
+        std::process::exit(1);
+    }
+}
+
+fn run_gate_test() -> anyhow::Result<()> {
+    let (cases, passed) = vestige_mcp::native_gate::run_self_test();
+    let failed = cases.saturating_sub(passed);
+    println!("corpus=native-rust cases={cases} passed={passed} failed={failed}");
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn run_gate_approve(action_digest: String) -> anyhow::Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        eprintln!("Owner terminal required to grant ALLOW ONCE permit.");
+        std::process::exit(3);
+    }
+    print!("Type ALLOW ONCE to grant a single-use permit for {action_digest}: ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+    if line.trim() != "ALLOW ONCE" {
+        eprintln!("Permit not granted (expected exact 'ALLOW ONCE' confirmation).");
+        std::process::exit(3);
+    }
+    let home = vestige_mcp::native_gate::operator_home_dir();
+    vestige_mcp::native_gate::grant_single_use_permit(&home, action_digest.trim(), "owner-tty")?;
+    println!("Permit granted for one use.");
     Ok(())
 }
 

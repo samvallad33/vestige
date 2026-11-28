@@ -73,9 +73,14 @@ try {
     deny('');
     return;
   }
-  const result = spawnSync(config.python, ['-I', config.gate, 'hook', '--source', client], {
-    input, encoding: 'utf8', timeout: 10000, maxBuffer: 256 * 1024, windowsHide: true,
-  });
+  const useNativeRust = Boolean(config.vestigeBin) && (!config.gate || config.gate === 'native');
+  const result = useNativeRust
+    ? spawnSync(config.vestigeBin, ['gate', 'hook', '--source', client], {
+        input, encoding: 'utf8', timeout: 10000, maxBuffer: 256 * 1024, windowsHide: true,
+      })
+    : spawnSync(config.python, ['-I', config.gate, 'hook', '--source', client], {
+        input, encoding: 'utf8', timeout: 10000, maxBuffer: 256 * 1024, windowsHide: true,
+      });
   // A crashed gate, a missing interpreter, or a non-zero status is a deny.
   // The adapter does not invent a recall handle the gate did not print.
   if (!result || result.error || result.status !== 0) {

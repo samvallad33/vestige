@@ -178,16 +178,18 @@ test('the stop-memory hook is copied and wired once for each of its events, besi
   const home = scratch('loop');
   const settingsPath = path.join(home, '.claude', 'settings.json');
   const mcp = fakeBinary(path.join(home, 'bin'), 'vestige-mcp', '5.0.0');
-  const gate = { matcher: '*', hooks: [{ type: 'command', command: 'python3 ~/.operator/gate/operator-gate.py hook --source claude' }] };
+  const fixtureSrc = path.join(home, 'fixture-stop-memory.py');
+  fs.writeFileSync(fixtureSrc, 'VERSION = "1.0.0"\n');
+  const gate = { matcher: '*', hooks: [{ type: 'command', command: 'vestige gate hook --source claude' }] };
   const prompt = { hooks: [{ type: 'command', command: 'echo prompt' }] };
   writeJson(settingsPath, { model: 'opus', hooks: { PreToolUse: [gate], UserPromptSubmit: [prompt] } });
 
-  const first = kernel.wireStopMemoryHook(mcp, { home, writeJson, platform: 'darwin' });
+  const first = kernel.wireStopMemoryHook(mcp, { home, writeJson, source: fixtureSrc, platform: 'darwin' });
   assert.equal(first.status, 'written');
   assert.deepEqual(first.events, kernel.STOP_MEMORY_EVENTS);
   assert.ok(first.copied);
   const target = kernel.stopMemoryTarget(home);
-  assert.equal(fs.readFileSync(target, 'utf8'), fs.readFileSync(kernel.stopMemorySource(), 'utf8'));
+  assert.equal(fs.readFileSync(target, 'utf8'), fs.readFileSync(fixtureSrc, 'utf8'));
 
   const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
   assert.equal(settings.model, 'opus');
@@ -201,7 +203,7 @@ test('the stop-memory hook is copied and wired once for each of its events, besi
   assert.equal(kernel.isRulesHook(command), false, 'the rules step must not mistake this hook for its own');
   assert.ok(first.backupPath && fs.existsSync(first.backupPath));
 
-  const second = kernel.wireStopMemoryHook(mcp, { home, writeJson, platform: 'darwin' });
+  const second = kernel.wireStopMemoryHook(mcp, { home, writeJson, source: fixtureSrc, platform: 'darwin' });
   assert.equal(second.status, 'present');
   assert.equal(second.copied, false, 'the same version is not copied again');
   const again = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
@@ -215,11 +217,13 @@ test('an installed stop-memory hook that is newer is kept', () => {
   const home = scratch('loop-newer');
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   const mcp = fakeBinary(path.join(home, 'bin'), 'vestige-mcp', '5.0.0');
+  const fixtureSrc = path.join(home, 'fixture-stop-memory.py');
+  fs.writeFileSync(fixtureSrc, 'VERSION = "1.0.0"\n');
   const target = kernel.stopMemoryTarget(home);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, 'VERSION = "99.0.0"\n');
 
-  const result = kernel.wireStopMemoryHook(mcp, { home, writeJson });
+  const result = kernel.wireStopMemoryHook(mcp, { home, writeJson, source: fixtureSrc });
   assert.equal(result.status, 'written');
   assert.equal(result.copied, false);
   assert.equal(fs.readFileSync(target, 'utf8'), 'VERSION = "99.0.0"\n');
@@ -229,8 +233,10 @@ test('a dry run plans the stop-memory hook and writes nothing; Windows uses pyth
   const home = scratch('loop-dry');
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   const mcp = path.join(home, 'Program Files', 'vestige-mcp.exe');
+  const fixtureSrc = path.join(home, 'fixture-stop-memory.py');
+  fs.writeFileSync(fixtureSrc, 'VERSION = "1.0.0"\n');
 
-  const result = kernel.wireStopMemoryHook(mcp, { home, dryRun: true, writeJson, platform: 'win32' });
+  const result = kernel.wireStopMemoryHook(mcp, { home, dryRun: true, writeJson, source: fixtureSrc, platform: 'win32' });
   assert.equal(result.status, 'planned');
   assert.deepEqual(result.events, kernel.STOP_MEMORY_EVENTS);
   assert.equal(result.command, `python ${kernel.stopMemoryTarget(home)} --mcp ${JSON.stringify(mcp)}`);
@@ -245,91 +251,39 @@ test('the stop-memory step leaves a settings file that does not parse exactly as
   const raw = '{ "hooks": { // mid-edit\n';
   fs.writeFileSync(settingsPath, raw);
   const mcp = fakeBinary(path.join(home, 'bin'), 'vestige-mcp', '5.0.0');
+  const fixtureSrc = path.join(home, 'fixture-stop-memory.py');
+  fs.writeFileSync(fixtureSrc, 'VERSION = "1.0.0"\n');
 
-  const result = kernel.wireStopMemoryHook(mcp, { home, writeJson });
+  const result = kernel.wireStopMemoryHook(mcp, { home, writeJson, source: fixtureSrc });
   assert.equal(result.status, 'review');
   assert.equal(fs.readFileSync(settingsPath, 'utf8'), raw);
 });
 
-test('the hook this package ships is byte-identical to hooks/operator-stop-memory.py in the repo', () => {
-  const repoCopy = path.join(__dirname, '..', '..', '..', 'hooks', 'operator-stop-memory.py');
-  if (!fs.existsSync(repoCopy)) return;   // the published package has no repo around it
-  assert.equal(fs.readFileSync(kernel.stopMemorySource(), 'utf8'), fs.readFileSync(repoCopy, 'utf8'));
+test('legacy Python operator-stop-memory.py is removed in favor of native Rust Reflex', () => {
+  assert.equal(fs.existsSync(kernel.stopMemorySource()), false);
+  const home = scratch('loop-native');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const mcp = fakeBinary(path.join(home, 'bin'), 'vestige-mcp', '7.0.0');
+  const skipped = kernel.wireStopMemoryHook(mcp, { home, writeJson });
+  assert.equal(skipped.status, 'skipped');
 });
 
-// A stand-in vestige-mcp that speaks just enough MCP for the hook: no memory carries any tag yet, and
-// every smart_ingest is logged and answered with a new id.
-const FAKE_MCP = `#!/usr/bin/env python3
-import json, sys
-log, n = sys.argv[0] + ".log", 0
-for line in sys.stdin:
-    msg = json.loads(line)
-    if "id" not in msg:
-        continue
-    result = {}
-    if msg.get("method") == "tools/call":
-        name, args = msg["params"]["name"], msg["params"]["arguments"]
-        if name == "recall":
-            body = {"error": "handle_required"}
-        else:
-            n += 1
-            with open(log, "a") as f:
-                f.write(json.dumps(args) + "\\n")
-            body = {"results": [{"nodeId": "mem-%016x" % n}]}
-        result = {"content": [{"type": "text", "text": json.dumps(body)}]}
-    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}) + "\\n")
-    sys.stdout.flush()
-`;
-
-test('a gate STOP receipt becomes a rule memory and a stop memory derived_from it, through --mcp', { skip: !POSIX }, () => {
-  const { spawnSync } = require('child_process');
-  const home = scratch('loop-run');
-  const opHome = path.join(home, '.operator');
-  fs.mkdirSync(path.join(opHome, 'receipts'), { recursive: true });
-  const digest = 'a7892fe4b29ca21b74902d5160da363145b3b82ca8df665756f314a2fc17a91f';
-  const row = { decision: 'STOP', digest, prev: '0'.repeat(64), commitment: 'OP-011', rule: 'no-unrestorable-loss',
-    ts: new Date().toISOString().slice(0, 19) + 'Z', source: 'claude', session: 's-1', cwd: '/shop', tool: 'Bash',
-    action_preview: 'git checkout -- src/app.py', detail: 'discards uncommitted changes', action_digest: 'f9a438193f2525ac6b27f3a9',
-    gate_version: '0.3.11' };
-  fs.writeFileSync(path.join(opHome, 'receipts', '2026-10-19.jsonl'), JSON.stringify(row) + '\n');
-  const mcp = path.join(home, 'fake-mcp');
-  fs.writeFileSync(mcp, FAKE_MCP, { mode: 0o755 });
-
-  const payload = JSON.stringify({ hook_event_name: 'PostToolUse', session_id: 's-1' });
-  const run = spawnSync('python3', [kernel.stopMemorySource(), '--mcp', mcp], {
-    input: payload, encoding: 'utf8', timeout: 30000,
-    env: { ...process.env, OPERATOR_HOME: opHome, VESTIGE_MCP_BIN: '', PATH: '/usr/bin:/bin' },
-  });
-  assert.equal(run.status, 0, run.stderr);
-  const said = JSON.parse(run.stdout).hookSpecificOutput;
-  assert.equal(said.hookEventName, 'PostToolUse');
-  assert.match(said.additionalContext, /recall\(handle="op-receipt-a7892fe4b29ca21b"\)/);
-
-  const writes = fs.readFileSync(mcp + '.log', 'utf8').trim().split('\n').map((line) => JSON.parse(line).items[0]);
-  assert.equal(writes.length, 2);
-  assert.deepEqual(writes[0].tags, ['OP-011', 'op-rule-OP-011', 'operator', 'operator-rule']);
-  assert.deepEqual(writes[1].tags, ['OP-011', 'op-receipt-a7892fe4b29ca21b', 'operator', 'operator-stop']);
-  assert.deepEqual(writes[1].links, [{ kind: 'derived_from', to: 'mem-0000000000000001' }]);
-  assert.match(writes[1].content, /git checkout -- src\/app\.py/);
-
-  const rerun = spawnSync('python3', [kernel.stopMemorySource(), '--mcp', mcp], {
-    input: payload, encoding: 'utf8', timeout: 30000, env: { ...process.env, OPERATOR_HOME: opHome },
-  });
-  assert.equal(rerun.status, 0);
-  assert.equal(rerun.stdout, '', 'a stop already recorded is not written or announced again');
-  assert.equal(fs.readFileSync(mcp + '.log', 'utf8').trim().split('\n').length, 2);
-
-  // The next session starts and is told what was stopped, with the handle that recalls it.
-  const next = spawnSync('python3', [kernel.stopMemorySource(), '--mcp', mcp], {
-    input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's-2', source: 'startup' }),
-    encoding: 'utf8', timeout: 30000, env: { ...process.env, OPERATOR_HOME: opHome },
-  });
-  assert.equal(next.status, 0, next.stderr);
-  const told = JSON.parse(next.stdout).hookSpecificOutput;
-  assert.equal(told.hookEventName, 'SessionStart');
-  assert.match(told.additionalContext, /Operator stopped 1 action on this machine/);
-  assert.match(told.additionalContext, /OP-011 .*git checkout -- src\/app\.py -> recall\(handle="op-receipt-a7892fe4b29ca21b"\)/);
-  assert.equal(fs.readFileSync(mcp + '.log', 'utf8').trim().split('\n').length, 2, 'session start writes nothing');
+test('native Rust gate version and dry-run plan work without operator-lite npm dependency', async () => {
+  assert.ok(kernel.gateVersion(), 'gateVersion reports package or binary version');
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.equal(pkg.dependencies && pkg.dependencies['operator-lite'], undefined);
+  assert.equal(kernel.GATE_EXIT[0], 'installed');
+  assert.equal(kernel.GATE_EXIT[3], 'agent-shell');
+  assert.equal(kernel.GATE_EXIT[4], 'kept-existing');
+  assert.equal(kernel.GATE_EXIT[5], 'installed-unwired');
+  assert.ok(Array.isArray(kernel.BINARIES) && kernel.BINARIES.includes('vestige'));
+  assert.ok(kernel.BINARIES.includes('vestige-mcp'));
+  assert.equal(kernel.isRulesHook('vestige hook session-start'), true);
+  assert.equal(kernel.isRulesHook('echo hello'), false);
+  assert.ok(kernel.RULES_MATCHER.includes('startup'));
+  assert.ok(kernel.RULES_MATCHER.includes('compact'));
+  assert.equal(kernel.exe('vestige', 'win32'), 'vestige.exe');
+  assert.equal(kernel.exe('vestige', 'linux'), 'vestige');
 });
 
 test('the gate installer exit codes map to what the summary tells the user', () => {

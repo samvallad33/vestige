@@ -153,7 +153,3 @@ pub mod project;
 pub mod proof_card;
 pub mod prove;
 pub mod viral_cli;
-
-/// Ignored real-repo proof. `cargo test --workspace` does not run it.
-#[cfg(test)]
-mod causal_git_proof;

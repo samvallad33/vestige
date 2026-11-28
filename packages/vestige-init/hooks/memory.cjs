@@ -112,6 +112,7 @@ function tryDirectAttach(binary, args = [], timeoutMs = 80, env = process.env) {
     let settled = false;
     let buf = '';
     const sock = net.createConnection(target);
+    sock.setNoDelay(true);
     const finish = result => {
       if (settled) return;
       settled = true;
@@ -198,7 +199,7 @@ function rpc(binary, args = [], timeoutMs = 210, env = process.env) {
     },
     async ready() {
       const attached = shouldDirectAttach(binary, env)
-        ? await tryDirectAttach(binary, args, Math.min(80, timeoutMs), env)
+        ? await tryDirectAttach(binary, args, Math.min(250, timeoutMs), env)
         : null;
       if (disposed || closed) {
         if (attached?.socket) attached.socket.destroy();

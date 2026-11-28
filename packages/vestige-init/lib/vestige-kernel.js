@@ -321,23 +321,29 @@ function wireStopMemoryHook(mcpBin, { home = os.homedir(), dryRun = false, write
   return { status: 'written', settingsPath, command, target, events, copied: copy, backupPath };
 }
 
-function gateLauncher() {
-  try {
-    return path.join(path.dirname(require.resolve('operator-lite/package.json')), 'bin', 'operator-lite.js');
-  } catch {
-    return null;
+function resolveVestigeBin() {
+  if (process.env.VESTIGE_BIN && fs.existsSync(process.env.VESTIGE_BIN)) return process.env.VESTIGE_BIN;
+  const dir = installDir();
+  const cand = path.join(dir, exe('vestige'));
+  if (fs.existsSync(cand)) return cand;
+  const bundled = bundledBinDir();
+  if (bundled) {
+    const b = path.join(bundled, exe('vestige'));
+    if (fs.existsSync(b)) return b;
   }
+  return null;
+}
+
+function gateLauncher() {
+  return resolveVestigeBin();
 }
 
 function gateVersion() {
-  try {
-    return require('operator-lite/package.json').version;
-  } catch {
-    return null;
-  }
+  const bin = resolveVestigeBin();
+  const ver = bin ? versionOf(bin) : null;
+  return ver ? ver.join('.') : require('../package.json').version;
 }
 
-// operator-gate.py cmd_install returns these; operator-lite.js returns 1 when no Python 3.9+ is found.
 const GATE_EXIT = {
   0: 'installed',
   1: 'failed',
@@ -350,7 +356,7 @@ function runGate(args, { onLine = () => {} } = {}) {
   const launcher = gateLauncher();
   if (!launcher) return Promise.resolve({ code: null, output: '', missing: true });
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [launcher, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(launcher, ['gate', ...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let output = '';
     const take = (stream) => readline.createInterface({ input: stream }).on('line', (line) => {
       output += line + '\n';
@@ -363,18 +369,16 @@ function runGate(args, { onLine = () => {} } = {}) {
   });
 }
 
-// Step 05: install Operator Lite, the free gate, and wire every agent host it finds. The gate's own
-// installer decides: it refuses in an agent's shell (3) and never replaces the paid or a newer gate (4).
+// Step 05: verify native Rust `vestige gate` status (zero Python).
 async function installGate({ dryRun = false, onLine } = {}) {
   const version = gateVersion();
-  if (!gateLauncher()) return { status: 'missing', reason: 'operator-lite did not come with this package' };
+  if (!gateLauncher()) return { status: 'missing', reason: 'vestige binary was not found for native gate' };
   if (dryRun) return { status: 'planned', version };
-  const { code, output } = await runGate([], { onLine });
+  const { code, output } = await runGate(['status'], { onLine });
   return { status: GATE_EXIT[code] || 'failed', code, version, output };
 }
 
-// Step 06: the gate replays the GuardFall bypass corpus it carries. It classifies every command and
-// runs none.
+// Step 06: native Rust `vestige gate test` offline self-test corpus (executes zero commands).
 async function gateSelfTest() {
   const { code, output } = await runGate(['test']);
   const match = /corpus=(\S+) cases=(\d+) passed=(\d+) failed=(\d+)/.exec(output || '');

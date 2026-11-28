@@ -78,9 +78,6 @@ function createIsolatedBridgeEnv() {
     fs.mkdirSync(d, { recursive: true });
   }
   fs.writeFileSync(path.join(opHome, 'mode'), 'enforce\n');
-  fs.copyFileSync(path.join(HOOKS_DIR, 'operator-gate.py'), path.join(gateDir, 'operator-gate.py'));
-  fs.copyFileSync(path.join(HOOKS_DIR, 'lite_core.py'), path.join(gateDir, 'lite_core.py'));
-  fs.copyFileSync(path.join(HOOKS_DIR, 'session_automaton.json'), path.join(gateDir, 'session_automaton.json'));
 
   for (const f of ['memory.cjs', 'reflex.cjs', 'guard.cjs', 'stop-memory.cjs']) {
     fs.copyFileSync(path.join(HOOKS_DIR, f), path.join(hooksCopyDir, f));
@@ -103,7 +100,7 @@ function createIsolatedBridgeEnv() {
   const bridgeCfgPath = path.join(bridgeDir, 'bridge.json');
   fs.writeFileSync(bridgeCfgPath, JSON.stringify({
     python: findPython(),
-    gate: path.join(gateDir, 'operator-gate.py'),
+    gate: 'native',
     vestigeBin: VESTIGE_BIN || VESTIGE_MCP_BIN,
     dataDir,
     memoryConfig: memCfgPath,

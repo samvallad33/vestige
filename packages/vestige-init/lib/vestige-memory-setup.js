@@ -175,14 +175,17 @@ const BRIDGE_DIALECT_EVENTS = {
   'amazon-q': { schema: 'amazon-q', events: ['agentSpawn', 'userPromptSubmit', 'preToolUse', 'postToolUse', 'stop'] },
 };
 function nativeGuardRegistered(value, gate, dialect) {
-  // Recognize the native argv, including Lite's POSIX existence check. A name
-  // containing "guard" is not evidence of a gate, nor is a partial matcher.
+  // Recognize native Rust `vestige gate hook --source <dialect>` as well as legacy Python argv.
   const words = text => (text.match(/"[^"]*"|'[^']*'|[^\s]+/g) || []).map(s => s.replace(/^(['"])(.*)\1$/, '$2'));
   return (value || []).some(group => {
     if (group.matcher && !['*', '.*'].includes(group.matcher)) return false;
     return (group.hooks || [group]).some(handler => {
       if (typeof handler.command !== 'string') return false;
       let argv = words(handler.command);
+      if (/^vestige(?:\.exe)?$/i.test(path.basename(argv[0] || '')) &&
+          JSON.stringify(argv.slice(1)) === JSON.stringify(['gate', 'hook', '--source', dialect])) {
+        return true;
+      }
       if (argv[0] === '[') {
         if (JSON.stringify(argv.slice(0, 6)) !== JSON.stringify(['[','-f',gate,']','&&','python3'])) return false;
         argv = argv.slice(5);
@@ -377,78 +380,43 @@ function plan({ home = os.homedir(), bin, platform = os.platform(), env = proces
   if (triggers.before === null) triggers.after = json(defaults);
   const config = change(path.join(base, 'config.json'), 'local memory connection');
   const configValue = config.before === null ? {} : JSON.parse(config.before);
-  config.after = json({ ...configValue, version: VERSION, binary: found, triggers: triggers.file, enforce });
+  config.after = json({ ...configValue, version: VERSION, binary: found, triggers: triggers.file, enforce, deadlineMs: configValue.deadlineMs || 12000 });
   const sharedBridgeCfg = change(path.join(base, 'bridge.json'), 'shared multi-runtime hook bridge configuration');
   const prevBridgeCfg = sharedBridgeCfg.before === null ? {} : JSON.parse(sharedBridgeCfg.before);
+  const siblingVestigeBin = path.join(path.dirname(found), platform === 'win32' ? 'vestige.exe' : 'vestige');
+  const resolvedVestigeBin = fs.existsSync(siblingVestigeBin)
+    ? siblingVestigeBin
+    : (executable('vestige', home, platform, env) || siblingVestigeBin);
   sharedBridgeCfg.after = json({
     ...prevBridgeCfg,
-    python: prevBridgeCfg.python || (platform === 'win32' ? 'python' : 'python3'),
-    gate: guard ? path.join(home, '.operator', 'gate', 'operator-gate.py') : (prevBridgeCfg.gate || ''),
+    gate: guard ? 'native' : (prevBridgeCfg.gate || ''),
     requireGate: Boolean(guard || prevBridgeCfg.requireGate),
-    vestigeBin: path.join(path.dirname(found), platform === 'win32' ? 'vestige.exe' : 'vestige'),
+    vestigeBin: resolvedVestigeBin,
     dataDir: (env && env.VESTIGE_DATA_DIR) || prevBridgeCfg.dataDir || path.join(home, '.vestige', 'store'),
     memoryConfig: config.file,
     hooksDir: path.join(base, 'hooks'),
+    memoryDeadlineMs: prevBridgeCfg.memoryDeadlineMs || 12000,
+    reflexDeadlineMs: prevBridgeCfg.reflexDeadlineMs || 10000,
   });
   let guardInstall = null;
   if (guard) {
-    const pyNames = platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
-    const pySuffixes = platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
-    const pyDirs = (env.PATH || '').split(platform === 'win32' ? ';' : ':').filter(Boolean);
-    const pyCandidates = [];
-    for (const name of pyNames) {
-      for (const dir of pyDirs) {
-        for (const suffix of pySuffixes) {
-          const cand = path.resolve(dir, name + suffix);
-          try { if (fs.statSync(cand).isFile() && !pyCandidates.includes(cand)) pyCandidates.push(cand); } catch {}
-        }
-      }
-      const fallback = executable(name, home, platform, env);
-      if (fallback && !pyCandidates.includes(fallback)) pyCandidates.push(fallback);
-    }
-    const python = pyCandidates.find(bin => {
-      const result = spawnSync(bin, ['-c', 'import sys; raise SystemExit(0 if sys.version_info >= (3,9) else 1)'], { timeout: 2000, env, windowsHide: true });
-      return result.status === 0;
-    });
-    if (!python) throw new Error('Memory plus guard needs Python 3.9+. Install Python, then rerun with --guard.');
-    const gate = path.join(home, '.operator', 'gate', 'operator-gate.py');
-    const liteCore = path.join(home, '.operator', 'gate', 'lite_core.py');
-    const autoFile = path.join(home, '.operator', 'gate', 'session_automaton.json');
-    if (!fs.existsSync(gate)) {
-      const source = path.join(__dirname, '..', 'hooks', 'operator-gate.py');
-      const liteSource = path.join(__dirname, '..', 'hooks', 'lite_core.py');
-      const autoSource = path.join(__dirname, '..', 'hooks', 'session_automaton.json');
-      const row = change(gate, 'install Operator gate 6.2.2 with 102 STOP rules (owner terminal required)'); row.after = fs.readFileSync(source, 'utf8');
-      const lite = change(liteCore, 'install pinned Operator Lite 6.2.2 core beside the gate'); lite.after = fs.readFileSync(liteSource, 'utf8');
-      if (fs.existsSync(autoSource)) {
-        const autoRow = change(autoFile, 'install pinned Wave 13 session automaton image beside the gate'); autoRow.after = fs.readFileSync(autoSource, 'utf8');
-      }
-      const mode = change(path.join(home, '.operator', 'mode'), 'start new guard in enforce mode');
-      if (mode.before === null) mode.after = 'enforce\n';
-      guardInstall = { source, python };
-    }
-    // The gate already protects every descendant of its home. Keep authority
-    // outside user-editable memory settings and outside attested gate modules.
+    const legacyGate = path.join(home, '.operator', 'gate', 'operator-gate.py');
+    const mode = change(path.join(home, '.operator', 'mode'), 'start native Rust guard in enforce mode');
+    if (mode.before === null) mode.after = 'enforce\n';
+    // Native Rust `vestige gate` replaces Python operator-gate.py with <1ms evaluation
+    // and O(1) SHA-256 day-file receipts compatible with precedent(query="stops").
     const guardBase = path.join(home, '.operator', 'state', 'vestige-memory');
-    const authority = change(path.join(guardBase, 'config.json'), 'install protected guard routing');
-    authority.after = json({ gate, python });
+    const authority = change(path.join(guardBase, 'config.json'), 'install protected native Rust guard routing');
+    authority.after = json({ vestigeBin: resolvedVestigeBin, gate: 'native' });
     const adapter = change(path.join(guardBase, 'guard.cjs'), 'install protected fail-closed host adapter');
     adapter.after = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'guard.cjs'), 'utf8');
     for (const client of detected.filter(c => c.hookFile && EVENTS[c.dialect])) {
       const event = client.dialect === 'cursor' ? 'preToolUse' : client.dialect === 'gemini' ? 'BeforeTool' : 'PreToolUse';
       const current = change(client.hookFile, 'merge optional pre-tool guard');
-      if (nativeGuardRegistered(JSON.parse(current.after || '{}').hooks?.[event], gate, client.dialect)) continue;
+      if (nativeGuardRegistered(JSON.parse(current.after || '{}').hooks?.[event], legacyGate, client.dialect)) continue;
       const command = [node, adapter.file, '--config', authority.file, '--client', client.dialect].map(p => quote(p, platform)).join(' ');
       const entry = client.dialect === 'cursor' ? { command, timeout: 12, failClosed: true } : { matcher: '*', hooks: [{ type: 'command', command, timeout: 12 }] };
       add(client.hookFile, ['hooks', event], entry, 'merge optional pre-tool guard', true);
-    }
-    const reflex = change(path.join(base, 'hooks', 'operator-stop-memory.py'), 'install stop-to-Strata reflex');
-    reflex.after = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'operator-stop-memory.py'), 'utf8');
-    const relay = change(path.join(base, 'hooks', 'stop-memory.cjs'), 'install bounded fail-open stop-memory relay');
-    relay.after = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'stop-memory.cjs'), 'utf8');
-    for (const client of detected.filter(c => ['claude','codex'].includes(c.dialect))) {
-      const command = [node, relay.file, '--python', python, '--script', reflex.file, '--mcp', found].map(p => quote(p, platform)).join(' ');
-      for (const event of ['PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart']) add(client.hookFile, ['hooks', event], { hooks: [{ type: 'command', command, timeout: 1 }] }, 'merge bounded stop-to-Strata reflex', true);
     }
   }
   const keepRow = r => r.after !== r.before && (r.patches.length || r.block || r.directWrite || !detected.some(c => c.file === r.file || c.hookFile === r.file));
@@ -463,13 +431,7 @@ function plan({ home = os.homedir(), bin, platform = os.platform(), env = proces
     const vestigeBin = path.join(path.dirname(found), platform === 'win32' ? 'vestige.exe' : 'vestige');
     const agyDataDir = (env && env.VESTIGE_DATA_DIR) || path.join(home, '.vestige', 'store');
     const agyTriggers = path.join(home, '.vestige', 'antigravity', 'triggers.json');
-    const pyBin = platform === 'win32' ? (executable('python', home, platform, env) || 'python') : (executable('python3', home, platform, env) || 'python3');
-    const gatePath = guard
-      ? path.join(home, '.operator', 'gate', 'operator-gate.py')
-      : [
-          path.join(home, '.operator', 'gate', 'operator-gate.py'),
-          path.join(home, '.vestige', 'gate', 'operator-gate.py'),
-        ].find(p => fs.existsSync(p)) || '';
+    const gatePath = guard ? 'native' : '';
     const setRaw = (filePath, contents, description) => {
       const row = change(filePath, description);
       row.after = contents;
@@ -492,17 +454,16 @@ function plan({ home = os.homedir(), bin, platform = os.platform(), env = proces
       }
       if (!fs.existsSync(agyTriggers)) setRaw(agyTriggers, json(defaults), 'install Antigravity recall triggers');
       const agyMemCfg = path.join(agyBridge, 'memory-config.json');
-      setRaw(agyMemCfg, json({ version: VERSION, binary: found, binaryArgs: ['--data-dir', agyDataDir], triggers: agyTriggers, deadlineMs: 10000 }), 'configure Antigravity memory RPC');
+      setRaw(agyMemCfg, json({ version: VERSION, binary: found, binaryArgs: ['--data-dir', agyDataDir], triggers: agyTriggers, deadlineMs: 12000 }), 'configure Antigravity memory RPC');
       setRaw(path.join(agyBridge, 'bridge.json'), json({
-        python: pyBin,
         gate: gatePath,
-        vestigeBin: fs.existsSync(vestigeBin) ? vestigeBin : (platform === 'win32' ? 'vestige.exe' : 'vestige'),
+        vestigeBin: resolvedVestigeBin,
         dataDir: agyDataDir,
         memoryConfig: agyMemCfg,
         hooksDir: path.join(agyBridge, 'hooks'),
-        gateTimeoutMs: 15000,
-        memoryDeadlineMs: 10000,
-        reflexDeadlineMs: 6000,
+        gateTimeoutMs: 10000,
+        memoryDeadlineMs: 12000,
+        reflexDeadlineMs: 10000,
         capsuleTimeoutMs: 6000,
         debug: false,
       }), 'configure Antigravity bridge runtime');

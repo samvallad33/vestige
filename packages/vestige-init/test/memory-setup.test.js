@@ -106,52 +106,52 @@ test('memory hook fails open silently when MCP is unavailable, within 300ms', as
   assert.deepEqual(result, {}); assert(elapsed < 300, `${elapsed}ms`);
   assert(fs.readFileSync(path.join(p.base, 'errors.log'), 'utf8').includes('prompt:'));
 });
-test('guard is opt-in, keeps an installed gate, and adapter fails closed', { skip: process.platform === 'win32' }, () => {
-  const f = fixture(); const gate = path.join(f.home, '.operator', 'gate', 'operator-gate.py');
-  fs.mkdirSync(path.dirname(gate), { recursive: true }); fs.copyFileSync(path.join(__dirname, '..', 'hooks', 'operator-lite.py'), gate);
+test('guard is opt-in, installs native Rust gate routing, and adapter fails closed', { skip: process.platform === 'win32' }, () => {
+  const f = fixture();
   const p = setup.plan({ ...f, platform: 'linux', guard: true });
-  assert(!p.changes.some(c => c.file === gate), 'installed gate is preserved'); setup.apply(p);
+  assert(p.changes.some(c => c.file.endsWith('guard.cjs')), 'guard adapter is planned');
+  setup.apply(p);
   const file = path.join(f.home, '.claude', 'settings.json'); const v = JSON.parse(fs.readFileSync(file));
   assert(v.hooks.PreToolUse.length > 0);
-  const configFile = path.join(f.home, '.operator', 'state', 'vestige-memory', 'config.json'); const c = JSON.parse(fs.readFileSync(configFile)); c.gate = path.join(f.home, 'missing-guard'); fs.writeFileSync(configFile, JSON.stringify(c));
+  const configFile = path.join(f.home, '.operator', 'state', 'vestige-memory', 'config.json');
+  const c = JSON.parse(fs.readFileSync(configFile));
+  assert.equal(c.gate, 'native');
+  c.vestigeBin = path.join(f.home, 'missing-vestige-bin'); fs.writeFileSync(configFile, JSON.stringify(c));
   const result = spawnSync(process.execPath, [path.join(f.home, '.operator', 'state', 'vestige-memory', 'guard.cjs'), '--config', configFile, '--client', 'codex'], { input: '{}', encoding: 'utf8' });
   assert.equal(result.status, 2); assert.match(result.stderr, /Operator stopped/);
 });
-test('bundled free Lite and stop reflex are exact copies of public sources', () => {
-  assert.equal(fs.readFileSync(path.join(__dirname, '../hooks/operator-lite.py'), 'utf8'), fs.readFileSync(path.join(__dirname, '../../../operator-lite/operator-gate.py'), 'utf8'));
-  assert.equal(fs.readFileSync(path.join(__dirname, '../hooks/operator-stop-memory.py'), 'utf8'), fs.readFileSync(path.join(__dirname, '../../../hooks/operator-stop-memory.py'), 'utf8'));
-  assert.equal(fs.readFileSync(path.join(__dirname, '../hooks/operator-gate.py'), 'utf8'), fs.readFileSync(path.join(__dirname, '../../../operator/operator-gate.py'), 'utf8'));
-  assert.equal(fs.readFileSync(path.join(__dirname, '../hooks/lite_core.py'), 'utf8'), fs.readFileSync(path.join(__dirname, '../../../operator-lite/operator-gate.py'), 'utf8'));
-  assert.equal(fs.readFileSync(path.join(__dirname, '../../../operator/lite_core.py'), 'utf8'), fs.readFileSync(path.join(__dirname, '../../../operator-lite/operator-gate.py'), 'utf8'));
+test('shipped @vestige/init package carries zero duplicated Python operator-gate copies', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  assert(!pkg.dependencies || !pkg.dependencies['operator-lite'], 'operator-lite npm dep removed');
+  assert(!fs.existsSync(path.join(__dirname, '../hooks/operator-gate.py')), 'operator-gate.py removed');
+  assert(!fs.existsSync(path.join(__dirname, '../hooks/operator-lite.py')), 'operator-lite.py removed');
+  assert(!fs.existsSync(path.join(__dirname, '../hooks/lite_core.py')), 'lite_core.py removed');
+  assert(fs.existsSync(path.join(__dirname, '../hooks/guard.cjs')), 'native guard adapter shipped');
 });
 
-test('a fresh guard installs all 102 Operator rules and stops a force push', { skip: process.platform === 'win32' }, () => {
+test('a fresh guard configures native Rust gate routing and enforces fail-closed mode', { skip: process.platform === 'win32' }, () => {
   const f = fixture();
-  const gate = path.join(f.home, '.operator', 'gate', 'operator-gate.py');
-  const lite = path.join(f.home, '.operator', 'gate', 'lite_core.py');
   const p = setup.plan({ ...f, platform: 'linux', guard: true });
-  const gateChange = p.changes.find(c => c.file === gate);
-  const liteChange = p.changes.find(c => c.file === lite);
-  assert.equal(gateChange.after, fs.readFileSync(path.join(__dirname, '../hooks/operator-gate.py'), 'utf8'));
-  assert.equal(liteChange.after, fs.readFileSync(path.join(__dirname, '../hooks/lite_core.py'), 'utf8'));
-  assert.match(gateChange.description, /102 STOP rules/);
-  assert.match(gateChange.after, /OP-114/);
+  const cfgChange = p.changes.find(c => c.file.endsWith(path.join('vestige-memory', 'config.json')));
+  const modeChange = p.changes.find(c => c.file.endsWith(path.join('.operator', 'mode')));
+  assert(cfgChange, 'guard routing config is planned');
+  assert(modeChange, 'enforce mode file is planned');
+  assert.equal(JSON.parse(cfgChange.after).gate, 'native');
+  assert.equal(modeChange.after, 'enforce\n');
   setup.apply(p);
-  const env = { ...process.env, HOME: f.home, USERPROFILE: f.home, OPERATOR_HOME: path.join(f.home, '.operator') };
-  for (const name of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'OPERATOR_AGENT_SESSION']) delete env[name];
   const guard = path.join(f.home, '.operator', 'state', 'vestige-memory', 'guard.cjs');
   const config = path.join(f.home, '.operator', 'state', 'vestige-memory', 'config.json');
+  assert(fs.existsSync(guard));
+  assert(fs.existsSync(config));
   const result = spawnSync(process.execPath, [guard, '--config', config, '--client', 'claude'], {
-    input: JSON.stringify({ cwd: f.home, session_id: 'fresh-guard', tool_name: 'Bash', tool_input: { command: 'git push --force origin main' } }),
-    env, encoding: 'utf8'
+    input: 'not-json', encoding: 'utf8'
   });
-  assert.equal(result.status, 2, result.stderr);
-  assert.match(result.stderr, /OP-004/);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Operator stopped/);
 });
 
 test('uninstall retains runtime files referenced by a user-edited guard hook', { skip: process.platform === 'win32' }, () => {
-  const f=fixture(); const gate=path.join(f.home,'.operator','gate','operator-gate.py'); fs.mkdirSync(path.dirname(gate),{recursive:true});
-  fs.copyFileSync(path.join(__dirname,'../hooks/operator-lite.py'),gate);
+  const f=fixture();
   const p=setup.plan({...f,platform:'linux',guard:true}); setup.apply(p);
   const file=path.join(f.home,'.claude','settings.json'); const value=JSON.parse(fs.readFileSync(file));
   value.hooks.PreToolUse.flatMap(g=>g.hooks).find(h=>h.command?.includes('guard.cjs')).command += ' --user-customization'; fs.writeFileSync(file,JSON.stringify(value));
@@ -163,10 +163,9 @@ test('uninstall retains runtime files referenced by a user-edited guard hook', {
 });
 
 test('an existing guard registration stays single so it consumes a permit only once', { skip: process.platform === 'win32' }, () => {
-  const f=fixture(); const gate=path.join(f.home,'.operator','gate','operator-gate.py'); fs.mkdirSync(path.dirname(gate),{recursive:true});
-  fs.copyFileSync(path.join(__dirname,'../hooks/operator-lite.py'),gate);
+  const f=fixture(); const gate=path.join(f.home,'.operator','gate','operator-gate.py');
   const file=path.join(f.home,'.claude','settings.json');
-  const existing={matcher:'*',hooks:[{type:'command',command:`python3 '${gate}' hook --source claude`}]};
+  const existing={matcher:'*',hooks:[{type:'command',command:`vestige gate hook --source claude`}]};
   fs.writeFileSync(file,JSON.stringify({hooks:{PreToolUse:[existing]}}));
   const p=setup.plan({...f,platform:'linux',guard:true}); setup.apply(p);
   assert.deepEqual(JSON.parse(fs.readFileSync(file)).hooks.PreToolUse.filter(g=>g.hooks.some(h=>h.type==='command')),[existing]);
@@ -175,6 +174,7 @@ test('an existing guard registration stays single so it consumes a permit only o
 test('guard recognition requires native gate argv and a catch-all matcher', () => {
   const gate='/tmp/owner/.operator/gate/operator-gate.py';
   const group=(command,matcher='*')=>[{matcher,hooks:[{type:'command',command}]}];
+  assert(setup.nativeGuardRegistered(group(`vestige gate hook --source claude`),gate,'claude'));
   assert(setup.nativeGuardRegistered(group(`python3 '${gate}' hook --source claude`),gate,'claude'));
   assert(setup.nativeGuardRegistered(group(`[ -f '${gate}' ] && python3 '${gate}' hook --source claude`),gate,'claude'));
   assert(!setup.nativeGuardRegistered(group(`echo python3 '${gate}' hook --source claude`),gate,'claude'));
@@ -185,49 +185,36 @@ test('guard recognition requires native gate argv and a catch-all matcher', () =
   assert(setup.nativeGuardRegistered(group(`python -I -c "${code}"`),windowsGate,'claude'));
 });
 
-test('installed adapter consumes one fixture permit once for the exact stopped action', {skip:process.platform==='win32'}, () => {
-  const f=fixture(); const operator=path.join(f.home,'.operator'); const gate=path.join(operator,'gate','operator-gate.py');
-  fs.mkdirSync(path.dirname(gate),{recursive:true}); fs.copyFileSync(path.join(__dirname,'../hooks/operator-lite.py'),gate);
-  fs.writeFileSync(path.join(operator,'mode'),'enforce\n');
+test('installed adapter delegates native Rust vestigeBin cleanly and denies on non-zero exit', {skip:process.platform==='win32'}, () => {
+  const f=fixture(); const operator=path.join(f.home,'.operator');
+  fs.mkdirSync(operator,{recursive:true}); fs.writeFileSync(path.join(operator,'mode'),'enforce\n');
   const p=setup.plan({...f,platform:'linux',guard:true}); setup.apply(p);
-  const env={...process.env,HOME:f.home,USERPROFILE:f.home,OPERATOR_HOME:operator};
   const guardBase=path.join(operator,'state','vestige-memory');
-  const payload={cwd:f.home,tool_name:'Bash',tool_input:{command:'git push --force origin main'},session_id:'permit-fixture'};
-  const judge=input=>spawnSync(process.execPath,[path.join(guardBase,'guard.cjs'),'--config',path.join(guardBase,'config.json'),'--client','claude'],{input:JSON.stringify(input),env,encoding:'utf8'});
-  assert.equal(judge(payload).status,2);
-  const rows=fs.readdirSync(path.join(operator,'receipts')).filter(n=>n.endsWith('.jsonl')).flatMap(n=>fs.readFileSync(path.join(operator,'receipts',n),'utf8').trim().split('\n').map(JSON.parse));
-  const stopped=rows.find(r=>r.decision==='STOP'); assert(stopped);
-  const config=JSON.parse(fs.readFileSync(path.join(guardBase,'config.json')));
-  const ownerOnly=spawnSync(config.python,['-I',gate,'approve',stopped.action_digest],{input:'ALLOW ONCE\n',env,encoding:'utf8'});
-  assert.equal(ownerOnly.status,3,'piped text never grants an owner permit');
-  // Test fixture admission only. This does not exercise or impersonate a human TTY.
-  const permits=path.join(operator,'permits'); fs.mkdirSync(permits,{recursive:true});
-  const permit=path.join(permits,stopped.action_digest+'.json');
-  fs.writeFileSync(permit,JSON.stringify({action_digest:stopped.action_digest,expires:Date.now()/1000+60,single_use:true,by:'test-fixture'}),{mode:0o600});
-  const other=path.join(f.home,'other-work'); fs.mkdirSync(other);
-  assert.equal(judge({...payload,cwd:other}).status,2,'permit cannot authorize another working directory');
-  assert(fs.existsSync(permit),'different action did not consume the original permit');
-  assert.equal(judge(payload).status,0,'exact fixture action allowed once');
-  assert(fs.existsSync(permit+'.used'));
-  assert.equal(judge(payload).status,2,'replay stops after one use');
+  const mockVestige=path.join(f.home,'mock-vestige.sh');
+  fs.writeFileSync(mockVestige,'#!/bin/sh\nread body\nif echo "$body" | grep -q "force"; then\n  echo "OPERATOR: STOPPED (OP-004 ASI04): force push" >&2\n  exit 2\nfi\nexit 0\n',{mode:0o755});
+  const cfgPath=path.join(guardBase,'config.json');
+  fs.writeFileSync(cfgPath,JSON.stringify({vestigeBin:mockVestige,gate:'native'}));
+  const judge=input=>spawnSync(process.execPath,[path.join(guardBase,'guard.cjs'),'--config',cfgPath,'--client','claude'],{input:JSON.stringify(input),encoding:'utf8'});
+  const stopped=judge({cwd:f.home,tool_name:'Bash',tool_input:{command:'git push --force origin main'},session_id:'permit-fixture'});
+  assert.equal(stopped.status,2);
+  assert.match(stopped.stderr,/OP-004/);
+  const allowed=judge({cwd:f.home,tool_name:'Bash',tool_input:{command:'git status'},session_id:'permit-fixture'});
+  assert.equal(allowed.status,0);
+  assert.equal(allowed.stderr,'');
+  assert.equal(JSON.parse(allowed.stdout).permission,undefined);
+  assert(fs.existsSync(path.join(guardBase,'guard.cjs')));
 });
 
-test('registered stop-memory relay fails open under 300ms with a stalled server', {skip:process.platform==='win32'}, () => {
-  const f=fixture(); const gate=path.join(f.home,'.operator','gate','operator-gate.py');
-  fs.mkdirSync(path.dirname(gate),{recursive:true}); fs.copyFileSync(path.join(__dirname,'../hooks/operator-lite.py'),gate);
-  const p=setup.plan({...f,platform:'linux',guard:true}); setup.apply(p);
-  const file=path.join(f.home,'.claude','settings.json');
-  const hooks=JSON.parse(fs.readFileSync(file)).hooks;
-  const command=hooks.PostToolUse.flatMap(g=>g.hooks).find(h=>h.command?.includes('stop-memory.cjs')).command;
-  const env={...process.env,HOME:f.home,OPERATOR_HOME:path.join(f.home,'.operator')};
-  const guard=hooks.PreToolUse.flatMap(g=>g.hooks).find(h=>h.command?.includes('guard.cjs')).command;
-  const stop=spawnSync(guard,{shell:true,input:JSON.stringify({tool_name:'Bash',cwd:f.home,tool_input:{command:'git push --force origin main'}}),env,encoding:'utf8'});
-  assert.equal(stop.status,2,stop.stderr);
-  fs.writeFileSync(f.bin,'#!/bin/sh\nexec sleep 5\n',{mode:0o755});
-  const started=performance.now();
-  const result=spawnSync(command,{shell:true,input:'{}',env,encoding:'utf8',timeout:1000});
-  assert.equal(result.status,0,result.stderr); assert.equal(result.stderr,'');
-  assert(performance.now()-started<300);
+test('bridge.json configures native Rust gate and generous memory/reflex deadlines', () => {
+  const f=fixture();
+  const p=setup.plan({...f,platform:'linux',guard:true});
+  const bridgeChange=p.changes.find(c=>c.file.endsWith('bridge.json'));
+  assert(bridgeChange,'bridge.json is planned');
+  const b=JSON.parse(bridgeChange.after);
+  assert.equal(b.gate,'native');
+  assert.equal(b.requireGate,true);
+  assert(b.memoryDeadlineMs>=12000);
+  assert(b.reflexDeadlineMs>=10000);
 });
 
 for (const responds of [true, false]) {

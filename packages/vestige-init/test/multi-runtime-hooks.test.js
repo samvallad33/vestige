@@ -64,9 +64,6 @@ function createTempBridgeEnv({ requireGate = true } = {}) {
   for (const d of [dataDir, gateDir, hooksCopyDir, libCopyDir]) fs.mkdirSync(d, { recursive: true });
 
   fs.writeFileSync(path.join(opHome, 'mode'), 'enforce\n');
-  for (const f of ['operator-gate.py', 'lite_core.py', 'session_automaton.json']) {
-    fs.copyFileSync(path.join(HOOKS_DIR, f), path.join(gateDir, f));
-  }
   for (const f of ['vestige-bridge.cjs', 'agy-bridge.cjs', 'memory.cjs', 'reflex.cjs', 'guard.cjs', 'stop-memory.cjs']) {
     fs.copyFileSync(path.join(HOOKS_DIR, f), path.join(hooksCopyDir, f));
   }
@@ -88,7 +85,7 @@ function createTempBridgeEnv({ requireGate = true } = {}) {
   const bridgeCfgPath = path.join(memDir, 'bridge.json');
   fs.writeFileSync(bridgeCfgPath, JSON.stringify({
     python: findPython(),
-    gate: requireGate ? path.join(gateDir, 'operator-gate.py') : '',
+    gate: requireGate ? 'native' : '',
     requireGate,
     vestigeBin: VESTIGE_BIN || VESTIGE_MCP_BIN,
     dataDir,

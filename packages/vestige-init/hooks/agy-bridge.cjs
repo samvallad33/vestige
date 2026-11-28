@@ -51,9 +51,9 @@ function loadConfig() {
     memoryConfig: memCfgPath,
     memCfg,
     hooksDir: cfg.hooksDir ? resolveHome(cfg.hooksDir) : path.join(HERE, 'hooks'),
-    gateTimeoutMs: cfg.gateTimeoutMs || 15000,
-    memoryDeadlineMs: cfg.memoryDeadlineMs || 7000,
-    reflexDeadlineMs: cfg.reflexDeadlineMs || 5000,
+    gateTimeoutMs: cfg.gateTimeoutMs || 10000,
+    memoryDeadlineMs: cfg.memoryDeadlineMs || 12000,
+    reflexDeadlineMs: cfg.reflexDeadlineMs || 10000,
     capsuleTimeoutMs: cfg.capsuleTimeoutMs || 6000,
     debug: Boolean(cfg.debug),
   };
@@ -368,29 +368,33 @@ function spawnAsync(cmd, args, { input = '', timeoutMs = 4000, env = process.env
   });
 }
 
-function turnoverSessionStart(cfg, payload) {
-  if (!cfg.gate || !fs.existsSync(cfg.gate)) return;
-  try {
-    spawnSync(cfg.python, ['-I', cfg.gate, 'turnover', '--session-start'], {
-      input: JSON.stringify(payload),
-      encoding: 'utf8',
-      timeout: 3500,
-      maxBuffer: 256 * 1024,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-      windowsHide: true,
-    });
-  } catch {}
+function turnoverSessionStart(_cfg, _payload) {
+  // Native Rust `vestige gate` replaces legacy Python turnover startup overhead.
 }
 
-async function turnoverSessionStartAsync(cfg, payload) {
-  if (!cfg.gate || !fs.existsSync(cfg.gate)) return;
+async function turnoverSessionStartAsync(_cfg, _payload) {
+  // Native Rust `vestige gate` replaces legacy Python turnover startup overhead.
+}
+
+function nativeMissionHookRun(cfg, event, payload) {
+  if (!cfg.vestigeBin || !fs.existsSync(cfg.vestigeBin)) return null;
   try {
-    await spawnAsync(cfg.python, ['-I', cfg.gate, 'turnover', '--session-start'], {
-      input: JSON.stringify(payload),
-      timeoutMs: 3500,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    });
-  } catch {}
+    const r = spawnSync(
+      cfg.vestigeBin,
+      ['hook', 'dispatch', 'antigravity', event, '--no-receipt'],
+      {
+        input: JSON.stringify(payload),
+        encoding: 'utf8',
+        timeout: 4000,
+        maxBuffer: 256 * 1024,
+        windowsHide: true,
+      }
+    );
+    const out = String(r.stdout || '').trim();
+    return out ? JSON.parse(out) : null;
+  } catch {
+    return null;
+  }
 }
 
 function compactCapsule(raw, maxChars = 1100) {
@@ -765,17 +769,31 @@ async function preToolUse(cfg, input) {
   }
 
   if (cfg.gate) {
-    if (!fs.existsSync(cfg.gate)) {
-      return deny(`Operator gate missing at ${cfg.gate}. Fail-closed: a missing gate is never permission to run.`);
+    let r;
+    if (cfg.gate === 'native') {
+      if (!cfg.vestigeBin || !fs.existsSync(cfg.vestigeBin)) {
+        return deny(`Native Vestige gate binary missing at ${cfg.vestigeBin || 'vestige'}. Fail-closed: a missing gate is never permission to run.`);
+      }
+      r = spawnSync(cfg.vestigeBin, ['gate', 'hook', '--source', 'antigravity'], {
+        input: JSON.stringify(payload),
+        encoding: 'utf8',
+        timeout: cfg.gateTimeoutMs,
+        maxBuffer: 1024 * 1024,
+        windowsHide: true,
+      });
+    } else {
+      if (!fs.existsSync(cfg.gate)) {
+        return deny(`Operator gate missing at ${cfg.gate}. Fail-closed: a missing gate is never permission to run.`);
+      }
+      r = spawnSync(cfg.python, ['-I', cfg.gate, 'hook', '--source', 'antigravity'], {
+        input: JSON.stringify(payload),
+        encoding: 'utf8',
+        timeout: cfg.gateTimeoutMs,
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        windowsHide: true,
+      });
     }
-    const r = spawnSync(cfg.python, ['-I', cfg.gate, 'hook', '--source', 'antigravity'], {
-      input: JSON.stringify(payload),
-      encoding: 'utf8',
-      timeout: cfg.gateTimeoutMs,
-      maxBuffer: 1024 * 1024,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-      windowsHide: true,
-    });
     const stderr = String(r.stderr || '').trim();
     if (r.error) return deny(`Operator gate did not answer (${r.error.code || r.error.message}). Fail-closed.`);
     if (r.status !== 0) {
@@ -1057,6 +1075,8 @@ async function preInvocation(cfg, input) {
   const isMidTurn = t.s.promptKey === promptKey && (input.invocationNum === undefined || Number(input.invocationNum) > 1);
   const parts = [];
   if (t.s.promptKey !== promptKey) {
+    // Capture automatic imperative mission contracts in native Rust (<5ms, zero Python).
+    nativeMissionHookRun(cfg, 'UserPromptSubmit', payload);
     // Serialize reflex ahead of memory context so they never contend on the Strata store lock.
     const rfxOut = await reflexRun(cfg, payload, 'UserPromptSubmit');
     const mem = await memoryContext(cfg, payload, 'prompt', 900);
@@ -1311,8 +1331,11 @@ async function stop(cfg, input) {
     await reflexRun(cfg, settlePayload, 'PostToolUse');
   }
 
+  const missionOut = nativeMissionHookRun(cfg, 'Stop', payload);
+  const missionBlock = (missionOut && (missionOut.decision === 'deny' || missionOut.decision === 'block') && missionOut.reason) || '';
+
   const rfxOut = await reflexRun(cfg, payload, 'Stop');
-  const blockReason = (rfxOut && rfxOut.decision === 'block' && rfxOut.reason) || '';
+  const blockReason = missionBlock || (rfxOut && rfxOut.decision === 'block' && rfxOut.reason) || '';
 
   const t = payload.session_id ? turnState(payload.session_id) : null;
   const alreadyBlockedPrompt = t && t.s.promptKey && t.s.stopBlockedPromptKey === t.s.promptKey;

@@ -129,17 +129,10 @@ test('setup upgrades legacy Reflex registrations once and preserves unrelated ho
   assert.deepEqual(JSON.parse(fs.readFileSync(file)), { ...original, userAdded: true });
 });
 
-test('Operator STOP relay writes through remember and preserves its native node id', () => {
-  const script = path.join(__dirname, '../hooks/operator-stop-memory.py');
-  const py = ['python3', 'python'].find(c => spawnSync(c, ['-c', 'print(1)'], { encoding: 'utf8', windowsHide: true }).status === 0) || 'python3';
-  const result = spawnSync(py, ['-c', `import runpy, sys
-module = runpy.run_path(sys.argv[1])
-class MCP:
-    def tool(self, name, args):
-        assert name == 'remember', name
-        assert args == {'items': [{'content': 'stop fixture'}]}, args
-        return {'results': [{'nodeId': 'mem-0000000000000001'}]}
-assert module['ingest'](MCP(), {'content': 'stop fixture'}) == 'mem-0000000000000001'
-`, script], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
+test('native Rust gate adapter config removes legacy Python operator-stop-memory.py', () => {
+  const legacyScript = path.join(__dirname, '../hooks/operator-stop-memory.py');
+  assert.equal(fs.existsSync(legacyScript), false);
+  const guardAdapter = path.join(__dirname, '../hooks/guard.cjs');
+  assert.equal(fs.existsSync(guardAdapter), true);
+  assert.match(fs.readFileSync(guardAdapter, 'utf8'), /vestigeBin/);
 });
