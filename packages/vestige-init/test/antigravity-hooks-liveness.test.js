@@ -154,6 +154,7 @@ function createIsolatedBridgeEnv() {
     dataDir,
     opHome,
     bridgeDir,
+    bridgeCfgPath,
     artDir,
     txPath,
     callBridge,
