@@ -862,13 +862,28 @@ function packLines(text, maxChars = 1600) {
 async function handleSessionStart(cfg, payload) {
   const startSource = ['startup', 'resume', 'clear', 'compact', 'fork'].includes(payload.source) ? payload.source : 'startup';
   const startPayload = { ...payload, source: startSource };
-  const [, capsule, intentions, mem, rfxOut] = await Promise.all([
-    turnoverSessionStartAsync(cfg, startPayload),
-    capsuleRunAsync(cfg, startSource, payload.cwd),
-    intentionsStartContext(cfg, 750),
-    memoryContext(cfg, startPayload, 'session', 800),
-    reflexRun(cfg, startPayload, 'SessionStart'),
-  ]);
+  const hasLiveDaemon = Boolean(cfg.dataDir && fs.existsSync(path.join(cfg.dataDir, '.serve.endpoint')));
+  let capsule, intentions, mem, rfxOut;
+  if (hasLiveDaemon) {
+    [, capsule, intentions, mem, rfxOut] = await Promise.all([
+      turnoverSessionStartAsync(cfg, startPayload),
+      capsuleRunAsync(cfg, startSource, payload.cwd),
+      intentionsStartContext(cfg, 750),
+      memoryContext(cfg, startPayload, 'session', 800),
+      reflexRun(cfg, startPayload, 'SessionStart'),
+    ]);
+  } else {
+    // Cold start without a running daemon: serialize Strata store readers so concurrent
+    // child processes never contend on exclusive Windows file locks.
+    const [, cap] = await Promise.all([
+      turnoverSessionStartAsync(cfg, startPayload),
+      capsuleRunAsync(cfg, startSource, payload.cwd),
+    ]);
+    capsule = cap;
+    rfxOut = await reflexRun(cfg, startPayload, 'SessionStart');
+    mem = await memoryContext(cfg, startPayload, 'session', 800);
+    intentions = await intentionsStartContext(cfg, 750);
+  }
   const rfx = packLines(extractContext(rfxOut), 450);
   const context = packLines([intentions, capsule, rfx, mem].filter(Boolean).join('\n\n'), 2400);
   if (payload.session_id && (intentions || context)) {

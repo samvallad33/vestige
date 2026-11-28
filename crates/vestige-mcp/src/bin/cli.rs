@@ -26,7 +26,79 @@ use std::sync::{Arc, OnceLock};
 use anyhow::Context;
 use chrono::{NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
-use owo_colors::OwoColorize;
+fn stdout_supports_color() -> bool {
+    use std::io::IsTerminal;
+    std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+}
+
+/// TTY-aware drop-in wrapper over `owo_colors::OwoColorize` so piped/test stdout
+/// never leaks raw ANSI escape codes (honoring `NO_COLOR` and `IsTerminal`).
+trait TtyColorize: std::fmt::Display {
+    fn red(&self) -> String {
+        if stdout_supports_color() {
+            owo_colors::OwoColorize::red(&self).to_string()
+        } else {
+            self.to_string()
+        }
+    }
+    fn green(&self) -> String {
+        if stdout_supports_color() {
+            owo_colors::OwoColorize::green(&self).to_string()
+        } else {
+            self.to_string()
+        }
+    }
+    fn yellow(&self) -> String {
+        if stdout_supports_color() {
+            owo_colors::OwoColorize::yellow(&self).to_string()
+        } else {
+            self.to_string()
+        }
+    }
+    fn cyan(&self) -> String {
+        if stdout_supports_color() {
+            owo_colors::OwoColorize::cyan(&self).to_string()
+        } else {
+            self.to_string()
+        }
+    }
+    fn magenta(&self) -> String {
+        if stdout_supports_color() {
+            owo_colors::OwoColorize::magenta(&self).to_string()
+        } else {
+            self.to_string()
+        }
+    }
+    fn white(&self) -> String {
+        if stdout_supports_color() {
+            owo_colors::OwoColorize::white(&self).to_string()
+        } else {
+            self.to_string()
+        }
+    }
+    fn bold(&self) -> String {
+        if stdout_supports_color() {
+            owo_colors::OwoColorize::bold(&self).to_string()
+        } else {
+            self.to_string()
+        }
+    }
+    fn dimmed(&self) -> String {
+        if stdout_supports_color() {
+            owo_colors::OwoColorize::dimmed(&self).to_string()
+        } else {
+            self.to_string()
+        }
+    }
+    fn default_color(&self) -> String {
+        if stdout_supports_color() {
+            owo_colors::OwoColorize::default_color(&self).to_string()
+        } else {
+            self.to_string()
+        }
+    }
+}
+impl<T: std::fmt::Display + ?Sized> TtyColorize for T {}
 use vestige_core::{
     ConnectionRecord, IngestInput, PortableImportMode, SecretConfidence, SourceEnvelope,
     SourceUpsertOutcome, Storage, scan_secrets,
